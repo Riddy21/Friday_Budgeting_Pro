@@ -1,437 +1,444 @@
 # Friday Budgeting Pro — Architecture
 
-## System Overview
+> **Design principle: keep it as simple as humanly possible.**
+> Single user. Conversational only. No wizards, no CLIs, no separate UIs.
+> Just an OpenClaw skill that HAL uses when needed.
+
+---
+
+## Design Constraints (read this first)
+
+These are hard rules. Don't add features that violate them.
+
+1. **Single-user only.** No multi-tenant accounts. The user *is* the system owner.
+2. **Conversational always.** Every interaction is a chat message with HAL.
+   No CLI prompts. No web wizards. No setup commands the user has to remember.
+3. **Lazy invocation.** The skill only runs when HAL decides to use it (because
+   the user said something finance-related). Not always-on.
+4. **Minimal questions.** Setup asks 2-3 clarifying questions max, then uses
+   smart defaults for everything else. Refinement happens through normal chat.
+5. **OpenClaw handles scheduling.** The skill auto-registers cron jobs via
+   OpenClaw's `cron` tool. No external schedulers, no daemons.
+6. **OpenClaw handles notifications.** No separate notification config.
+   Messages go through whatever channel the user is already chatting on.
+7. **No web UI components** except the one unavoidable case: Plaid Link
+   (which requires a browser by Plaid's design — there's no API alternative).
+8. **No features that aren't directly useful for personal finance.** No
+   nonprofits, no business templates, no balance sheets, no multi-currency,
+   no investment tracking. If/when needed later, add it. Not now.
+
+---
+
+## What This Is
+
+An OpenClaw skill that lets the user manage personal finances by chatting with
+HAL. It:
+
+- Connects to banks via Plaid
+- Auto-classifies transactions using a tiered engine (rules → LLM → ask user)
+- Stores everything in a local SQLite file
+- Exports to Excel on request
+- Runs a daily sync via an OpenClaw cron job
+- Pings the user when it needs help classifying something
+
+The user never opens a UI, never runs a command, never edits a config file.
+Everything is "hey HAL, ..."
+
+---
+
+## Top-Level Flow
 
 ```
-                    ┌──────────────────────────────────────────────────┐
-                    │                       USER                        │
-                    │   (interacts via natural language with HAL/LLM)   │
-                    └──────────────────────────────────────────────────┘
-                                 │                          ▲
-                                 │ "Sync my transactions"   │ "Got a $47 Home Depot
-                                 │ "Show this month"        │  charge — personal
-                                 │ "Export to Excel"        │  or rental?"
-                                 ▼                          │
-        ┌────────────────────────────────────────────────────────────────┐
-        │                      OPENCLAW + HAL                            │
-        │                                                                │
-        │   ┌──────────┐    ┌──────────┐    ┌──────────────────────┐    │
-        │   │ Chat UI  │ ─▶ │   HAL    │ ─▶ │   MCP Client Layer   │    │
-        │   │ iMessage │    │  (LLM)   │    │     (mcporter)       │    │
-        │   │ Telegram │    └──────────┘    └──────────────────────┘    │
-        │   └──────────┘                              │                  │
-        └─────────────────────────────────────────────┼──────────────────┘
-                                                      │ MCP protocol
-                                                      ▼
-        ┌──────────────────────────────────────────────────────────────────┐
-        │              FRIDAY BUDGETING PRO — MCP SERVER                    │
-        │                                                                   │
-        │   ┌─────────────┐  ┌─────────────┐  ┌─────────────┐  ┌────────┐  │
-        │   │   Account   │  │   Ledgers   │  │ Transactions│  │ Export │  │
-        │   │    Tools    │  │    Tools    │  │    Tools    │  │ Tools  │  │
-        │   └─────────────┘  └─────────────┘  └─────────────┘  └────────┘  │
-        │   ┌─────────────┐  ┌─────────────┐  ┌─────────────┐  ┌────────┐  │
-        │   │    Banks    │  │    Rules    │  │    Hints    │  │ Audit  │  │
-        │   │    Tools    │  │    Tools    │  │    Tools    │  │ Tools  │  │
-        │   └─────────────┘  └─────────────┘  └─────────────┘  └────────┘  │
-        │                                                                   │
-        │   ╔═══════════════════════════════════════════════════════════╗   │
-        │   ║          CLASSIFICATION ENGINE (3-Tier Cascade)           ║   │
-        │   ║                                                           ║   │
-        │   ║  ┌─────────┐    ┌─────────────┐    ┌──────────────────┐  ║   │
-        │   ║  │ Tier 1: │ ─▶ │  Tier 2:    │ ─▶ │  Tier 3:         │  ║   │
-        │   ║  │  Rules  │    │  LLM        │    │  Human Review    │  ║   │
-        │   ║  │ Engine  │    │ Classifier  │    │ (asks via HAL)   │  ║   │
-        │   ║  └─────────┘    └─────────────┘    └──────────────────┘  ║   │
-        │   ║       │                │                    │             ║   │
-        │   ║       ▼                ▼                    ▼             ║   │
-        │   ║   ┌─────────────────────────────────────────────┐         ║   │
-        │   ║   │       Promoter (auto-creates rules)         │         ║   │
-        │   ║   └─────────────────────────────────────────────┘         ║   │
-        │   ╚═══════════════════════════════════════════════════════════╝   │
-        │                                                                   │
-        │   ┌────────────────────────────────────────────────────────────┐ │
-        │   │                   SQLite DATABASE                          │ │
-        │   │  users · bank_connections · bank_accounts · ledgers ·     │ │
-        │   │  line_items · transactions · transaction_entries ·         │ │
-        │   │  routing_rules · classification_hints · classification_   │ │
-        │   │  history · budget_targets · sync_cursors                   │ │
-        │   └────────────────────────────────────────────────────────────┘ │
-        └──────────────────────────────────────────────────────────────────┘
-                                │                      │
-                  ┌─────────────┘                      └──────────────┐
-                  ▼                                                    ▼
-        ┌──────────────────┐                              ┌──────────────────┐
-        │   PLAID API      │                              │   LLM PROVIDER   │
-        │ ────────────────│                              │ ─────────────────│
-        │ • Link tokens    │                              │ • OpenAI         │
-        │ • Transactions   │                              │ • Anthropic      │
-        │ • Account info   │                              │ • OpenClaw       │
-        │ • Update Mode    │                              │ • Local Ollama   │
-        └──────────────────┘                              └──────────────────┘
-                  │
-                  ▼
-        ┌──────────────────────────────────────────┐
-        │            USER'S BANKS                  │
-        │   Chase · BMO · RBC · Amex · etc.        │
-        └──────────────────────────────────────────┘
+User says something finance-related to HAL
+        │
+        ▼
+HAL recognizes the skill applies (via SKILL.md)
+        │
+        ▼
+HAL calls Friday Budgeting Pro MCP tools as needed
+        │
+        ▼
+First time:  triggers conversational setup
+Returning:   does the thing the user asked
+        │
+        ▼
+HAL responds in chat with the result
+```
+
+That's it. No other entry points.
+
+---
+
+## First-Time Setup (Conversation Only)
+
+When HAL detects this is the first run (DB doesn't exist or is empty), it
+asks a few questions and creates the structure. The whole thing is one
+conversation.
+
+**Question 1:** "What banks should I connect?"
+→ User lists them, HAL opens Plaid Link for each one
+
+**Question 2:** "Anything besides personal finances? Most people just want
+one ledger called 'Personal'. Are you tracking anything separately?"
+→ User says no / says yes and describes it
+
+**Question 3:** "Any quick rules I should know? For example, are certain
+merchants always personal, or always something else?"
+→ User describes preferences in plain English, saved as classification hints
+
+Then HAL says: "Great, pulling your last 90 days. Daily sync at 6 AM — I'll
+ping you when there's something I'm not sure about."
+
+Done. No other setup.
+
+**Defaults applied automatically:**
+- Ledger: "Personal" with standard line items (Salary, Groceries, Dining,
+  Transport, Subscriptions, Healthcare, Travel, Shopping, Misc, Other)
+- Daily sync at 6 AM via OpenClaw cron
+- 90-day initial transaction pull
+- LLM confidence threshold: 0.75
+- Notification channel: whatever the user is currently chatting on
+
+---
+
+## System Diagram
+
+```
+                    ┌──────────────────────────────────────────────┐
+                    │                  USER                         │
+                    │ (chatting with HAL via iMessage/Telegram/etc.)│
+                    └──────────────────────────────────────────────┘
+                                       │ ▲
+                                       ▼ │
+                    ┌──────────────────────────────────────────────┐
+                    │              OPENCLAW + HAL                   │
+                    │                                               │
+                    │   ┌──────────┐    ┌────────────────────┐     │
+                    │   │   HAL    │───▶│   MCP Client       │     │
+                    │   │  (LLM)   │    │  (mcporter)        │     │
+                    │   └──────────┘    └────────────────────┘     │
+                    │   ┌────────────────────────────────────┐     │
+                    │   │ cron tool (schedules daily sync)   │     │
+                    │   └────────────────────────────────────┘     │
+                    └────────────────────┬──────────────────────────┘
+                                         │ MCP
+                                         ▼
+                    ┌──────────────────────────────────────────────┐
+                    │     Friday Budgeting Pro MCP Server          │
+                    │                                              │
+                    │   Tools:                                     │
+                    │     • Setup     (one-shot, conversational)   │
+                    │     • Banks     (Plaid link + sync)          │
+                    │     • Ledgers   (read/edit structure)        │
+                    │     • Txns      (list, route, split)         │
+                    │     • Hints     (NL preferences)             │
+                    │     • Export    (Excel)                      │
+                    │                                              │
+                    │   ╔══════════════════════════════════════╗   │
+                    │   ║ Classifier (3-tier)                  ║   │
+                    │   ║   1. Rules                           ║   │
+                    │   ║   2. LLM (with hints + history)      ║   │
+                    │   ║   3. Ask user via HAL                ║   │
+                    │   ╚══════════════════════════════════════╝   │
+                    │                                              │
+                    │   SQLite (~/.friday-bp/data.db)              │
+                    └────────────────────┬─────────────────────────┘
+                                         │
+                  ┌──────────────────────┴────────────────────────┐
+                  ▼                                               ▼
+        ┌──────────────────┐                          ┌──────────────────┐
+        │   Plaid API      │                          │  LLM (via the    │
+        │ Transactions +   │                          │  same provider   │
+        │ Link UI (local)  │                          │  HAL uses)       │
+        └──────────────────┘                          └──────────────────┘
 ```
 
 ---
 
-## Component Breakdown
+## Data Model (Minimal)
 
-### Layer 1 — User Interface
-You never call MCP tools directly. You talk to HAL in plain English (or any
-MCP-aware AI agent), and it figures out which tools to call.
+Stripped down to what's actually needed for personal use:
 
-### Layer 2 — MCP Tools
-Grouped by domain:
+```sql
+-- Plaid bank connections
+CREATE TABLE bank_connections (
+  id TEXT PRIMARY KEY,
+  plaid_item_id TEXT UNIQUE,
+  plaid_access_token_encrypted TEXT NOT NULL,
+  institution_name TEXT,
+  status TEXT DEFAULT 'active',  -- active | needs_reauth
+  last_synced_at INTEGER
+);
 
-```
-┌────────────────────────────────────────────────────────────────────┐
-│ ACCOUNT          BANKS              LEDGERS          TRANSACTIONS  │
-│ ───────          ─────              ───────          ────────────  │
-│ create_account   create_link_token  create_ledger    sync          │
-│ get_account      connect_bank       list_ledgers     list          │
-│ update_prefs     list_connections   add_line_item    route         │
-│                  refresh_connection list_line_items  split         │
-│                  disconnect_bank    delete_ledger    confirm       │
-│                                                       get_unrouted  │
-├────────────────────────────────────────────────────────────────────┤
-│ RULES (Tier 1)   HINTS (Tier 2)     REPORTS          AUDIT         │
-│ ──────────────   ──────────────     ───────          ─────         │
-│ create_rule      add_hint           get_summary      classification_│
-│ list_rules       list_hints         monthly_breakdown   history    │
-│ update_rule      update_hint        budget_vs_actual  llm_stats    │
-│ delete_rule      delete_hint        export_excel                   │
-│ test_rule                           export_csv                     │
-└────────────────────────────────────────────────────────────────────┘
-```
+CREATE TABLE bank_accounts (
+  id TEXT PRIMARY KEY,
+  connection_id TEXT REFERENCES bank_connections(id),
+  plaid_account_id TEXT UNIQUE,
+  name TEXT, mask TEXT, type TEXT, subtype TEXT
+);
 
-### Layer 3 — Classification Engine
+-- Tracking structure (usually just one ledger called "Personal")
+CREATE TABLE ledgers (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL
+);
 
-```
-                            New Transaction
-                                  │
-                                  ▼
-                  ┌───────────────────────────────┐
-                  │ Tier 1: Rules Engine          │
-                  │                               │
-                  │ Match in priority order:      │
-                  │  1. Exact merchant            │
-                  │  2. Plaid category + amount   │
-                  │  3. Recurring date pattern    │
-                  │  4. Catch-all                 │
-                  └───────────────────────────────┘
-                                  │
-                       ┌──────────┴──────────┐
-                       │                     │
-                  Full match            No / partial match
-                       │                     │
-                       ▼                     ▼
-              ┌────────────────┐  ┌──────────────────────────────┐
-              │ Auto-route     │  │ Tier 2: LLM Classifier       │
-              │ → DB           │  │                              │
-              └────────────────┘  │ Inputs:                      │
-                                  │  • Transaction details       │
-                                  │  • All ledgers + line items  │
-                                  │  • User's NL hints           │
-                                  │  • Recent similar txns       │
-                                  │                              │
-                                  │ Output:                      │
-                                  │  • ledger_id, line_item_id   │
-                                  │  • confidence (0-1)          │
-                                  │  • reasoning                 │
-                                  └──────────────────────────────┘
-                                                │
-                                ┌───────────────┴──────────────┐
-                                │                              │
-                       confidence ≥ threshold      confidence < threshold
-                                │                              │
-                                ▼                              ▼
-                       ┌────────────────┐         ┌──────────────────────┐
-                       │ Auto-route     │         │ Tier 3: Human Review │
-                       │ → DB           │         │                      │
-                       │ + flag for     │         │ Notify user via HAL  │
-                       │   later review │         │ Wait for response    │
-                       └────────────────┘         │ Save as new rule     │
-                                                  └──────────────────────┘
-                                                              │
-                                                              ▼
-                                                  ┌──────────────────────┐
-                                                  │ Promoter             │
-                                                  │                      │
-                                                  │ After 3 successful   │
-                                                  │ same-merchant LLM    │
-                                                  │ decisions → create   │
-                                                  │ a Tier 1 rule        │
-                                                  └──────────────────────┘
+CREATE TABLE line_items (
+  id TEXT PRIMARY KEY,
+  ledger_id TEXT REFERENCES ledgers(id),
+  name TEXT NOT NULL,
+  item_type TEXT DEFAULT 'expense'  -- income | expense
+);
+
+-- Raw transactions from Plaid
+CREATE TABLE transactions (
+  id TEXT PRIMARY KEY,
+  bank_account_id TEXT REFERENCES bank_accounts(id),
+  plaid_transaction_id TEXT UNIQUE,
+  date TEXT NOT NULL,
+  merchant TEXT,
+  amount REAL NOT NULL,
+  plaid_category TEXT,
+  pending INTEGER DEFAULT 0
+);
+
+-- The classified form (supports splits)
+CREATE TABLE transaction_entries (
+  id TEXT PRIMARY KEY,
+  transaction_id TEXT REFERENCES transactions(id),
+  ledger_id TEXT REFERENCES ledgers(id),
+  line_item_id TEXT REFERENCES line_items(id),
+  amount REAL NOT NULL,
+  source TEXT,           -- rule | llm | manual
+  confidence REAL,
+  reviewed INTEGER DEFAULT 0
+);
+
+-- Tier 1: deterministic rules (auto-created over time)
+CREATE TABLE routing_rules (
+  id TEXT PRIMARY KEY,
+  merchant_pattern TEXT,
+  line_item_id TEXT REFERENCES line_items(id)
+);
+
+-- Tier 2: natural-language hints fed to the LLM
+CREATE TABLE classification_hints (
+  id TEXT PRIMARY KEY,
+  text TEXT NOT NULL
+);
+
+-- Plaid sync cursors
+CREATE TABLE sync_cursors (
+  connection_id TEXT PRIMARY KEY REFERENCES bank_connections(id),
+  cursor TEXT,
+  last_synced_at INTEGER
+);
 ```
 
-### Layer 4 — Database
-
-```
-┌──────────┐       ┌────────────────┐       ┌────────────────┐
-│  users   │──────▶│bank_connections│──────▶│ bank_accounts  │
-└──────────┘       └────────────────┘       └────────────────┘
-     │                                              │
-     │                                              │
-     ├─────────▶┌──────────┐                       │
-     │         │ ledgers  │                        │
-     │         └──────────┘                        │
-     │              │                              │
-     │              ▼                              │
-     │         ┌────────────┐                      │
-     │         │ line_items │                      │
-     │         └────────────┘                      │
-     │              ▲                              │
-     │              │                              │
-     │              │                              ▼
-     │              │                       ┌──────────────┐
-     │              │              ┌────────│ transactions │
-     │              │              │        └──────────────┘
-     │              │              ▼
-     │              │       ┌────────────────────┐
-     │              └───────│ transaction_entries│ (the "interpreted" form)
-     │                      └────────────────────┘
-     │                              ▲
-     │                              │
-     ├──▶ routing_rules ────────────┘  (Tier 1)
-     │
-     ├──▶ classification_hints (Tier 2 — LLM prompt context)
-     │
-     ├──▶ classification_history (audit trail)
-     │
-     └──▶ budget_targets
-```
-
-### Layer 5 — External Integrations
-- **Plaid:** transaction sync, bank linking, Update Mode for re-auth
-- **LLM provider:** pluggable (OpenAI/Anthropic/OpenClaw/Ollama)
-- **Banks:** indirectly via Plaid (Chase, BMO, RBC, Amex, etc.)
+That's all of it. No `users` table (single user). No `budget_targets`,
+`classification_history`, `bank_account.currency` — drop them until needed.
 
 ---
 
-## Deployment Topology
+## MCP Tools (Trimmed)
 
-### Mode A — Standalone MCP server (manual)
-```
-┌─────────────────────────┐
-│   Your Mac              │
-│                         │
-│  ┌─────────────────┐    │
-│  │ MCP Client      │    │
-│  │ (Claude Desktop,│────┼──▶ stdio / HTTP ──▶ Friday MCP Server
-│  │  mcporter, etc.)│    │                     │
-│  └─────────────────┘    │                     ▼
-│                         │           ┌─────────────────┐
-│                         │           │  SQLite DB      │
-│                         │           │  (~/.friday-bp/)│
-│                         │           └─────────────────┘
-└─────────────────────────┘
-```
+Only what HAL actually needs to call. Grouped:
 
-### Mode B — OpenClaw + ClawHub (recommended)
-```
-┌──────────────────────────────────────────────────────────────┐
-│                       Your Mac                                │
-│                                                               │
-│  ┌────────────────────────────────────────────────────────┐  │
-│  │                    OpenClaw                            │  │
-│  │                                                        │  │
-│  │  ┌──────┐   ┌───────────────────────────────────────┐  │  │
-│  │  │ HAL  │──▶│  MCP Client (built-in via mcporter)   │  │  │
-│  │  └──────┘   └───────────────────────────────────────┘  │  │
-│  │                          │                             │  │
-│  │                          ▼                             │  │
-│  │  ┌──────────────────────────────────────────────────┐  │  │
-│  │  │  Friday Budgeting Pro (registered MCP server)    │  │  │
-│  │  │  + SKILL.md (HAL knows how/when to use it)       │  │  │
-│  │  │  + Daily cron job (auto-sync)                    │  │  │
-│  │  │  + SQLite DB                                     │  │  │
-│  │  │  + Plaid Link UI (served at localhost:3333)      │  │  │
-│  │  └──────────────────────────────────────────────────┘  │  │
-│  └────────────────────────────────────────────────────────┘  │
-│                          │                                    │
-│                          ▼                                    │
-│            Notifications via HAL's channels                   │
-│            (iMessage, Telegram, etc.)                         │
-└──────────────────────────────────────────────────────────────┘
-```
+### Setup (one-shot)
+- `setup_status()` → returns `not_started | in_progress | complete`
+- `apply_initial_setup(banks_to_link[], extra_ledgers[], hints[])` → does the
+  whole setup in one call. HAL asks 2-3 questions, then calls this.
+
+### Banks
+- `start_link()` → returns URL to open Plaid Link
+- `complete_link(public_token)` → exchange + store
+- `list_connections()`
+- `refresh_connection(id)` → Update Mode link
+- `disconnect(id)`
+
+### Ledgers (rarely used after setup)
+- `list_ledgers()`
+- `add_line_item(ledger_id, name, item_type)`
+- `add_ledger(name)`
+- `remove_line_item(id)`
+
+### Transactions
+- `sync()` → pull from Plaid, classify, return summary
+- `list(filters)` → query transactions
+- `get_needs_review()` → ambiguous ones HAL should ask about
+- `route(transaction_id, allocations[])` → manual or HAL-driven routing
+- `add_hint(text)` → save a natural-language hint
+
+### Reports
+- `summary(period)` → spending totals
+- `export_excel(years?)` → generate Excel file(s)
+
+That's the whole API. ~15 tools.
 
 ---
 
-## Setup Flow (Conversational, MCP-Driven)
-
-The whole setup is just an LLM conversation that calls MCP tools as it goes.
-There's no separate wizard — the LLM (HAL or any MCP client) is the wizard.
+## Classification Engine (Unchanged — This Is the Value)
 
 ```
-  User                              LLM (HAL)                         Friday Budgeting Pro MCP
-  ────                              ─────────                         ────────────────────────────────
-
-  "set me up"  ─────────────────▶  asks "one sentence,
-                                       what's your situation?"
-
-  "work + 2 rentals" ───────────▶  ──────────── suggest_setup(description) ─────▶
-                                                                              matches templates:
-                                                                              - personal_individual
-                                                                              - landlord_property ×2
-                                       ◄───────────────────────────────────────────── returns proposed
-                                                                                       structure
-                                       presents proposal:
-                                       "3 ledgers: Personal, Rental 1,
-                                        Rental 2. Each with default rows."
-
-  "good but rename them" ───────▶  edits the proposal locally
-                                       in the conversation
-
-  "confirm" ──────────────────▶  ──────────── apply_setup(ledgers[]) ─────────▶
-                                                                              creates ledgers +
-                                                                              line items in one call
-                                       ◄───────────────────────────────────────────── returns committed IDs
-
-  "connect chase" ─────────────▶  ─────────── create_link_token() ──────────▶
-                                                                              returns link token
-                                       opens Plaid Link UI in browser
-  (completes bank login) ───────────────────── connect_bank(public_token) ───▶
-                                                                              exchanges + stores
-  "home depot >$50 is rental" ──▶  ──────────── add_classification_hint(text)
-
-  "sync" ──────────────────────▶  ──────────── sync_transactions() ─────────▶
-                                                                              pulls + classifies
-                                       ◄───────────────────────────────────────────── returns summary
-                                       "239 sorted, 8 to review"
+New transaction
+   │
+   ├─▶ Tier 1: Rules
+   │     If merchant matches a saved rule → auto-route. Done.
+   │
+   ├─▶ Tier 2: LLM
+   │     Prompt: hints + ledger tree + recent similar txns + this txn
+   │     LLM picks ledger/line item with confidence score
+   │     If confidence >= 0.75 → auto-route + flag for casual review
+   │
+   └─▶ Tier 3: Ask user
+         HAL sends: "Got a $X charge at Y — my guess is Z (62% sure).
+                     Correct, or should it be something else?"
+         User replies → save as a new rule for next time
 ```
 
-### Setup-related MCP tools
+After 3 successful LLM classifications of the same merchant, auto-promote
+to a Tier 1 rule. System gets cheaper and faster over time.
 
-| Tool | What it does |
+---
+
+## OpenClaw Integration
+
+### How HAL knows to use the skill (`SKILL.md`)
+
+The skill ships with a SKILL.md telling HAL when to invoke it:
+
+```yaml
+name: friday-budgeting-pro
+description: Use for personal finance tasks: connecting banks, syncing
+             transactions, classifying spending, exporting to Excel,
+             showing spending summaries.
+```
+
+HAL reads available skills at the start of each turn. When the user says
+something finance-y, HAL calls the MCP tools. Otherwise the skill stays idle.
+
+### How daily sync works (OpenClaw `cron` tool)
+
+After initial setup, the skill calls OpenClaw's `cron` tool to register a
+daily job:
+
+```js
+cron.add({
+  name: "friday-budgeting-pro-daily-sync",
+  schedule: { kind: "cron", expr: "0 6 * * *", tz: "America/Toronto" },
+  payload: {
+    kind: "agentTurn",
+    message: "Run Friday Budgeting Pro daily sync. Call sync(), then if
+              get_needs_review() returns transactions, ask the user about
+              them one at a time."
+  },
+  delivery: { mode: "announce" }   // sends results to user's main channel
+})
+```
+
+That's the entire scheduling system. OpenClaw owns the timing, HAL owns the
+work, the skill provides the tools.
+
+### How notifications work
+
+There's no notification system in the skill. When HAL needs to ask the user
+about something, it just sends a chat message through whatever channel the
+user is currently on. OpenClaw routes it. Zero config.
+
+---
+
+## Installation (One Command)
+
+```bash
+clawhub install friday-budgeting-pro
+```
+
+This:
+1. Drops the MCP server files into `~/.openclaw/skills/friday-budgeting-pro/`
+2. Registers it with OpenClaw's MCP client
+3. Installs the SKILL.md so HAL knows about it
+4. Initializes an empty SQLite DB at `~/.friday-bp/data.db`
+
+Next time the user mentions finances to HAL, the setup conversation starts.
+
+---
+
+## Project Structure (Minimal)
+
+```
+friday-budgeting-pro/
+├── README.md
+├── ARCHITECTURE.md          ← THIS FILE (source of truth)
+├── SKILL.md                 ← tells HAL when to use the skill
+├── package.json             ← clawhub publish metadata
+├── requirements.txt
+├── .gitignore
+│
+├── db/
+│   └── schema.sql
+│
+├── server/
+│   ├── main.py              ← FastMCP entry point
+│   ├── db.py                ← SQLite helpers
+│   ├── plaid_client.py
+│   ├── classifier.py        ← 3-tier engine
+│   ├── llm.py               ← LLM call wrapper
+│   └── excel_export.py
+│
+└── plaid_link/
+    └── index.html           ← only static asset; served at localhost on demand
+```
+
+That's the whole codebase. ~10 files.
+
+---
+
+## What's Explicitly Out of Scope
+
+- ❌ Multi-user / multi-tenant
+- ❌ Web dashboard
+- ❌ Mobile app
+- ❌ Multi-currency / FX
+- ❌ Investment tracking
+- ❌ Tax filing categorization
+- ❌ Budget targets / forecasting
+- ❌ Non-Plaid integrations
+- ❌ Notification channel configuration (uses OpenClaw's)
+- ❌ Standalone scheduler (uses OpenClaw's `cron` tool)
+- ❌ CLI wizard
+- ❌ Manual setup flows that aren't conversational
+- ❌ Anything that ships as a "template gallery" or has a config UI
+
+If something here turns out to be needed later, add it then. Not now.
+
+---
+
+## Tech Stack (Minimal)
+
+| Layer | Choice |
 |---|---|
-| `list_templates()` | Returns all built-in ledger templates with default line items |
-| `suggest_setup(description)` | Maps a natural-language description to a proposed ledger structure (no commit) |
-| `apply_setup(ledgers[])` | Commits a proposed structure in one call — LLM sends the whole tree |
-| `quick_setup(profile)` | One-shot setup for common cases (`individual`, `couple`, `landlord_n`, `freelancer`, `small_business`, `nonprofit`) |
-
-The LLM's job is to:
-1. Ask one human-sounding question to understand the situation
-2. Call `suggest_setup` with that description
-3. Present the proposal naturally ("Here's what I'm thinking...")
-4. Iterate verbally on edits ("add X", "drop Y", "rename A to B")
-5. Call `apply_setup` to commit
-
-Defaults handle 90% of the structure; the conversation handles the 10% that's
-user-specific.
+| Language | Python 3.11+ |
+| MCP framework | FastMCP |
+| Database | SQLite |
+| Plaid | plaid-python |
+| Excel | openpyxl |
+| Link UI | Plain HTML |
+| Encryption | cryptography (Fernet, for Plaid tokens) |
+| LLM | Whatever HAL is already using — no separate config |
+| Scheduling | OpenClaw `cron` tool |
+| Notifications | OpenClaw's existing message channels |
 
 ---
 
-## Data Flow Examples
-
-### Example 1: New transaction comes in (typical path)
-
-```
-Day 1 — Sync runs
-   │
-   ├─▶ Plaid: /transactions/sync
-   │     returns 47 new transactions
-   │
-   ├─▶ For each transaction:
-   │     │
-   │     ├─▶ Insert into `transactions` table
-   │     │
-   │     ├─▶ Tier 1: Rules Engine
-   │     │     ├─ "AMAZON.COM" → matches existing rule
-   │     │     │   → entry: Personal / Shopping
-   │     │     │   → confidence: 1.0
-   │     │     │   → source: rule
-   │     │     │
-   │     │     └─ "JANE'S COFFEE" → no rule
-   │     │         → goes to Tier 2
-   │     │
-   │     ├─▶ Tier 2: LLM Classifier
-   │     │     Prompt includes: hints, ledger tree, similar past txns
-   │     │     LLM: "Coffee shop, small amount, recurring vendor →
-   │     │           Personal / Dining (confidence 0.92)"
-   │     │     → confidence ≥ 0.75 → auto-route
-   │     │
-   │     └─▶ "HOME DEPOT — $483"
-   │           Tier 2 LLM: "Could be personal renovation or rental
-   │                        maintenance. Hint says 'over $50 → likely
-   │                        rental'. (confidence 0.62)"
-   │           → confidence < 0.75 → Tier 3
-   │
-   └─▶ HAL notifies user:
-         "Hey, got a $483 Home Depot charge from Saturday. My best
-          guess is rental property maintenance based on your hints,
-          but I'm only 62% sure. Was this for one of the rentals,
-          or a personal project?"
-```
-
-### Example 2: User responds
-
-```
-User: "That was for 90 Glen Everest, new flooring"
-   │
-   └─▶ HAL calls: route_transaction(
-         transaction_id="txn_abc123",
-         allocations=[{
-           ledger_id="ledger_glen_everest",
-           line_item_id="li_maintenance",
-           amount=483.00,
-           note="new flooring"
-         }]
-       )
-   │
-   └─▶ System:
-         ├─ Insert transaction_entry
-         ├─ Save classification decision to history
-         └─ Update LLM context for similar future txns
-```
-
-### Example 3: Excel export
-
-```
-User: "Export my finances to Excel"
-   │
-   └─▶ HAL calls: export_excel(ledger_ids=null, years=[2025, 2026])
-   │
-   └─▶ For each ledger:
-         ├─ Create workbook: "{ledger_name}.xlsx"
-         ├─ For each year:
-         │   └─ Create sheet with:
-         │      - Income rows (green)
-         │      - Expense rows (red)
-         │      - Net row (bold)
-         │      - YTD column
-         ├─ Summary sheet (multi-year)
-         └─ Raw transactions sheet
-   │
-   └─▶ Save to user's configured output directory
-```
-
----
-
-## Why This Architecture
-
-| Decision | Why |
-|---|---|
-| MCP server (not REST API) | LLM-native interface — agents call it directly |
-| 3-tier classification | Fast for known stuff, smart for new stuff, accurate for edge cases |
-| Natural-language hints | More expressive than regex; matches how humans think about money |
-| Split transactions | Real life has shared expenses; one txn → many entries |
-| SQLite | Zero setup; portable; the data is yours, in a file you can back up |
-| ClawHub packaging | One-command install; HAL knows how to use it out of the box |
-| Encrypted access tokens | Plaid tokens never sit in plaintext on disk |
-| Pluggable LLM | Use OpenAI, Anthropic, OpenClaw routing, or local Ollama — your choice |
-| Auto-promotion (Tier 2 → 1) | System gets cheaper and faster over time |
-
----
-
-## What's NOT in scope (yet)
-
-- Investment tracking (assets/liabilities balance sheet) — schema supports it but tools not built
-- Multi-currency FX conversion — currency stored but not converted
-- Tax categorization for filing — categories exist, but no tax-specific reports
-- Mobile app — MCP server is headless; UI is whatever client you use
-- Direct integrations with non-Plaid sources (Wealthsimple, crypto) — future extensibility point
+## Status
+- [x] Architecture finalized (this doc — source of truth)
+- [ ] DB schema + init
+- [ ] MCP server skeleton with the trimmed tool list
+- [ ] Plaid Link UI + sync
+- [ ] 3-tier classifier
+- [ ] Conversational setup tool (`apply_initial_setup`)
+- [ ] Excel export
+- [ ] SKILL.md
+- [ ] OpenClaw cron auto-registration
+- [ ] Publish to ClawHub
+- [ ] End-to-end test
