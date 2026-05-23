@@ -4,9 +4,8 @@
 
 A local budgeting tool that uses AI to do the boring work for you: connecting
 to your banks, classifying every transaction, and keeping a spreadsheet
-up to date. You manage everything from a small local web dashboard.
-[OpenClaw](https://openclaw.ai) integration is optional — when you have it,
-you can also chat about your money instead of clicking.
+up to date. It runs as a small daemon on your Mac with **multiple equal
+ways to interact with it** — no single one is the "main" way.
 
 **Single user. Local-only. AI does the heavy lifting; you stay in control.**
 
@@ -16,17 +15,18 @@ you can also chat about your money instead of clicking.
 
 ## How You Use It
 
-The product runs as a small daemon on your Mac. The UI is always reachable
-at `http://127.0.0.1:6789`. Three ways to interact:
+The product runs as a small daemon. Three equal-peer ways to interact with
+it — pick whichever fits the moment, mix and match freely:
 
-| Path | What it gives you |
+| Adapter | What it covers in v0.1 |
 |---|---|
-| **🖥️ UI (primary)** | Connect banks, see status, edit ledgers, review classifications, export to Excel |
-| **💬 OpenClaw (optional)** | Conversational queries ("how much did I spend on dining?"), chat-based review of ambiguous transactions, alerts via your favorite chat channel |
-| **⏰ Scheduler (background)** | Daily auto-sync, drift detection, proactive re-auth alerts |
+| **🖥️ Web UI** (`127.0.0.1:6789`) | Just setup and profile — set your password, pick a notification preference, connect your first bank. Manual sync + Excel export buttons. That's it. |
+| **💬 MCP** (OpenClaw, Claude Desktop, any MCP client) | Full feature surface: connect/disconnect banks, edit ledgers, review classifications, query spending, trigger exports. Conversational when paired with an LLM. |
+| **⏰ Scheduler** (background) | Daily auto-sync, drift detection, proactive re-auth alerts via your chosen notification channel. |
 
-You can use the UI alone and ignore OpenClaw entirely — it's still a
-fully functional budgeting tool. OpenClaw just adds polish on top.
+None of these is "primary." The UI is deliberately minimal; everything
+you'd do day-to-day lives in MCP or happens in the background. A bigger
+UI is a future ticket if it ever becomes useful.
 
 ---
 
@@ -45,45 +45,40 @@ finish setup.
 ## First Run
 
 When you visit `http://127.0.0.1:6789` for the first time, you see a
-small setup wizard:
+small setup wizard (4 short screens):
 
-1. **Set a password** — this protects your local dashboard.
+1. **Set a password** — protects your local dashboard.
 2. **Pick how you want to be notified** about ambiguous transactions:
-   - "Through OpenClaw chat" (if you have it set up)
+   - "Through OpenClaw chat" (if you use it)
    - "macOS notifications"
    - "Just show me a banner in the UI"
 3. **Connect your first bank** — click **+ Connect a bank** and follow
-   the Plaid login flow.
-4. **Done.** The dashboard appears. Connect more banks anytime from the
-   Linked Accounts page.
+   the Plaid login.
+4. **Done.** Lands on your Profile page.
 
 The system picks sensible defaults for everything else (Personal ledger
 with standard rows, daily 6 AM sync, LLM confidence threshold 0.75).
-Edit any of it from the UI later.
+Adjust any of it later from the Profile page or via MCP.
 
 ---
 
-## What the UI Looks Like
+## What the UI Looks Like (v0.1)
 
-**Linked Accounts** (the main page)
-- One card per connected bank
-- Status pill: 🟢 Active · 🟡 Pending expiration · 🔴 Needs re-auth
-- Last sync time, accounts inside, reconnect / disconnect buttons
-- **+ Connect a bank** button always available
+Two pages, that's it:
 
-**Ledgers**
-- Your tracking buckets (default: "Personal")
-- Each shows income + expense line items
-- Click-to-edit names, add/remove rows, add new ledgers
+**Setup wizard** — once, on first launch.
 
-**Profile**
-- Notification preference
-- LLM confidence threshold (slider)
-- Last sync time, manual sync button, export to Excel button
+**Profile page** — the only ongoing page. Has:
+- Display name + notification preference + LLM confidence slider
 - Change password
+- Log out
+- Read-only system info (Plaid env, last sync time, daemon uptime)
+- **Sync now** button
+- **Export to Excel** button
 
-**Dashboard** *(placeholder)*
-- Reserved for future spending charts / summaries
+Connecting more banks, editing ledgers, reviewing classifications, querying
+spending — those all happen through the MCP adapter (your OpenClaw agent,
+or any other MCP client).
 
 ---
 
@@ -96,17 +91,17 @@ Every transaction goes through a three-tier classifier:
    using your hints and recent similar transactions, and auto-routes if
    confident enough.
 3. **Review queue** — if it's unsure, the transaction lands in a review
-   queue. You'll see it in the UI's "Needs Review" badge (or get an
-   OpenClaw chat ping if you have it set up).
+   queue. You'll get a notification through your chosen channel.
 
 After 3 successful classifications of the same merchant, it becomes a
 Tier 1 rule automatically. The longer you use it, the less it asks.
 
 ---
 
-## With OpenClaw (optional)
+## With OpenClaw (and any other MCP client)
 
-If you also use OpenClaw, you get a chat layer on top:
+The MCP adapter exposes the full feature set. Through OpenClaw or any
+MCP-capable client:
 
 ```
 You:    How's this month looking?
@@ -115,6 +110,10 @@ Agent:  May 2026 so far:
         Expenses:  $3,247
         Top: Groceries $487, Dining $312, Subscriptions $89
         Net: +$3,253
+
+You:    Connect another bank
+Agent:  Opening Plaid Link at http://127.0.0.1:6789/link?t=...
+        — let me know when you're done.
 
 You:    Export this year to Excel
 Agent:  ✓ Wrote Personal Finances.xlsx to your Documents folder.
@@ -125,7 +124,8 @@ You:    Half personal groceries, half supplies for work
 Agent:  ✓ Split 50/50, saved as a hint for similar charges.
 ```
 
-Same data, same engine — just a different way in.
+Same engine, just a different way in. Other MCP clients (Claude Desktop,
+Cursor, mcporter on the CLI) work too — anywhere you can call MCP tools.
 
 ---
 
@@ -146,20 +146,19 @@ threat model.
 
 ---
 
-## What This Is Not
+## What This Is Not (v0.1)
 
-- Not a chat-only tool. The UI is primary; chat is a layer.
+- Not a full web app. The UI is deliberately small: setup and profile only.
 - Not a SaaS. Everything runs on your Mac, no cloud account.
-- Not a generalized platform. Personal finances only (for now).
-- Not a fancy dashboard. v0.1 focuses on management + classification;
-  charts/analytics come later.
+- Not a generalized platform. Personal finances only.
+- Not chat-only either. MCP is one of several equal-peer ways in.
 
 ---
 
 ## Troubleshooting
 
-**"Bank connection broken"** → Open `http://127.0.0.1:6789/accounts` and
-click **Reconnect** on the affected card.
+**"Bank connection broken"** → Ask your OpenClaw agent (or any MCP client)
+to reconnect that bank; it'll return a Plaid Link URL you click to fix.
 
 **"I forgot my password"** → On the login page, click "Forgot password".
 A recovery token is written to `~/.friday-bp/recovery.txt` (only you can

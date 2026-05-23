@@ -1,9 +1,16 @@
 # Friday Budgeting Pro — Architecture
 
-> **Design principle: AI-powered personal finance, with multiple ways to interact.**
+> **Design principle: AI-powered personal finance, multiple equal ways to interact.**
 > The product is a local budgeting tool that uses LLM intelligence for smart
-> classification. The UI is the primary interface. OpenClaw / MCP integration
-> is **one** of several ways to interact with it, not the only one.
+> classification. **There is no primary interface.** The web UI, the MCP
+> server (OpenClaw and any other MCP client), the background scheduler,
+> and any future adapter (CLI, webhooks, etc.) are equal-peer clients of
+> the same core engine. Pick whichever fits the moment.
+>
+> The web UI in v0.1 is deliberately minimal: just setup and profile.
+> Everything else (managing banks, editing ledgers, reviewing classifications,
+> exports, queries) happens through MCP/chat or background processes. A
+> bigger UI can be added later if useful.
 
 ---
 
@@ -12,19 +19,22 @@
 These are hard rules. Don't add features that violate them.
 
 1. **Single-user only.** No multi-tenant accounts. The user *is* the system owner.
-2. **UI-first, AI-enhanced.** The local web UI is the primary interface. AI/LLM
-   capability (smart classification, conversational queries) is layered on
-   top. OpenClaw is the most polished way to use the AI features, but the
-   product is fully usable without it.
-3. **Multiple interaction paths.** The same underlying engine is reachable via:
-   - the local **UI** (primary)
-   - the **MCP server** (used by OpenClaw or any MCP-compatible client)
-   - background **scheduler** (daily sync, drift detection)
-   - future paths (CLI, webhooks, etc.) can be added without redesign.
-4. **Standalone daemon.** The core service runs as a long-lived local process
-   (started at user login). The MCP server is an interface that lives inside
-   the same process; if the user doesn't use OpenClaw, the MCP endpoint sits
-   idle but the rest still works.
+2. **No primary interface.** The same core engine is reachable via several
+   equal-peer adapters:
+   - **Web UI** — only for setup + profile in v0.1; not where you manage
+     your finances day-to-day
+   - **MCP server** — for OpenClaw and other MCP-compatible clients;
+     full feature surface
+   - **Background scheduler** — daily sync, drift detection, notifications
+   - Future paths (CLI, webhooks, etc.) can be added without redesign
+   None is special. Removing any one of them doesn't break the others.
+3. **AI is a feature, not a path.** Smart classification (LLM-driven) is
+   a capability of the core engine. Every adapter that wants to expose it
+   can.
+4. **Standalone daemon.** The core service runs as a long-lived local
+   process (started at user login). The UI, MCP, and scheduler all live
+   inside it. The daemon's lifecycle is independent of any single client;
+   OpenClaw connecting and disconnecting does not start or stop it.
 5. **Minimal questions in setup.** Smart defaults for everything obvious;
    user only edits what's actually different. Setup is a small in-browser
    wizard — not a chat conversation.
@@ -416,88 +426,112 @@ user is currently on. OpenClaw routes it. Zero config.
   └──────────────────────────────────────────────────────────────────┘
 ```
 
-All three top-line clients (UI, MCP, scheduler) are equal citizens. Removing
-any one of them doesn't break the others. Adding a new client (CLI, webhook,
-etc.) means writing another small adapter against the core engine.
+All top-line adapters are **equal-peer citizens** of the core engine. None is
+"primary." Adding a new adapter (CLI, webhook, etc.) is just another small
+shim against the core engine.
 
 ---
 
-## Account UI (primary interface)
+## Adapter: Web UI (setup + profile only)
 
-A local-only web app that's always reachable while the daemon is running.
-This is the **primary** way to interact with the system: log in once, then
-add banks, edit ledgers, review your spending, trigger exports.
+A deliberately tiny local-only web app. Its job in v0.1 is just to handle
+the two things that need a browser:
 
-**v0.1 includes** four pages: Linked Accounts, Ledgers, Profile, Dashboard
-(placeholder). The first-run experience is also in the UI — there's no need
-to have any external agent or chat to get started.
+- **First-run setup wizard** — set a password, pick a notification
+  preference, connect a first bank via Plaid Link, get a working install.
+- **Profile page** — change password, change notification preference,
+  view a few system facts (DB path, last sync time, daemon status),
+  trigger a manual sync, **Log out** button.
+- **Plaid Link page** — the actual browser-based bank-connection flow,
+  used by both the setup wizard and any subsequent "add a bank" action
+  (which is launched via MCP returning a Plaid Link URL).
 
-**The AI layer adds value on top.** Without OpenClaw, you still get:
-- Smart classification (LLM still classifies in the background, you review
-  any ambiguous ones in the UI)
-- Daily auto-sync
-- Spending summaries (just static views)
-- Excel exports
+That is the entire v0.1 web UI. **It does not include** linked-account
+management, ledger editing, transaction review, charts, or a dashboard.
+Those actions all live in the MCP adapter (and any client that uses it).
 
-With OpenClaw, you also get:
-- Conversational queries ("how much did I spend on dining?")
-- Conversational review of ambiguous transactions (agent walks you through
-  them in chat instead of clicking)
-- Receive notifications via your existing chat channel
+Reachable at `http://127.0.0.1:6789` whenever the daemon is running. You
+set a password during setup; subsequent visits go through `/login`.
 
-**Future direction:** every action available in the MCP API should also be
-in the UI, so the system is fully usable without an LLM if you prefer
-click-and-type.
+**Future direction:** a bigger UI (linked accounts, ledgers, dashboard,
+transaction review) is a separate future ticket. Worth doing once the
+basics are solid — not now.
+
+## Adapter: MCP server (OpenClaw and other clients)
+
+A FastMCP endpoint inside the daemon, exposing the engine's **full** action
+set as MCP tools. Any MCP-compatible client (OpenClaw, Claude Desktop,
+Cursor, CLI-MCP utilities) can connect and drive the system.
+
+This is where almost all day-to-day usage happens in v0.1: connecting and
+disconnecting banks, editing ledgers, reviewing ambiguous transactions,
+running queries, triggering exports. With an LLM-equipped client like
+OpenClaw, these get a conversational feel; with a CLI-MCP utility, they're
+just direct tool calls. Same underlying surface.
+
+## Adapter: Background scheduler
+
+A small async loop inside the daemon that triggers periodic actions on the
+engine without any user involvement:
+- Daily sync (default 6 AM local time)
+- Hourly drift check (lightweight connection health probe)
+- Notification fan-out when something needs the user's attention
+
+This is the only adapter with no human on the other end. It keeps the
+system working while you're not looking.
 
 ### Pages (v0.1)
 
 ```
-  /                  →  redirects to /accounts
-  /profile           →  read-only profile + settings
-  /accounts          →  linked banks + their accounts
-  /ledgers           →  ledger structure + line items
-  /link              →  Plaid Link flow (existing)
-  /dashboard         →  placeholder ("Coming soon")
+  /              →  if no password set: /setup; else /profile
+  /setup         →  first-run wizard (one-time, locked after completion)
+  /login         →  password login
+  /profile       →  the only "normal" page — settings + a few actions
+  /link          →  Plaid Link flow (used by setup wizard + by MCP-issued links)
 ```
 
-### What each page shows
+That's all of it. **No linked-accounts page, no ledgers page, no dashboard
+in v0.1.** Those actions all happen through the MCP adapter.
 
-**Profile** (`/profile`) — mostly read-only at this stage
-- Account name, notification channel target
-- LLM confidence threshold (slider, defaults 0.75)
-- Plaid environment in use (sandbox / development / production)
-- DB file path, last successful sync time
+### What each page does
 
-**Linked Accounts** (`/accounts`) — the main page
-- One card per connected bank, showing:
-  - Institution name + logo
-  - List of accounts inside (mask + type, e.g. “… 1234 checking”)
-  - Status pill: 🟢 Active / 🟡 Pending expiration / 🔴 Needs reauth
-  - Last synced timestamp
-  - Buttons: **Reconnect** (Plaid Update Mode), **Disconnect**
-- Top-right: **+ Connect a bank** button → launches Plaid Link
+**Setup wizard** (`/setup`) — one-time, four short steps
+1. Welcome + set password
+2. Pick notification preference (OpenClaw chat / macOS notifications / in-UI)
+3. Connect first bank via Plaid Link
+4. Done — link to `/profile`
 
-**Ledgers** (`/ledgers`) — simple structure editor
-- List of ledgers (default: just “Personal”)
-- Each expandable to show line items
-- Add / rename / remove line items inline
-- Add / rename / remove ledgers (extra ledgers when the user adds rental
-  properties, businesses, etc.)
+After completion, `/setup` returns 404. Re-running setup means resetting
+the DB (a future operation, not a v0.1 feature).
 
-**Dashboard** (`/dashboard`) — placeholder only for v0.1
-- One sentence: “Spending summaries coming in a future version. For now,
-  ask in chat: ‘how’s this month looking?’”
-- The route exists so the navigation has a slot for it; it does not display
-  any data yet. Wiring it up is its own future ticket.
+**Login** (`/login`) — just the password form
+- POST validates, sets HttpOnly + SameSite=Strict session cookie, redirects to `/profile`
+- Rate-limited (5 failed attempts in 5 min → lockout)
+- Has a **Forgot password** link → recovery-file flow (#60)
+
+**Profile** (`/profile`) — the only regular page
+- **Account:** display name (editable)
+- **Notifications:** chosen channel (radio: OpenClaw chat / macOS notifications / in-UI only)
+- **Classifier:** LLM confidence threshold (slider 0.5–0.95, default 0.75)
+- **Security:** change password (asks for old + new), **Log out** button
+- **System (read-only):** Plaid env, DB path, daemon uptime, last sync time
+- **Quick actions:** **Sync now** button, **Export to Excel** button —
+  these call the underlying engine actions directly; they're the only
+  non-config interactions in v0.1's UI
+
+**Plaid Link** (`/link`) — the Plaid-required browser flow
+- Used by the setup wizard for the first bank
+- Used by MCP when the user (or the agent) initiates an "add a bank"
+  action — the MCP tool returns a `/link` URL with a one-time token,
+  the user opens it, the flow completes, the page closes
 
 ### Look and feel
 
-- Single-page-ish app: plain HTML + a tiny bit of JS (or HTMX). **No React,
-  no build step.**
-- Three top-tabs: **Linked Accounts** · **Ledgers** · **Profile** (plus a
-  greyed-out **Dashboard** tab as the future placeholder).
-- Minimal styling. Looks fine on mobile in case the user opens it from their
-  phone over Tailscale, but no mobile-specific features.
+- Plain HTML, a tiny bit of vanilla JS. **No React, no build step, no
+  framework.**
+- A single sidebar or top bar with just **Profile** + **Log out**. That's
+  it for v0.1.
+- Minimal styling. Looks fine on mobile but no mobile-specific features.
 
 ### Lifecycle: long-lived daemon
 
@@ -530,7 +564,7 @@ you set on first launch.
 - **Password storage:** argon2id hash in `app_config.ui_password_hash`.
   Never sent back to the browser.
 - **Login flow:** GET `/login` → POST with password → server validates →
-  sets HttpOnly + SameSite=Strict session cookie → redirects to `/accounts`.
+  sets HttpOnly + SameSite=Strict session cookie → redirects to `/profile`.
 - **Session lifetime:** 7 days idle, server-side store in the `sessions`
   table so they survive daemon restarts.
 - **Rate limit:** 5 failed attempts in 5 minutes → lockout.
@@ -673,16 +707,14 @@ friday-budgeting-pro/
 │   └── excel_export.py
 │
 └── ui/
-    ├── server.py            ← FastAPI app, 127.0.0.1:6789, always-on with MCP
+    ├── server.py            ← FastAPI app, mounted in the daemon, 127.0.0.1:6789
     ├── auth.py              ← argon2 + session cookies + rate limit
     ├── templates/
     │   ├── base.html
-    │   ├── login.html           ← login page (only public route)
-    │   ├── profile.html
-    │   ├── accounts.html        ← linked banks + status + add new
-    │   ├── ledgers.html         ← ledger structure editor
-    │   ├── link.html            ← Plaid Link flow
-    │   └── dashboard.html       ← placeholder ("Coming soon")
+    │   ├── setup.html           ← first-run wizard (4 steps)
+    │   ├── login.html           ← password login + forgot link
+    │   ├── profile.html         ← settings + sync/export actions
+    │   └── link.html            ← Plaid Link flow
     └── static/
         └── style.css            ← minimal styles
 ```
@@ -691,11 +723,14 @@ That's the whole codebase. ~10 files.
 
 ---
 
-## What's Explicitly Out of Scope
+## What's Explicitly Out of Scope (v0.1)
 
 - ❌ Multi-user / multi-tenant
-- ❌ Full web dashboard (charts, analytics)
-  - The `/dashboard` route exists as a placeholder; populating it is a future ticket.
+- ❌ Web UI for managing linked accounts (banks managed via MCP/chat in v0.1)
+- ❌ Web UI for editing ledgers (managed via MCP/chat in v0.1)
+- ❌ Web UI for reviewing/classifying transactions (done via MCP/chat in v0.1)
+- ❌ Web dashboard with charts/analytics
+  - All four of the above land as one future "bigger UI" ticket (#46–#49 + #55 — to be consolidated)
 - ❌ Mobile app
 - ❌ Multi-currency / FX
 - ❌ Investment tracking
