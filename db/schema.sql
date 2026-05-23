@@ -1,0 +1,101 @@
+-- Friday Budgeting Pro — SQLite schema
+-- Single-user, local-only personal finance database.
+
+-- Plaid bank connections
+CREATE TABLE IF NOT EXISTS bank_connections (
+  id TEXT PRIMARY KEY,
+  plaid_item_id TEXT UNIQUE,
+  plaid_access_token_encrypted TEXT NOT NULL,
+  institution_name TEXT,
+  status TEXT DEFAULT 'active',  -- active | needs_reauth
+  last_synced_at INTEGER
+);
+
+CREATE TABLE IF NOT EXISTS bank_accounts (
+  id TEXT PRIMARY KEY,
+  connection_id TEXT REFERENCES bank_connections(id),
+  plaid_account_id TEXT UNIQUE,
+  name TEXT,
+  mask TEXT,
+  type TEXT,
+  subtype TEXT
+);
+
+-- Tracking structure (usually just one ledger called "Personal")
+CREATE TABLE IF NOT EXISTS ledgers (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS line_items (
+  id TEXT PRIMARY KEY,
+  ledger_id TEXT REFERENCES ledgers(id),
+  name TEXT NOT NULL,
+  item_type TEXT DEFAULT 'expense'  -- income | expense
+);
+
+-- Raw transactions from Plaid
+CREATE TABLE IF NOT EXISTS transactions (
+  id TEXT PRIMARY KEY,
+  bank_account_id TEXT REFERENCES bank_accounts(id),
+  plaid_transaction_id TEXT UNIQUE,
+  date TEXT NOT NULL,
+  merchant TEXT,
+  amount REAL NOT NULL,
+  plaid_category TEXT,
+  pending INTEGER DEFAULT 0
+);
+
+CREATE TABLE IF NOT EXISTS transaction_entries (
+  id TEXT PRIMARY KEY,
+  transaction_id TEXT REFERENCES transactions(id),
+  ledger_id TEXT REFERENCES ledgers(id),
+  line_item_id TEXT REFERENCES line_items(id),
+  amount REAL NOT NULL,
+  source TEXT,       -- rule | llm | manual
+  confidence REAL,
+  reviewed INTEGER DEFAULT 0
+);
+
+-- Tier 1: deterministic rules (auto-created over time)
+CREATE TABLE IF NOT EXISTS routing_rules (
+  id TEXT PRIMARY KEY,
+  merchant_pattern TEXT,
+  line_item_id TEXT REFERENCES line_items(id)
+);
+
+-- Tier 2: natural-language hints fed to the LLM
+CREATE TABLE IF NOT EXISTS classification_hints (
+  id TEXT PRIMARY KEY,
+  text TEXT NOT NULL
+);
+
+-- Plaid sync cursors
+CREATE TABLE IF NOT EXISTS sync_cursors (
+  connection_id TEXT PRIMARY KEY REFERENCES bank_connections(id),
+  cursor TEXT,
+  last_synced_at INTEGER
+);
+
+-- UI auth: single-row app config (single-user system)
+CREATE TABLE IF NOT EXISTS app_config (
+  id INTEGER PRIMARY KEY CHECK (id = 1),
+  ui_password_hash TEXT,       -- argon2id hash
+  ui_password_set_at INTEGER
+);
+
+-- UI session cookies (server-side store, survives restarts)
+CREATE TABLE IF NOT EXISTS sessions (
+  id TEXT PRIMARY KEY,         -- session token (random 32 bytes hex)
+  created_at INTEGER NOT NULL,
+  last_seen_at INTEGER NOT NULL,
+  expires_at INTEGER NOT NULL,
+  user_agent TEXT
+);
+
+-- Login attempt log for rate limiting
+CREATE TABLE IF NOT EXISTS login_attempts (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  attempted_at INTEGER NOT NULL,
+  success INTEGER NOT NULL     -- 0 = failed, 1 = success
+);
