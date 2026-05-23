@@ -1,0 +1,3 @@
+# Runtime deps will be added as we build each phase.
+# Test deps:
+pytest>=7.0
