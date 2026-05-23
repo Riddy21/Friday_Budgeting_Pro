@@ -1,29 +1,32 @@
 # Friday Budgeting Pro
 
-> Personal finance, by chat. That's the whole pitch.
+> AI-powered personal finance, on your own machine.
 
-A minimal [OpenClaw](https://openclaw.ai) skill that lets you manage your
-money by chatting with your OpenClaw agent. It connects to your banks,
-classifies your spending, asks you when it's unsure, and exports to Excel
-when you want it to.
+A local budgeting tool that uses AI to do the boring work for you: connecting
+to your banks, classifying every transaction, and keeping a spreadsheet
+up to date. You manage everything from a small local web dashboard.
+[OpenClaw](https://openclaw.ai) integration is optional — when you have it,
+you can also chat about your money instead of clicking.
 
-**Single user. Conversational only. No UI, no commands, no config files.**
+**Single user. Local-only. AI does the heavy lifting; you stay in control.**
 
 📐 [Read the architecture](./ARCHITECTURE.md) (this is the source of truth)
 
 ---
 
-## What You Can Do
+## How You Use It
 
-Once installed, just say things to your OpenClaw agent like:
+The product runs as a small daemon on your Mac. The UI is always reachable
+at `http://127.0.0.1:6789`. Three ways to interact:
 
-- *"Connect my Chase account"*
-- *"How much did I spend on groceries this month?"*
-- *"Show me my spending for May"*
-- *"Export my finances to Excel"*
-- *"Reclassify that Home Depot charge as personal"*
+| Path | What it gives you |
+|---|---|
+| **🖥️ UI (primary)** | Connect banks, see status, edit ledgers, review classifications, export to Excel |
+| **💬 OpenClaw (optional)** | Conversational queries ("how much did I spend on dining?"), chat-based review of ambiguous transactions, alerts via your favorite chat channel |
+| **⏰ Scheduler (background)** | Daily auto-sync, drift detection, proactive re-auth alerts |
 
-The agent calls Friday Budgeting Pro's MCP tools and handles the rest.
+You can use the UI alone and ignore OpenClaw entirely — it's still a
+fully functional budgeting tool. OpenClaw just adds polish on top.
 
 ---
 
@@ -33,163 +36,143 @@ The agent calls Friday Budgeting Pro's MCP tools and handles the rest.
 clawhub install friday-budgeting-pro
 ```
 
-That's it. Next time you mention finances to your agent, the setup
-conversation starts automatically.
+This installs the daemon and starts it at user login (via launchd). The
+first time it boots, open `http://127.0.0.1:6789` in your browser to
+finish setup.
 
 ---
 
-## First Conversation (Setup)
+## First Run
 
-```
-You:    Set me up with Friday Budgeting Pro
+When you visit `http://127.0.0.1:6789` for the first time, you see a
+small setup wizard:
 
-Agent:  Quick setup — three questions.
+1. **Set a password** — this protects your local dashboard.
+2. **Pick how you want to be notified** about ambiguous transactions:
+   - "Through OpenClaw chat" (if you have it set up)
+   - "macOS notifications"
+   - "Just show me a banner in the UI"
+3. **Connect your first bank** — click **+ Connect a bank** and follow
+   the Plaid login flow.
+4. **Done.** The dashboard appears. Connect more banks anytime from the
+   Linked Accounts page.
 
-        1) What banks should I connect? Just list them and I'll open
-           Plaid for each.
-
-You:    Chase and Amex
-
-Agent:  [opens Plaid for Chase, waits, then Amex]
-        ✓ Both connected.
-
-        2) Tracking anything besides personal? Most people just have one
-           "Personal" ledger. Are you keeping anything separate (like a
-           rental property or business)?
-
-You:    Just personal
-
-Agent:  ✓ Created Personal ledger with the standard rows.
-
-        3) Any quick rules I should know? For example: "Home Depot is
-           always personal", "Uber Eats is dining not transport", that
-           kind of thing. Skip if you don't have any in mind.
-
-You:    Tim Hortons is always personal, and treat my partner's spending
-        the same as mine
-
-Agent:  ✓ Saved 2 hints. Scheduled daily sync at 6 AM (OpenClaw cron).
-        Pulling 90 days of history now...
-
-        ✓ 247 transactions. 239 sorted, 8 I want to ask about. I'll ping
-        you about them one at a time. Ready to start?
-
-You:    Yes
-
-Agent:  Saturday May 14, $127 at HOME DEPOT. My guess: personal home
-        stuff (78% sure). Correct?
-
-You:    Yes
-
-Agent:  ✓ Got it. Next: Tuesday May 17, $89 at COSTCO. Personal groceries?
-
-[... and so on, 8 times total]
-
-Agent:  All sorted. Daily sync is on. Just ask me anything anytime.
-```
-
-That's the whole setup. Three questions, a few classification check-ins,
-done.
+The system picks sensible defaults for everything else (Personal ledger
+with standard rows, daily 6 AM sync, LLM confidence threshold 0.75).
+Edit any of it from the UI later.
 
 ---
 
-## Daily Use
+## What the UI Looks Like
 
-You don't run anything. Your OpenClaw agent pings you when there's something
-to review, otherwise it's silent.
+**Linked Accounts** (the main page)
+- One card per connected bank
+- Status pill: 🟢 Active · 🟡 Pending expiration · 🔴 Needs re-auth
+- Last sync time, accounts inside, reconnect / disconnect buttons
+- **+ Connect a bank** button always available
 
-```
-Agent:  Morning — synced overnight. Found one transaction I'm unsure about:
-        $312 at COSTCO yesterday. Personal groceries, or something else?
+**Ledgers**
+- Your tracking buckets (default: "Personal")
+- Each shows income + expense line items
+- Click-to-edit names, add/remove rows, add new ledgers
 
-You:    Half personal groceries, half supplies for work
+**Profile**
+- Notification preference
+- LLM confidence threshold (slider)
+- Last sync time, manual sync button, export to Excel button
+- Change password
 
-Agent:  ✓ Split 50/50, saved as a hint for similar future Costco charges.
-```
+**Dashboard** *(placeholder)*
+- Reserved for future spending charts / summaries
 
-Want a summary?
+---
+
+## What AI Does for You
+
+Every transaction goes through a three-tier classifier:
+
+1. **Rules** — exact merchant matches you've already confirmed. Free, instant.
+2. **LLM** — for new merchants, the LLM reasons about the transaction
+   using your hints and recent similar transactions, and auto-routes if
+   confident enough.
+3. **Review queue** — if it's unsure, the transaction lands in a review
+   queue. You'll see it in the UI's "Needs Review" badge (or get an
+   OpenClaw chat ping if you have it set up).
+
+After 3 successful classifications of the same merchant, it becomes a
+Tier 1 rule automatically. The longer you use it, the less it asks.
+
+---
+
+## With OpenClaw (optional)
+
+If you also use OpenClaw, you get a chat layer on top:
 
 ```
 You:    How's this month looking?
-
 Agent:  May 2026 so far:
-
         Income:    $6,500
         Expenses:  $3,247
-
-        Top categories:
-          Groceries:      $487
-          Dining:         $312
-          Subscriptions:  $89
-
+        Top: Groceries $487, Dining $312, Subscriptions $89
         Net: +$3,253
-```
 
-Want Excel?
-
-```
 You:    Export this year to Excel
-
 Agent:  ✓ Wrote Personal Finances.xlsx to your Documents folder.
-        One sheet per year, rows for each category, monthly columns.
+
+Agent:  Heads up — got a $312 Costco charge from yesterday that I'm
+        not sure about. Personal groceries, or something else?
+You:    Half personal groceries, half supplies for work
+Agent:  ✓ Split 50/50, saved as a hint for similar charges.
 ```
 
----
-
-## How Classification Works
-
-Three tiers, fastest first:
-
-1. **Rules** — exact merchant matches you've already confirmed. Free, instant.
-2. **LLM** — if no rule matches, the LLM reasons about it using your hints
-   and recent transactions. Auto-routes if it's confident enough.
-3. **You** — if it's unsure, your agent pings you in chat. Your answer is
-   saved as a new rule.
-
-After the same merchant gets classified correctly 3 times in a row, it
-becomes a Tier 1 rule automatically. The longer you use it, the less it asks.
+Same data, same engine — just a different way in.
 
 ---
 
-## Privacy
+## Privacy & Security
 
-- Everything lives in `~/.friday-bp/data.db` (SQLite, yours)
-- Plaid tokens encrypted with Fernet
-- LLM calls go through whatever provider OpenClaw is configured with —
-  no separate API key needed
-- No telemetry, no analytics, no cloud sync
-- Nothing on this skill is reachable from the public internet — see
-  [ARCHITECTURE.md § Security](./ARCHITECTURE.md#security)
+- 🏠 **Local-only.** Nothing this app runs is reachable from the public
+  internet. Everything binds to `127.0.0.1`.
+- 🔒 **Plaid tokens encrypted at rest** (Fernet, key in macOS Keychain)
+- 🔑 **Password hashed with argon2id**, never sent to the browser
+- 📁 **Your data lives in `~/.friday-bp/data.db`** (SQLite, yours)
+- 🚫 **No telemetry**, no cloud sync, no third parties except Plaid + your
+  chosen LLM
+- ⏱️ **Sessions persist 7 days idle**, then re-login required
+- 🛡️ **Rate-limited logins** (5 failed attempts → lockout)
+
+See [ARCHITECTURE.md § Security](./ARCHITECTURE.md#security) for the full
+threat model.
 
 ---
 
 ## What This Is Not
 
-This is not a generalized budgeting platform. It's specifically:
-
-- Single user (you)
-- Personal finances (no business/nonprofit/multi-property by default)
-- Conversational only (no UI, no CLI)
-- OpenClaw-native (uses your agent's chat, OpenClaw cron, OpenClaw
-  notifications)
-
-If you outgrow it later, you can add ledgers/templates over time, but the
-defaults assume "just personal finance, just for me."
+- Not a chat-only tool. The UI is primary; chat is a layer.
+- Not a SaaS. Everything runs on your Mac, no cloud account.
+- Not a generalized platform. Personal finances only (for now).
+- Not a fancy dashboard. v0.1 focuses on management + classification;
+  charts/analytics come later.
 
 ---
 
 ## Troubleshooting
 
-**"Bank connection broken"** → Just tell your agent "reconnect my [bank]".
-It'll open Plaid Update Mode.
+**"Bank connection broken"** → Open `http://127.0.0.1:6789/accounts` and
+click **Reconnect** on the affected card.
 
-**"I want to redo a classification"** → "Reclassify the X charge from
-[date] as Y."
+**"I forgot my password"** → On the login page, click "Forgot password".
+A recovery token is written to `~/.friday-bp/recovery.txt` (only you can
+read it). Copy it into the reset page to set a new one.
 
-**"Where's my data?"** → `~/.friday-bp/data.db`. Back this up.
+**"Where's my data?"** → `~/.friday-bp/data.db`. Back it up.
 
-**"How do I uninstall?"** → `clawhub uninstall friday-budgeting-pro`. Your
-data file stays unless you delete it manually.
+**"The UI isn't loading"** → Check the daemon is running:
+`launchctl list | grep friday-budgeting-pro`. Restart with
+`launchctl kickstart -k gui/$UID/ai.openclaw.friday-budgeting-pro`.
+
+**"How do I uninstall?"** → `clawhub uninstall friday-budgeting-pro`.
+Your data file stays unless you delete it manually.
 
 ---
 

@@ -1,8 +1,9 @@
 # Friday Budgeting Pro — Architecture
 
-> **Design principle: keep it as simple as humanly possible.**
-> Single user. Conversational only. No wizards, no CLIs, no separate UIs.
-> Just an OpenClaw skill that HAL uses when needed.
+> **Design principle: AI-powered personal finance, with multiple ways to interact.**
+> The product is a local budgeting tool that uses LLM intelligence for smart
+> classification. The UI is the primary interface. OpenClaw / MCP integration
+> is **one** of several ways to interact with it, not the only one.
 
 ---
 
@@ -11,33 +12,36 @@
 These are hard rules. Don't add features that violate them.
 
 1. **Single-user only.** No multi-tenant accounts. The user *is* the system owner.
-2. **Conversational always.** Every interaction is a chat message with HAL.
-   No CLI prompts. No web wizards. No setup commands the user has to remember.
-3. **Lazy invocation.** The skill only runs when HAL decides to use it (because
-   the user said something finance-related). Not always-on.
-4. **Minimal questions.** Setup asks 2-3 clarifying questions max, then uses
-   smart defaults for everything else. Refinement happens through normal chat.
-5. **OpenClaw handles scheduling.** The skill auto-registers cron jobs via
-   OpenClaw's `cron` tool. No external schedulers, no daemons.
-6. **OpenClaw handles notifications.** No separate notification config.
-   Messages go through whatever channel the user is already chatting on.
-7. **Minimal local web UI only.** Two narrow uses are allowed, both bound to
-   `127.0.0.1` only, never exposed to the LAN or internet:
-   - The Plaid Link page (unavoidable — Plaid requires a browser)
-   - A small **Account UI** for managing your profile, linked banks, and
-     ledgers (anything that's tedious to do through chat alone)
-   No other web surface. No dashboards, no analytics views, no "app shell"
-   beyond what's needed to manage the structure. Day-to-day usage stays in
-   chat. See [Account UI](#account-ui) below for the exact scope.
-8. **No features that aren't directly useful for personal finance.** No
-   nonprofits, no business templates, no balance sheets, no multi-currency,
-   no investment tracking. If/when needed later, add it. Not now.
-9. **Local-network only.** Nothing this skill runs is reachable from the public
-   internet. No webhooks. No port forwarding. No tunnels. Everything binds to
-   `127.0.0.1` only. See [Security](#security) below for details.
-10. **Secrets never live in plaintext on disk.** Plaid access tokens are
-    encrypted with Fernet; the encryption key is stored in the macOS Keychain,
-    not on the filesystem.
+2. **UI-first, AI-enhanced.** The local web UI is the primary interface. AI/LLM
+   capability (smart classification, conversational queries) is layered on
+   top. OpenClaw is the most polished way to use the AI features, but the
+   product is fully usable without it.
+3. **Multiple interaction paths.** The same underlying engine is reachable via:
+   - the local **UI** (primary)
+   - the **MCP server** (used by OpenClaw or any MCP-compatible client)
+   - background **scheduler** (daily sync, drift detection)
+   - future paths (CLI, webhooks, etc.) can be added without redesign.
+4. **Standalone daemon.** The core service runs as a long-lived local process
+   (started at user login). The MCP server is an interface that lives inside
+   the same process; if the user doesn't use OpenClaw, the MCP endpoint sits
+   idle but the rest still works.
+5. **Minimal questions in setup.** Smart defaults for everything obvious;
+   user only edits what's actually different. Setup is a small in-browser
+   wizard — not a chat conversation.
+6. **Local-network only.** Nothing this product runs is reachable from the
+   public internet. No webhooks. No port forwarding. No tunnels. Everything
+   binds to `127.0.0.1` only.
+7. **Single user, single password.** Authentication is one password set on
+   first launch. Sessions persist across restarts.
+8. **Secrets never live in plaintext on disk.** Plaid access tokens encrypted
+   with Fernet; key in macOS Keychain. Password hashed with argon2id.
+9. **No features outside the personal-finance scope.** No nonprofits, no
+   business templates, no balance sheets, no multi-currency, no investment
+   tracking. Add if/when needed. Not now.
+10. **Two notification paths, automatic fallback.** When the user needs to be
+    told something (re-auth needed, ambiguous transaction), the system
+    notifies via OpenClaw chat if available, otherwise via macOS
+    Notification Center, otherwise just shows a banner in the UI.
 
 ---
 
@@ -382,21 +386,68 @@ user is currently on. OpenClaw routes it. Zero config.
 
 ---
 
-## Account UI
+## Architecture in One Diagram
 
-A tiny local-only web app that's **always on** while the MCP server is running.
-It's open in your browser whenever you want it — no need to ask the agent to
-launch it. You log in once with a password, then browse freely.
+```
+  ┌──────────────────────┐   ┌──────────────────────┐   ┌──────────────────┐
+  │   Browser (UI)    │   │  OpenClaw (chat) │   │   Scheduler     │
+  │    primary path   │   │   optional path  │   │  (internal cron)│
+  └────────┬─────────┘   └────────┬─────────┘   └────────┬─────────┘
+           │ HTTP             │ MCP/stdio        │ in-proc
+           │                  │                  │
+           ▼                  ▼                  ▼
+  ┌────────────────────────────────────────────────────────┐
+  │         friday-budgeting-pro daemon (long-lived process)         │
+  │                                                                  │
+  │   ┌──────────┐  ┌──────────┐  ┌────────────┐  ┌────────────┐    │
+  │   │  UI app  │  │ MCP app  │  │ Scheduler  │  │ Notifier   │    │
+  │   └──────┬───┘  └──────┬───┘  └──────┬─────┘  └──────┬─────┘    │
+  │          │             │             │             │           │
+  │          └───────────┴────────────┴────────────┴──────────┐│
+  │                       Core engine                              ││
+  │   - Plaid client       - Classifier (rules/LLM/review)         ││
+  │   - Ledger management  - Auth (argon2 + sessions)              ││
+  │   - DB access          - Notification routing                  ││
+  │   └─────────────────────────────────────────────────────┐ ││
+  │                                                              │ ││
+  │    SQLite DB (~/.friday-bp/data.db)                          │ ││
+  │    Encrypted Plaid tokens + Keychain-stored Fernet key       │ ││
+  │    └───────────────────────────────────────────────────┐ │ ││
+  └──────────────────────────────────────────────────────────────────┘
+```
 
-Use cases for v0.1: scanning your linked banks, seeing which connections are
-about to expire, connecting new banks at any time, and editing your ledger
-structure visually. **Day-to-day spending review, sync prompts, and
-classification still happen in chat** (the chat path is more efficient for
-those). The UI complements the chat — it doesn't replace it.
+All three top-line clients (UI, MCP, scheduler) are equal citizens. Removing
+any one of them doesn't break the others. Adding a new client (CLI, webhook,
+etc.) means writing another small adapter against the core engine.
 
-**Future direction:** every MCP tool should eventually have a UI equivalent
-so the system is fully usable without an LLM if you want. v0.1 ships with
-just the four pages below; more arrive in follow-on tickets.
+---
+
+## Account UI (primary interface)
+
+A local-only web app that's always reachable while the daemon is running.
+This is the **primary** way to interact with the system: log in once, then
+add banks, edit ledgers, review your spending, trigger exports.
+
+**v0.1 includes** four pages: Linked Accounts, Ledgers, Profile, Dashboard
+(placeholder). The first-run experience is also in the UI — there's no need
+to have any external agent or chat to get started.
+
+**The AI layer adds value on top.** Without OpenClaw, you still get:
+- Smart classification (LLM still classifies in the background, you review
+  any ambiguous ones in the UI)
+- Daily auto-sync
+- Spending summaries (just static views)
+- Excel exports
+
+With OpenClaw, you also get:
+- Conversational queries ("how much did I spend on dining?")
+- Conversational review of ambiguous transactions (agent walks you through
+  them in chat instead of clicking)
+- Receive notifications via your existing chat channel
+
+**Future direction:** every action available in the MCP API should also be
+in the UI, so the system is fully usable without an LLM if you prefer
+click-and-type.
 
 ### Pages (v0.1)
 
@@ -448,41 +499,51 @@ just the four pages below; more arrive in follow-on tickets.
 - Minimal styling. Looks fine on mobile in case the user opens it from their
   phone over Tailscale, but no mobile-specific features.
 
-### Lifecycle: always-on with the MCP server
+### Lifecycle: long-lived daemon
 
-The UI starts the moment the MCP server starts and stays up as long as the
-server is running. In a normal OpenClaw setup, the MCP server is started by
-OpenClaw on demand and persists as long as OpenClaw is up — so for users on
-OpenClaw, the UI is effectively "always on."
+The service is a long-lived background process, started at user login (via
+launchd on macOS). It is independent of OpenClaw — it runs whether or not
+OpenClaw is running.
 
-- Default URL: `http://127.0.0.1:6789` (configurable via env var)
-- Implementation: the UI server is launched as a child task inside the MCP
-  server process (single Python process, ASGI app for the UI, FastMCP for
-  the MCP tools). One process, one lifecycle.
-- If the MCP server is not running, the UI is not reachable. That's by
-  design — there's no separate daemon to manage.
+- Default UI URL: `http://127.0.0.1:6789` (configurable via env var)
+- Implementation: a single Python process running:
+  - The FastAPI UI app (always listening)
+  - The FastMCP MCP endpoint (stdio interface; used when OpenClaw spawns a
+    connection)
+  - The internal scheduler loop (daily sync at 6 AM by default)
+- Installed via ClawHub (preferred) or manually; installation writes a
+  launchd plist so the daemon starts at login and restarts if it crashes.
+- The MCP endpoint exists inside the daemon, but OpenClaw spawning an MCP
+  connection is a *connection event*, not a lifecycle event — the daemon
+  was already running.
 
-### Authentication: log in once, browse freely
+### Authentication: set in the UI, log in in the UI
 
-No launch tokens. No URL-encoded secrets. A standard login page with a
-password you set during initial setup.
+No chat involvement, no launch tokens. A standard login page with a password
+you set on first launch.
 
-- **Password storage:** argon2id hash stored in the local DB. Never sent
-  back to the browser.
-- **Initial password:** picked by the user during the conversational setup
-  flow. The setup tool calls a `set_ui_password()` MCP tool that records
-  the hash.
+- **First-run flow:** when the UI sees that `app_config.ui_password_hash`
+  is empty, every route except `/setup` redirects there. The `/setup`
+  wizard collects: new password, confirm password, optional notification
+  preference ("send chat notifications via OpenClaw if available"), then
+  prompts to connect a first bank.
+- **Password storage:** argon2id hash in `app_config.ui_password_hash`.
+  Never sent back to the browser.
 - **Login flow:** GET `/login` → POST with password → server validates →
   sets HttpOnly + SameSite=Strict session cookie → redirects to `/accounts`.
-- **Session lifetime:** 7 days idle, then re-login required.
-- **Sessions:** server-side store in the DB (`sessions` table) so they
-  survive MCP restarts.
-- **Rate limit:** 5 failed attempts → 5-minute lockout per source IP
-  (which is always `127.0.0.1`, but the lockout still helps against a
-  malicious local process).
-- **Password reset path:** chat command. User says "reset my finance UI
-  password" → agent calls `reset_ui_password()` MCP tool → either prompts
-  for a new password directly or issues a one-time recovery link.
+- **Session lifetime:** 7 days idle, server-side store in the `sessions`
+  table so they survive daemon restarts.
+- **Rate limit:** 5 failed attempts in 5 minutes → lockout.
+- **Password reset (forgotten password):** in-UI "forgot password" link
+  generates a recovery token written to `~/.friday-bp/recovery.txt` (file
+  perms 0600). User opens that file from a terminal, copies the token,
+  pastes into `/reset?t=...` to set a new password. This works because
+  the user has shell access to their own machine; an attacker who has
+  shell access has already lost.
+- **Optional: reset via chat.** If OpenClaw is configured, the user can
+  also say "reset my finance dashboard password" — the agent calls
+  `reset_ui_password()` and gets the same recovery token via MCP. This
+  is a convenience, not the primary path.
 
 ### Security (same rules as the rest of the system)
 
