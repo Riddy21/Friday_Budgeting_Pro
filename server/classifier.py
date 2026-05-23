@@ -112,7 +112,9 @@ def classify_with_llm(
 
     Raises:
         ValueError: If the LLM response is not valid JSON, is missing required
-            fields, or references a line_item_id that does not exist in the DB.
+            fields, references a line_item_id that does not exist in the DB, or
+            returns a ledger_id that does not match the ledger_id looked up from
+            the line_item in the DB (ledger_id mismatch).
     """
     from server.llm import chat  # local import keeps chat patchable in tests
 
@@ -237,10 +239,21 @@ def classify_with_llm(
 
     if li_row is None:
         raise ValueError(
-            f"LLM returned line_item_id={line_item_id!r} which does not exist in the DB."
+            f"LLM returned unknown line_item_id={line_item_id!r} which does not exist in the DB."
         )
 
     ledger_id: str = li_row["ledger_id"]
+
+    # ------------------------------------------------------------------
+    # 7. Validate ledger_id consistency if the LLM also returned one
+    # ------------------------------------------------------------------
+    if "ledger_id" in parsed:
+        llm_ledger_id = parsed["ledger_id"]
+        if llm_ledger_id != ledger_id:
+            raise ValueError(
+                f"LLM returned ledger_id={llm_ledger_id!r} but line_item_id={line_item_id!r}"
+                f" belongs to ledger_id={ledger_id!r} — ledger_id mismatch."
+            )
 
     return {
         "transaction_id": transaction["id"],
@@ -251,6 +264,81 @@ def classify_with_llm(
         "confidence":     confidence,
         "reviewed":       0,
     }
+
+
+# ---------------------------------------------------------------------------
+# Tier 2b — safe wrapper with fallback-to-review
+# ---------------------------------------------------------------------------
+
+
+def safe_classify(
+    conn: sqlite3.Connection,
+    transaction: dict | sqlite3.Row,
+    fallback_to_review: bool = True,
+) -> dict:
+    """Classify *transaction* with graceful degradation on LLM validation failures.
+
+    Wraps :func:`classify_with_llm` and intercepts ``ValueError`` raised by
+    any validation step (bad JSON, missing ``line_item_id`` key, unknown
+    ``line_item_id``, or ``ledger_id`` mismatch).
+
+    Args:
+        conn: An open sqlite3 connection with ``row_factory = sqlite3.Row``.
+        transaction: A dict or sqlite3.Row with at minimum:
+            - id        (str)
+            - merchant  (str)
+            - amount    (real)
+            - date      (str, ISO format)
+        fallback_to_review: When ``True`` (default) a validation failure
+            returns a stub entry flagged for human review instead of raising.
+            When ``False`` the ``ValueError`` is re-raised.
+
+    Returns:
+        On success: the entry dict returned by :func:`classify_with_llm`
+        (possibly with ``source`` updated by a downstream
+        :func:`flag_for_review` call if you use that separately).
+
+        On validation failure with *fallback_to_review=True*::
+
+            {
+                "transaction_id":  <str>,
+                "ledger_id":       None,
+                "line_item_id":    None,
+                "amount":          <real>,
+                "source":          "llm-rejected",
+                "confidence":      0.0,
+                "reviewed":        0,
+                "rejection_reason": "<short description of what went wrong>",
+            }
+
+    Raises:
+        ValueError: Only when *fallback_to_review=False* and the LLM output
+            fails validation.
+    """
+    import logging
+    logger = logging.getLogger(__name__)
+
+    try:
+        return classify_with_llm(conn, transaction)
+    except ValueError as exc:
+        reason = str(exc)
+        logger.warning(
+            "safe_classify: LLM output rejected for transaction_id=%r — %s",
+            transaction["id"],
+            reason,
+        )
+        if not fallback_to_review:
+            raise
+        return {
+            "transaction_id":   transaction["id"],
+            "ledger_id":        None,
+            "line_item_id":     None,
+            "amount":           transaction["amount"],
+            "source":           "llm-rejected",
+            "confidence":       0.0,
+            "reviewed":         0,
+            "rejection_reason": reason,
+        }
 
 
 # ---------------------------------------------------------------------------
