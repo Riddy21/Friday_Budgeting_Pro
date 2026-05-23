@@ -30,8 +30,29 @@ mcp = fastmcp.FastMCP("friday-budgeting-pro")
 
 @mcp.tool
 def setup_status() -> dict:
-    """Return whether initial setup is not_started, in_progress, or complete."""
-    return {"status": "not_implemented"}
+    """Return whether initial setup is not_started, in_progress, or complete.
+
+    Status rules:
+      - "not_started"  → 0 ledgers AND 0 bank_connections
+      - "in_progress"  → ≥1 ledger AND 0 bank_connections
+                         (user picked a ledger but hasn't linked a bank yet)
+      - "complete"     → ≥1 ledger AND ≥1 bank_connection
+    """
+    conn = get_db(server.paths.DB_PATH)
+    try:
+        ledger_count = conn.execute("SELECT COUNT(*) FROM ledgers").fetchone()[0]
+        bank_count = conn.execute("SELECT COUNT(*) FROM bank_connections").fetchone()[0]
+    finally:
+        conn.close()
+
+    if ledger_count == 0 and bank_count == 0:
+        status = "not_started"
+    elif ledger_count >= 1 and bank_count == 0:
+        status = "in_progress"
+    else:
+        status = "complete"
+
+    return {"status": status}
 
 
 @mcp.tool
@@ -40,8 +61,121 @@ def apply_initial_setup(
     extra_ledgers: List,
     hints: List,
 ) -> dict:
-    """Perform the whole first-run setup in one call."""
-    return {"status": "not_implemented"}
+    """Perform the whole first-run setup in one call.
+
+    Parameters
+    ----------
+    banks_to_link : List[str]
+        Human-readable bank names the user wants to connect.  NOTE: This tool
+        does NOT run Plaid Link — that interactive flow lives in start_link /
+        complete_link.  We simply acknowledge the requested banks and return
+        them so the caller can chain start_link calls for each one.
+    extra_ledgers : List[dict]
+        Additional ledgers beyond "Personal".  Each entry is a dict like::
+
+            {"name": "Business", "line_items": [{"name": "Office", "type": "expense"}, ...]}
+
+        The built-in "Personal" ledger is always created (with the standard
+        10 line items below) regardless of this parameter.
+    hints : List[str]
+        Natural-language classification hints; each becomes a row in
+        ``classification_hints``.  De-duped on exact text.
+
+    Standard Personal line items (always created):
+      Salary (income), Groceries (expense), Dining (expense),
+      Transport (expense), Subscriptions (expense), Healthcare (expense),
+      Travel (expense), Shopping (expense), Misc (expense), Other (expense)
+
+    Idempotent: re-running will not duplicate ledgers, line items, or hints.
+
+    Returns
+    -------
+    dict
+        {"status": "ok", "ledgers_created": [...], "line_items_created": N,
+         "hints_created": N, "banks_to_link": [...]}
+    """
+    PERSONAL_LINE_ITEMS = [
+        ("Salary", "income"),
+        ("Groceries", "expense"),
+        ("Dining", "expense"),
+        ("Transport", "expense"),
+        ("Subscriptions", "expense"),
+        ("Healthcare", "expense"),
+        ("Travel", "expense"),
+        ("Shopping", "expense"),
+        ("Misc", "expense"),
+        ("Other", "expense"),
+    ]
+
+    # Build the full ledger spec: Personal first, then any extras.
+    ledger_specs = [{"name": "Personal", "line_items": PERSONAL_LINE_ITEMS}]
+    for el in (extra_ledgers or []):
+        items = [(li["name"], li["type"]) for li in el.get("line_items", [])]
+        ledger_specs.append({"name": el["name"], "line_items": items})
+
+    ledgers_created: list[str] = []
+    line_items_created = 0
+    hints_created = 0
+
+    conn = get_db(server.paths.DB_PATH)
+    try:
+        with db_txn(conn):
+            for spec in ledger_specs:
+                ledger_name = spec["name"]
+
+                # Upsert ledger — skip if already present.
+                existing_ledger = conn.execute(
+                    "SELECT id FROM ledgers WHERE name = ?", (ledger_name,)
+                ).fetchone()
+                if existing_ledger:
+                    ledger_id = existing_ledger["id"]
+                else:
+                    ledger_id = str(uuid.uuid4())
+                    conn.execute(
+                        "INSERT INTO ledgers (id, name) VALUES (?, ?)",
+                        (ledger_id, ledger_name),
+                    )
+                    ledgers_created.append(ledger_name)
+
+                # Upsert line items — skip if name+type already present in this ledger.
+                for item_name, item_type in spec["line_items"]:
+                    existing_item = conn.execute(
+                        "SELECT id FROM line_items "
+                        "WHERE ledger_id = ? AND name = ? AND item_type = ?",
+                        (ledger_id, item_name, item_type),
+                    ).fetchone()
+                    if existing_item:
+                        continue
+                    conn.execute(
+                        "INSERT INTO line_items (id, ledger_id, name, item_type) "
+                        "VALUES (?, ?, ?, ?)",
+                        (str(uuid.uuid4()), ledger_id, item_name, item_type),
+                    )
+                    line_items_created += 1
+
+            # Upsert hints — de-dupe on exact text.
+            for hint_text in (hints or []):
+                existing_hint = conn.execute(
+                    "SELECT id FROM classification_hints WHERE text = ?",
+                    (hint_text,),
+                ).fetchone()
+                if existing_hint:
+                    continue
+                conn.execute(
+                    "INSERT INTO classification_hints (id, text) VALUES (?, ?)",
+                    (str(uuid.uuid4()), hint_text),
+                )
+                hints_created += 1
+    finally:
+        conn.close()
+
+    return {
+        "status": "ok",
+        "ledgers_created": ledgers_created,
+        "line_items_created": line_items_created,
+        "hints_created": hints_created,
+        "banks_to_link": [*banks_to_link] if banks_to_link else [],
+    }
 
 
 # ---------------------------------------------------------------------------
