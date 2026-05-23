@@ -7,12 +7,15 @@ Real implementations land in later tickets.
 
 from __future__ import annotations
 
+import uuid
 from typing import List, Optional
 
 import fastmcp
 
 from server.db import get_db
 import server.paths
+import server.crypto
+import server.plaid_client
 
 mcp = fastmcp.FastMCP("friday-budgeting-pro")
 
@@ -44,32 +47,114 @@ def apply_initial_setup(
 
 @mcp.tool
 def start_link() -> dict:
-    """Return a URL to open Plaid Link."""
-    return {"status": "not_implemented"}
+    """Return a URL to open Plaid Link.
+
+    Calls plaid_client.create_link_token() and returns a URL pointing at
+    the (future) UI link page (served by #14).
+    """
+    link_token = server.plaid_client.create_link_token()
+    return {"url": f"http://127.0.0.1:6789/link?token={link_token}"}
 
 
 @mcp.tool
 def complete_link(public_token: str) -> dict:
-    """Exchange a Plaid public token and store the access token."""
-    return {"status": "not_implemented"}
+    """Exchange a Plaid public token and store the access token.
+
+    Exchanges the public_token for a Plaid access_token + item_id, encrypts
+    the access token via server.crypto, and inserts a new row into
+    bank_connections.  Returns the new connection_id.
+
+    institution_name is left NULL for now — fetching it requires
+    Plaid /institutions/get_by_id which is out of scope; see issue #34.
+    """
+    result = server.plaid_client.exchange_public_token(public_token)
+    access_token = result["access_token"]
+    item_id = result["item_id"]
+
+    encrypted_token = server.crypto.encrypt(access_token)
+    connection_id = str(uuid.uuid4())
+
+    conn = get_db(server.paths.DB_PATH)
+    try:
+        conn.execute(
+            """
+            INSERT INTO bank_connections
+                (id, plaid_item_id, plaid_access_token_encrypted, status)
+            VALUES (?, ?, ?, 'active')
+            """,
+            (connection_id, item_id, encrypted_token),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    return {"connection_id": connection_id, "institution_name": None}
 
 
 @mcp.tool
 def list_connections() -> dict:
-    """List all saved Plaid bank connections."""
-    return {"status": "not_implemented"}
+    """List all saved Plaid bank connections.
+
+    Returns id, institution_name, status, and last_synced_at for each
+    connection.  The encrypted access token is NEVER included in the output.
+    """
+    conn = get_db(server.paths.DB_PATH)
+    try:
+        rows = conn.execute(
+            """
+            SELECT id, institution_name, status, last_synced_at
+            FROM bank_connections
+            ORDER BY rowid
+            """
+        ).fetchall()
+        connections = [dict(r) for r in rows]
+    finally:
+        conn.close()
+
+    return {"connections": connections}
 
 
 @mcp.tool
 def refresh_connection(id: str) -> dict:
-    """Trigger an Update Mode Plaid Link for an existing connection."""
-    return {"status": "not_implemented"}
+    """Trigger an Update Mode Plaid Link for an existing connection.
+
+    Generates a new Plaid Link token for Update Mode.  The plaid-python SDK
+    supports passing an access_token to create_link_token() for proper Update
+    Mode, but our wrapper does not yet expose that parameter — see TODO below.
+
+    TODO: Pass the decrypted access_token to create_link_token() for a true
+    Update Mode link token (requires plaid_client.create_link_token to accept
+    an optional access_token kwarg).  Tracked in issue #34.
+    """
+    # For now, generate a fresh link token (same as start_link)
+    link_token = server.plaid_client.create_link_token()
+    return {"url": f"http://127.0.0.1:6789/link?token={link_token}"}
 
 
 @mcp.tool
 def disconnect(id: str) -> dict:
-    """Disconnect and remove a Plaid bank connection."""
-    return {"status": "not_implemented"}
+    """Disconnect and remove a Plaid bank connection.
+
+    Removes the connection row and any associated sync_cursor row from the
+    local database.  Calling Plaid's /item/remove endpoint to revoke the
+    access token on Plaid's side is out of scope for this PR (the local
+    database record is the authoritative store for this app).
+    """
+    conn = get_db(server.paths.DB_PATH)
+    try:
+        conn.execute(
+            "DELETE FROM sync_cursors WHERE connection_id = ?",
+            (id,),
+        )
+        conn.execute(
+            "DELETE FROM bank_connections WHERE id = ?",
+            (id,),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    return {"ok": True}
 
 
 # ---------------------------------------------------------------------------
