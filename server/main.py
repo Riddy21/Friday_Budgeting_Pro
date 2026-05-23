@@ -7,12 +7,16 @@ Real implementations land in later tickets.
 
 from __future__ import annotations
 
+import json as _json
+import time as _time
 import uuid
 from typing import List, Optional
 
 import fastmcp
 
-from server.db import get_db
+from server.db import get_db, transaction as db_txn
+from server.sync_lock import sync_lock, LockBusy
+from server.classifier import apply_rules
 import server.paths
 import server.crypto
 import server.plaid_client
@@ -194,7 +198,209 @@ def remove_line_item(id: str) -> dict:
 @mcp.tool
 def sync() -> dict:
     """Pull new transactions from Plaid, classify them, and return a summary."""
-    return {"status": "not_implemented"}
+
+    def _get(obj, key, default=None):
+        """Get a field from a dict or an SDK object."""
+        if isinstance(obj, dict):
+            return obj.get(key, default)
+        return getattr(obj, key, default)
+
+    def _is_reauth_error(exc: Exception) -> bool:
+        """Return True when *exc* signals ITEM_LOGIN_REQUIRED."""
+        body = getattr(exc, "body", None)
+        if body:
+            try:
+                parsed = _json.loads(body)
+                return parsed.get("error_code") == "ITEM_LOGIN_REQUIRED"
+            except Exception:
+                pass
+        return False
+
+    connections_synced = 0
+    total_added = 0
+    total_modified = 0
+    total_removed = 0
+    total_classified = 0
+
+    try:
+        with sync_lock(timeout=0.0):
+            db_conn = get_db(server.paths.DB_PATH)
+            try:
+                active_conns = db_conn.execute(
+                    "SELECT id, plaid_access_token_encrypted "
+                    "FROM bank_connections WHERE status = 'active'"
+                ).fetchall()
+
+                for bc in active_conns:
+                    connection_id = bc["id"]
+                    encrypted_token = bc["plaid_access_token_encrypted"]
+                    access_token = server.crypto.decrypt(encrypted_token)
+
+                    cursor_row = db_conn.execute(
+                        "SELECT cursor FROM sync_cursors WHERE connection_id = ?",
+                        (connection_id,),
+                    ).fetchone()
+                    cursor = cursor_row["cursor"] if cursor_row else None
+
+                    try:
+                        result = server.plaid_client.sync_transactions(access_token, cursor)
+                    except Exception as e:
+                        if _is_reauth_error(e):
+                            with db_txn(db_conn):
+                                db_conn.execute(
+                                    "UPDATE bank_connections SET status='needs_reauth' WHERE id=?",
+                                    (connection_id,),
+                                )
+                            continue
+                        raise
+
+                    added_txns = result.get("added", []) if isinstance(result, dict) else []
+                    modified_txns = result.get("modified", []) if isinstance(result, dict) else []
+                    removed_txns = result.get("removed", []) if isinstance(result, dict) else []
+                    next_cursor = result.get("next_cursor") if isinstance(result, dict) else None
+
+                    now = int(_time.time())
+                    conn_added = 0
+                    conn_modified = 0
+                    conn_removed = 0
+                    conn_classified = 0
+
+                    with db_txn(db_conn):
+                        # --- Added transactions ---
+                        for txn in added_txns:
+                            plaid_account_id = _get(txn, "account_id")
+                            plaid_txn_id = _get(txn, "transaction_id")
+                            date = _get(txn, "date")
+                            name = _get(txn, "name") or ""
+                            merchant_name = _get(txn, "merchant_name") or ""
+                            merchant = merchant_name if merchant_name else name
+                            amount = _get(txn, "amount")
+                            pending = bool(_get(txn, "pending", False))
+
+                            # Upsert bank_account (INSERT OR IGNORE on plaid_account_id UNIQUE)
+                            db_conn.execute(
+                                "INSERT OR IGNORE INTO bank_accounts "
+                                "(id, connection_id, plaid_account_id) VALUES (?, ?, ?)",
+                                (str(uuid.uuid4()), connection_id, plaid_account_id),
+                            )
+                            ba_row = db_conn.execute(
+                                "SELECT id FROM bank_accounts WHERE plaid_account_id = ?",
+                                (plaid_account_id,),
+                            ).fetchone()
+                            bank_account_id = ba_row["id"]
+
+                            txn_id = str(uuid.uuid4())
+                            cur = db_conn.execute(
+                                "INSERT OR IGNORE INTO transactions "
+                                "(id, bank_account_id, plaid_transaction_id, date, merchant, amount, pending) "
+                                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                                (
+                                    txn_id,
+                                    bank_account_id,
+                                    plaid_txn_id,
+                                    str(date) if date is not None else None,
+                                    merchant,
+                                    amount,
+                                    1 if pending else 0,
+                                ),
+                            )
+
+                            if cur.rowcount > 0:
+                                # Newly inserted — count and attempt Tier-1 classification
+                                conn_added += 1
+                                txn_dict = {
+                                    "id": txn_id,
+                                    "merchant": merchant,
+                                    "amount": amount,
+                                    "bank_account_id": bank_account_id,
+                                }
+                                entry = apply_rules(db_conn, txn_dict)
+                                if entry is not None:
+                                    db_conn.execute(
+                                        "INSERT OR IGNORE INTO transaction_entries "
+                                        "(id, transaction_id, ledger_id, line_item_id, "
+                                        " amount, source, confidence, reviewed) "
+                                        "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                                        (
+                                            str(uuid.uuid4()),
+                                            entry["transaction_id"],
+                                            entry["ledger_id"],
+                                            entry["line_item_id"],
+                                            entry["amount"],
+                                            entry["source"],
+                                            entry["confidence"],
+                                            entry["reviewed"],
+                                        ),
+                                    )
+                                    conn_classified += 1
+
+                        # --- Modified transactions ---
+                        for txn in modified_txns:
+                            plaid_txn_id = _get(txn, "transaction_id")
+                            date = _get(txn, "date")
+                            name = _get(txn, "name") or ""
+                            merchant_name = _get(txn, "merchant_name") or ""
+                            merchant = merchant_name if merchant_name else name
+                            amount = _get(txn, "amount")
+                            pending = bool(_get(txn, "pending", False))
+                            db_conn.execute(
+                                "UPDATE transactions "
+                                "SET date=?, merchant=?, amount=?, pending=? "
+                                "WHERE plaid_transaction_id=?",
+                                (
+                                    str(date) if date is not None else None,
+                                    merchant,
+                                    amount,
+                                    1 if pending else 0,
+                                    plaid_txn_id,
+                                ),
+                            )
+                            conn_modified += 1
+
+                        # --- Removed transactions ---
+                        for txn in removed_txns:
+                            plaid_txn_id = _get(txn, "transaction_id")
+                            db_conn.execute(
+                                "DELETE FROM transactions WHERE plaid_transaction_id = ?",
+                                (plaid_txn_id,),
+                            )
+                            conn_removed += 1
+
+                        # Upsert cursor — advances ONLY on full success of this batch
+                        db_conn.execute(
+                            "INSERT INTO sync_cursors (connection_id, cursor, last_synced_at) "
+                            "VALUES (?, ?, ?) "
+                            "ON CONFLICT(connection_id) DO UPDATE SET "
+                            "    cursor = excluded.cursor, "
+                            "    last_synced_at = excluded.last_synced_at",
+                            (connection_id, next_cursor, now),
+                        )
+
+                        db_conn.execute(
+                            "UPDATE bank_connections SET last_synced_at=? WHERE id=?",
+                            (now, connection_id),
+                        )
+
+                    connections_synced += 1
+                    total_added += conn_added
+                    total_modified += conn_modified
+                    total_removed += conn_removed
+                    total_classified += conn_classified
+
+            finally:
+                db_conn.close()
+
+    except LockBusy:
+        return {"status": "already_running"}
+
+    return {
+        "status": "ok",
+        "connections_synced": connections_synced,
+        "added": total_added,
+        "modified": total_modified,
+        "removed": total_removed,
+        "classified_by_rule": total_classified,
+    }
 
 
 @mcp.tool
