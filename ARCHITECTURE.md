@@ -21,8 +21,14 @@ These are hard rules. Don't add features that violate them.
    OpenClaw's `cron` tool. No external schedulers, no daemons.
 6. **OpenClaw handles notifications.** No separate notification config.
    Messages go through whatever channel the user is already chatting on.
-7. **No web UI components** except the one unavoidable case: Plaid Link
-   (which requires a browser by Plaid's design — there's no API alternative).
+7. **Minimal local web UI only.** Two narrow uses are allowed, both bound to
+   `127.0.0.1` only, never exposed to the LAN or internet:
+   - The Plaid Link page (unavoidable — Plaid requires a browser)
+   - A small **Account UI** for managing your profile, linked banks, and
+     ledgers (anything that's tedious to do through chat alone)
+   No other web surface. No dashboards, no analytics views, no "app shell"
+   beyond what's needed to manage the structure. Day-to-day usage stays in
+   chat. See [Account UI](#account-ui) below for the exact scope.
 8. **No features that aren't directly useful for personal finance.** No
    nonprofits, no business templates, no balance sheets, no multi-currency,
    no investment tracking. If/when needed later, add it. Not now.
@@ -353,6 +359,89 @@ user is currently on. OpenClaw routes it. Zero config.
 
 ---
 
+## Account UI
+
+A tiny local-only web app for things that are awkward in chat: scanning your
+linked banks, seeing which connections are about to expire, and editing your
+ledger structure visually. **Day-to-day spending review, sync prompts, and
+classification all stay in chat.** The UI is for management chores only.
+
+### Pages (v0.1)
+
+```
+  /                  →  redirects to /accounts
+  /profile           →  read-only profile + settings
+  /accounts          →  linked banks + their accounts
+  /ledgers           →  ledger structure + line items
+  /link              →  Plaid Link flow (existing)
+  /dashboard         →  placeholder ("Coming soon")
+```
+
+### What each page shows
+
+**Profile** (`/profile`) — mostly read-only at this stage
+- Account name, notification channel target
+- LLM confidence threshold (slider, defaults 0.75)
+- Plaid environment in use (sandbox / development / production)
+- DB file path, last successful sync time
+
+**Linked Accounts** (`/accounts`) — the main page
+- One card per connected bank, showing:
+  - Institution name + logo
+  - List of accounts inside (mask + type, e.g. “… 1234 checking”)
+  - Status pill: 🟢 Active / 🟡 Pending expiration / 🔴 Needs reauth
+  - Last synced timestamp
+  - Buttons: **Reconnect** (Plaid Update Mode), **Disconnect**
+- Top-right: **+ Connect a bank** button → launches Plaid Link
+
+**Ledgers** (`/ledgers`) — simple structure editor
+- List of ledgers (default: just “Personal”)
+- Each expandable to show line items
+- Add / rename / remove line items inline
+- Add / rename / remove ledgers (extra ledgers when the user adds rental
+  properties, businesses, etc.)
+
+**Dashboard** (`/dashboard`) — placeholder only for v0.1
+- One sentence: “Spending summaries coming in a future version. For now,
+  ask in chat: ‘how’s this month looking?’”
+- The route exists so the navigation has a slot for it; it does not display
+  any data yet. Wiring it up is its own future ticket.
+
+### Look and feel
+
+- Single-page-ish app: plain HTML + a tiny bit of JS (or HTMX). **No React,
+  no build step.**
+- Three top-tabs: **Linked Accounts** · **Ledgers** · **Profile** (plus a
+  greyed-out **Dashboard** tab as the future placeholder).
+- Minimal styling. Looks fine on mobile in case the user opens it from their
+  phone over Tailscale, but no mobile-specific features.
+
+### How it's launched
+
+The UI is **not always-on**. It's launched on demand in one of two ways:
+
+1. Chat: user says “open my finances UI” → OpenClaw agent calls the
+   `open_ui()` MCP tool → tool starts the local server, returns a URL with a
+   one-time session token → user clicks the URL.
+2. CLI: `friday-budgeting open` does the same thing (for users not on
+   OpenClaw).
+
+The server stays up for the duration of the session (default 30 min idle
+timeout) and shuts itself down. It never autostarts at boot.
+
+### Security (same rules as the rest of the system)
+
+- Bound to `127.0.0.1:<random port>` only. Refuses to start on any other
+  interface.
+- Every page requires a session cookie set from a single-use token in the
+  launch URL. Without the token, every route returns 401.
+- Sensitive values (Plaid access tokens) are never sent to the browser —
+  only metadata (status, last synced, institution name).
+- All state writes go through the same MCP tool layer the chat path uses;
+  no separate code path means no separate set of vulnerabilities.
+
+---
+
 ## Security
 
 > Less surface area is the best security. The whole design is built around
@@ -451,7 +540,7 @@ Next time the user mentions finances to HAL, the setup conversation starts.
 friday-budgeting-pro/
 ├── README.md
 ├── ARCHITECTURE.md          ← THIS FILE (source of truth)
-├── SKILL.md                 ← tells HAL when to use the skill
+├── SKILL.md                 ← tells your OpenClaw agent when to use the skill
 ├── package.json             ← clawhub publish metadata
 ├── requirements.txt
 ├── .gitignore
@@ -461,14 +550,23 @@ friday-budgeting-pro/
 │
 ├── server/
 │   ├── main.py              ← FastMCP entry point
-│   ├── db.py                ← SQLite helpers
+│   ├── db.py                ← SQLite helpers (shared by MCP + UI)
 │   ├── plaid_client.py
 │   ├── classifier.py        ← 3-tier engine
 │   ├── llm.py               ← LLM call wrapper
 │   └── excel_export.py
 │
-└── plaid_link/
-    └── index.html           ← only static asset; served at localhost on demand
+└── ui/
+    ├── server.py            ← FastAPI app, 127.0.0.1 only, on-demand launch
+    ├── templates/
+    │   ├── base.html
+    │   ├── profile.html
+    │   ├── accounts.html        ← linked banks + status
+    │   ├── ledgers.html         ← ledger structure editor
+    │   ├── link.html            ← Plaid Link flow
+    │   └── dashboard.html       ← placeholder ("Coming soon")
+    └── static/
+        └── style.css            ← minimal styles
 ```
 
 That's the whole codebase. ~10 files.
@@ -478,7 +576,8 @@ That's the whole codebase. ~10 files.
 ## What's Explicitly Out of Scope
 
 - ❌ Multi-user / multi-tenant
-- ❌ Web dashboard
+- ❌ Full web dashboard (charts, analytics)
+  - The `/dashboard` route exists as a placeholder; populating it is a future ticket.
 - ❌ Mobile app
 - ❌ Multi-currency / FX
 - ❌ Investment tracking
@@ -489,7 +588,7 @@ That's the whole codebase. ~10 files.
 - ❌ Standalone scheduler (uses OpenClaw's `cron` tool)
 - ❌ CLI wizard
 - ❌ Manual setup flows that aren't conversational
-- ❌ Anything that ships as a "template gallery" or has a config UI
+- ❌ Anything that ships as a "template gallery"
 
 If something here turns out to be needed later, add it then. Not now.
 
