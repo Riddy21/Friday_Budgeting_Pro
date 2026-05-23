@@ -432,30 +432,28 @@ shim against the core engine.
 
 ---
 
-## Adapter: Web UI (setup + profile only)
+## Adapter: Web UI (deliberately minimal)
 
-A deliberately tiny local-only web app. Its job in v0.1 is just to handle
-the two things that need a browser:
+A small local-only web app. v0.1 scope:
 
 - **First-run setup wizard** — set a password, pick a notification
-  preference, connect a first bank via Plaid Link, get a working install.
-- **Profile page** — change password, change notification preference,
-  view a few system facts (DB path, last sync time, daemon status),
-  trigger a manual sync, **Log out** button.
-- **Plaid Link page** — the actual browser-based bank-connection flow,
-  used by both the setup wizard and any subsequent "add a bank" action
-  (which is launched via MCP returning a Plaid Link URL).
+  preference, connect a first bank via Plaid Link.
+- **Profile page** — settings, change password, manual sync, Excel
+  export, plus a small **Linked Accounts** section listing connected
+  banks with status pills and **Reconnect / Disconnect / + Connect a
+  bank** buttons.
+- **Ledgers page** — a tiny structure editor: list ledgers, add /
+  rename / remove line items inside each, add / remove ledgers.
+- **Plaid Link page** — the browser-based bank-connection flow,
+  used by the setup wizard, by the Profile Linked Accounts section,
+  and by any MCP-issued "add a bank" link.
 
-That is the entire v0.1 web UI. **It does not include** linked-account
-management, ledger editing, transaction review, charts, or a dashboard.
-Those actions all live in the MCP adapter (and any client that uses it).
+That's the whole UI. **Still not included** in v0.1: transaction review,
+classification rules editor, dashboard with charts. Those live in MCP
+(or are future tickets).
 
-Reachable at `http://127.0.0.1:6789` whenever the daemon is running. You
-set a password during setup; subsequent visits go through `/login`.
-
-**Future direction:** a bigger UI (linked accounts, ledgers, dashboard,
-transaction review) is a separate future ticket. Worth doing once the
-basics are solid — not now.
+Reachable at `http://127.0.0.1:6789` whenever the daemon is running. Set
+a password during setup; subsequent visits go through `/login`.
 
 ## Adapter: MCP server (OpenClaw and other clients)
 
@@ -486,12 +484,13 @@ system working while you're not looking.
   /              →  if no password set: /setup; else /profile
   /setup         →  first-run wizard (one-time, locked after completion)
   /login         →  password login
-  /profile       →  the only "normal" page — settings + a few actions
-  /link          →  Plaid Link flow (used by setup wizard + by MCP-issued links)
+  /profile       →  settings, password, sync/export actions, Linked Accounts list
+  /ledgers       →  minimal ledger / line-item editor
+  /link          →  Plaid Link flow (used by setup wizard, profile, MCP links)
 ```
 
-That's all of it. **No linked-accounts page, no ledgers page, no dashboard
-in v0.1.** Those actions all happen through the MCP adapter.
+**Not in v0.1:** transaction review, classification rules editor, dashboard
+with charts. Those still live in MCP (or are future tickets).
 
 ### What each page does
 
@@ -509,28 +508,40 @@ the DB (a future operation, not a v0.1 feature).
 - Rate-limited (5 failed attempts in 5 min → lockout)
 - Has a **Forgot password** link → recovery-file flow (#60)
 
-**Profile** (`/profile`) — the only regular page
+**Profile** (`/profile`) — the main page
 - **Account:** display name (editable)
 - **Notifications:** chosen channel (radio: OpenClaw chat / macOS notifications / in-UI only)
 - **Classifier:** LLM confidence threshold (slider 0.5–0.95, default 0.75)
 - **Security:** change password (asks for old + new), **Log out** button
 - **System (read-only):** Plaid env, DB path, daemon uptime, last sync time
-- **Quick actions:** **Sync now** button, **Export to Excel** button —
-  these call the underlying engine actions directly; they're the only
-  non-config interactions in v0.1's UI
+- **Quick actions:** **Sync now** button, **Export to Excel** button
+- **Linked Accounts** (compact list):
+  - One row per connected bank: name · status pill (🟢 / 🟡 / 🔴) ·
+    last sync · **Reconnect** (when needed) · **Disconnect**
+  - **+ Connect a bank** button at the bottom of the section
+  - Minimal layout — no logos, no expandable per-account breakdown
+
+**Ledgers** (`/ledgers`) — minimal structure editor
+- One row per ledger (default: Personal). Click a ledger to view items.
+- Inside a ledger: simple list of line items with inline rename + a
+  small × to remove
+- One small text input at the bottom of each ledger to add a new line item
+- Top-right **+ Add Ledger** button (e.g. for a rental property)
+- Plain HTML table, no animations or fancy interactions
 
 **Plaid Link** (`/link`) — the Plaid-required browser flow
 - Used by the setup wizard for the first bank
-- Used by MCP when the user (or the agent) initiates an "add a bank"
-  action — the MCP tool returns a `/link` URL with a one-time token,
-  the user opens it, the flow completes, the page closes
+- Used by the Profile page's Linked Accounts section when the user clicks
+  **+ Connect a bank** or **Reconnect**
+- Used by MCP when the user (or the agent) initiates an "add a bank" or
+  "reconnect" action — the MCP tool returns a `/link` URL with a one-time
+  token, the user opens it, the flow completes, the page closes
 
 ### Look and feel
 
 - Plain HTML, a tiny bit of vanilla JS. **No React, no build step, no
   framework.**
-- A single sidebar or top bar with just **Profile** + **Log out**. That's
-  it for v0.1.
+- A simple top nav: **Profile** · **Ledgers** · **Log out**. That's it.
 - Minimal styling. Looks fine on mobile but no mobile-specific features.
 
 ### Lifecycle: long-lived daemon
@@ -713,7 +724,8 @@ friday-budgeting-pro/
     │   ├── base.html
     │   ├── setup.html           ← first-run wizard (4 steps)
     │   ├── login.html           ← password login + forgot link
-    │   ├── profile.html         ← settings + sync/export actions
+    │   ├── profile.html         ← settings + sync/export + linked accounts
+    │   ├── ledgers.html         ← minimal ledger / line-item editor
     │   └── link.html            ← Plaid Link flow
     └── static/
         └── style.css            ← minimal styles
@@ -726,11 +738,9 @@ That's the whole codebase. ~10 files.
 ## What's Explicitly Out of Scope (v0.1)
 
 - ❌ Multi-user / multi-tenant
-- ❌ Web UI for managing linked accounts (banks managed via MCP/chat in v0.1)
-- ❌ Web UI for editing ledgers (managed via MCP/chat in v0.1)
 - ❌ Web UI for reviewing/classifying transactions (done via MCP/chat in v0.1)
 - ❌ Web dashboard with charts/analytics
-  - All four of the above land as one future "bigger UI" ticket (#46–#49 + #55 — to be consolidated)
+  - These two roll up into the "bigger UI" future ticket (#55).
 - ❌ Mobile app
 - ❌ Multi-currency / FX
 - ❌ Investment tracking

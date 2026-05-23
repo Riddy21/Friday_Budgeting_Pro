@@ -20,13 +20,14 @@ it — pick whichever fits the moment, mix and match freely:
 
 | Adapter | What it covers in v0.1 |
 |---|---|
-| **🖥️ Web UI** (`127.0.0.1:6789`) | Just setup and profile — set your password, pick a notification preference, connect your first bank. Manual sync + Excel export buttons. That's it. |
+| **🖥️ Web UI** (`127.0.0.1:6789`) | Setup + Profile (settings, password, sync, export, **linked accounts list**) + a minimal **Ledgers** page. |
 | **💬 MCP** (OpenClaw, Claude Desktop, any MCP client) | Full feature surface: connect/disconnect banks, edit ledgers, review classifications, query spending, trigger exports. Conversational when paired with an LLM. |
 | **⏰ Scheduler** (background) | Daily auto-sync, drift detection, proactive re-auth alerts via your chosen notification channel. |
 
-None of these is "primary." The UI is deliberately minimal; everything
-you'd do day-to-day lives in MCP or happens in the background. A bigger
-UI is a future ticket if it ever becomes useful.
+None of these is "primary." The UI is intentionally small — it handles
+setup, the things you tweak occasionally, and bank management. Reviewing
+transactions, running queries, and anything fancy still lives in MCP or
+the background.
 
 ---
 
@@ -64,21 +65,28 @@ Adjust any of it later from the Profile page or via MCP.
 
 ## What the UI Looks Like (v0.1)
 
-Two pages, that's it:
+Three things, kept minimal:
 
 **Setup wizard** — once, on first launch.
 
-**Profile page** — the only ongoing page. Has:
+**Profile page** — the main ongoing page. Has:
 - Display name + notification preference + LLM confidence slider
 - Change password
 - Log out
 - Read-only system info (Plaid env, last sync time, daemon uptime)
 - **Sync now** button
 - **Export to Excel** button
+- **Linked Accounts** — compact list of connected banks with status pills
+  and **Reconnect / Disconnect / + Connect a bank** buttons. No fancy
+  cards, just a list.
 
-Connecting more banks, editing ledgers, reviewing classifications, querying
-spending — those all happen through the MCP adapter (your OpenClaw agent,
-or any other MCP client).
+**Ledgers page** — minimal structure editor. List your ledgers (default:
+Personal), click into one to add/rename/remove line items, add new
+ledgers when you need them (e.g. for a rental property).
+
+Reviewing classifications, running queries, anything beyond the basics —
+those still happen through the MCP adapter (your OpenClaw agent or any
+other MCP client).
 
 ---
 
