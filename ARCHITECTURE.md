@@ -262,6 +262,70 @@ Grouped by domain:
 
 ---
 
+## Setup Flow (Conversational, MCP-Driven)
+
+The whole setup is just an LLM conversation that calls MCP tools as it goes.
+There's no separate wizard — the LLM (HAL or any MCP client) is the wizard.
+
+```
+  User                              LLM (HAL)                         Friday Budgeting Pro MCP
+  ────                              ─────────                         ────────────────────────────────
+
+  "set me up"  ─────────────────▶  asks "one sentence,
+                                       what's your situation?"
+
+  "work + 2 rentals" ───────────▶  ──────────── suggest_setup(description) ─────▶
+                                                                              matches templates:
+                                                                              - personal_individual
+                                                                              - landlord_property ×2
+                                       ◄───────────────────────────────────────────── returns proposed
+                                                                                       structure
+                                       presents proposal:
+                                       "3 ledgers: Personal, Rental 1,
+                                        Rental 2. Each with default rows."
+
+  "good but rename them" ───────▶  edits the proposal locally
+                                       in the conversation
+
+  "confirm" ──────────────────▶  ──────────── apply_setup(ledgers[]) ─────────▶
+                                                                              creates ledgers +
+                                                                              line items in one call
+                                       ◄───────────────────────────────────────────── returns committed IDs
+
+  "connect chase" ─────────────▶  ─────────── create_link_token() ──────────▶
+                                                                              returns link token
+                                       opens Plaid Link UI in browser
+  (completes bank login) ───────────────────── connect_bank(public_token) ───▶
+                                                                              exchanges + stores
+  "home depot >$50 is rental" ──▶  ──────────── add_classification_hint(text)
+
+  "sync" ──────────────────────▶  ──────────── sync_transactions() ─────────▶
+                                                                              pulls + classifies
+                                       ◄───────────────────────────────────────────── returns summary
+                                       "239 sorted, 8 to review"
+```
+
+### Setup-related MCP tools
+
+| Tool | What it does |
+|---|---|
+| `list_templates()` | Returns all built-in ledger templates with default line items |
+| `suggest_setup(description)` | Maps a natural-language description to a proposed ledger structure (no commit) |
+| `apply_setup(ledgers[])` | Commits a proposed structure in one call — LLM sends the whole tree |
+| `quick_setup(profile)` | One-shot setup for common cases (`individual`, `couple`, `landlord_n`, `freelancer`, `small_business`, `nonprofit`) |
+
+The LLM's job is to:
+1. Ask one human-sounding question to understand the situation
+2. Call `suggest_setup` with that description
+3. Present the proposal naturally ("Here's what I'm thinking...")
+4. Iterate verbally on edits ("add X", "drop Y", "rename A to B")
+5. Call `apply_setup` to commit
+
+Defaults handle 90% of the structure; the conversation handles the 10% that's
+user-specific.
+
+---
+
 ## Data Flow Examples
 
 ### Example 1: New transaction comes in (typical path)

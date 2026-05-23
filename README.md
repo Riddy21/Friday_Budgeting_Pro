@@ -81,144 +81,139 @@ Then point your MCP client at the server (see [docs/mcp-clients.md](./docs/mcp-c
 
 ---
 
-## First-Time Setup Walkthrough
+## First-Time Setup — Just Have a Conversation
 
-After install, the setup wizard walks you through this. But here's the
-conceptual flow so you know what to expect:
+No wizard, no forms, no dropdowns. You just talk to HAL like a friend who
+happens to be an accountant. It comes with smart defaults for every common
+financial situation, picks the right one based on what you tell it, and only
+asks about things that actually need a decision.
 
-### Step 1: Create your account
+The setup is **not** a separate program. It's an MCP-driven conversation —
+the LLM (HAL, or any MCP client) calls Friday Budgeting Pro's setup tools
+as it talks with you.
 
-```
-> friday-budgeting setup
-
-Welcome to Friday Budgeting Pro 🚀
-
-What's your name? Jamie Smith
-Email? jamie@example.com
-Notification channel? [imessage / telegram / email / none] imessage
-Notification target (phone/chat-id/email)? +15551234567
-
-✓ Account created
-```
-
-### Step 2: Configure your LLM provider
+### What this looks like in practice
 
 ```
-LLM provider for smart classification? [openai / anthropic / openclaw / ollama]
-> openclaw
+You:  Set me up
 
-✓ Using OpenClaw routing (no API key needed)
+HAL:  Cool. One question to get started: in one sentence, what's your
+      situation?
+
+You:  I work full-time, share a credit card with my wife, and own two
+      rental properties.
+
+HAL:  Got it. Based on that, here's what I'm setting up by default:
+
+        💼  Personal       — income + day-to-day spending
+        🏠  Rental Property 1
+        🏠  Rental Property 2
+
+      Each ledger comes pre-populated with the standard rows (salary,
+      groceries, mortgage, tenant rent, property tax, insurance, etc.).
+      I'll show you exactly what's inside in a sec.
+
+      Want me to use those names or rename the properties?
+
+You:  Call them Toronto Rental and Scarborough Condo
+
+HAL:  Done. Here's the full structure:
+
+        💼  Personal
+            Income:   Salary, Side income, Other
+            Expenses: Rent/Mortgage, Groceries, Dining, Transport,
+                      Subscriptions, Healthcare, Travel, Shopping, Misc
+
+        🏠  Toronto Rental
+            Income:   Tenant Rent, Other
+            Expenses: Mortgage, Property Tax, Insurance, Utilities
+                      (Water/Hydro/Gas), Maintenance, Management Fee
+
+        🏙️  Scarborough Condo
+            Income:   Tenant Rent, Other
+            Expenses: Mortgage, Property Tax, Insurance, Strata Fee,
+                      Utilities, Maintenance, Management Fee
+
+      I added "Strata Fee" to Scarborough since it's a condo. Anything
+      you want to add, remove, or rename? If it all looks right just say
+      "good" and I'll commit it.
+
+You:  Good but Toronto only has one tenant, and add a pet expenses row
+      to Personal
+
+HAL:  ✓ Done. Committed 3 ledgers, 26 line items. You can always edit
+      later just by telling me.
+
+      Now let's connect a bank — opening the Plaid login at
+      http://localhost:3333. Tell me when you're back.
+
+You:  Done
+
+HAL:  ✓ Connected Chase. Any other banks?
+
+You:  My wife's Amex
+
+HAL:  Going again...
+
+You:  Done
+
+HAL:  ✓ Connected Amex. I'll treat your wife's spending the same way as
+      yours unless you tell me otherwise.
+
+      Last thing — any rules I should know about for classifying things?
+      For example: "Home Depot under $50 is personal, over is rental."
+      You can skip this and just tell me as we go.
+
+You:  Home Depot under $50 is personal, over is rental. Tim Hortons is
+      always personal. Anything with STRATA is the Scarborough condo.
+
+HAL:  Saved. Pulling your last 90 days of transactions now — give me
+      a moment...
+
+      ✓ 247 transactions synced. 239 are sorted automatically, 8 I
+      want to double-check with you. I'll iMessage you about those one
+      at a time later today — no need to do them all at once.
+
+      I also set up a daily sync at 6 AM. You're done. Try asking me
+      "how's this month looking?" anytime.
 ```
 
-### Step 3: Connect your first bank
+That's the whole experience. Smart defaults filled in everything obvious;
+you only spoke up where things needed your input.
+
+### Why this works
+
+Friday Budgeting Pro ships with templates for the common cases:
+
+| Tell HAL... | Default ledgers it suggests |
+|---|---|
+| "Just me, salary + spending" | Personal |
+| "Me and my partner, shared finances" | Personal (shared) |
+| "I own rentals" | Personal + one per property |
+| "I freelance" | Personal + Business + Tax Reserve |
+| "I run a small business" | Business (Revenue / COGS / Operating Costs / Payroll) |
+| "Nonprofit / charity work" | Donations + Program Expenses + Admin |
+| Anything else | HAL improvises based on what you said |
+
+Each template comes with sensible income and expense rows already filled in.
+You edit by talking — "drop X", "add Y", "rename A to B", "split this into
+two" — not by clicking through forms.
+
+### Anything you say later just works too
+
+Setup isn't a one-shot. Six months from now:
 
 ```
-Let's connect your first bank.
+You:  I just bought a third rental, can you add it
 
-Opening Plaid Link UI at http://localhost:3333 ...
-(complete the bank login in your browser)
+HAL:  Yep — calling it "Rental Property 3" with the standard landlord
+      template (mortgage, property tax, insurance, utilities, maintenance,
+      management fee). Want to rename it? Anything specific to add?
 
-✓ Connected: Chase (3 accounts: Checking, Credit, Savings)
-```
+You:  Call it Hamilton Duplex, and it has two units
 
-### Step 4: Set up your ledgers
-
-This is where the system becomes yours. Create a ledger for each "context"
-you want to track separately.
-
-```
-Let's create your first ledger. What should we call it? Personal
-What type? [income_expense / balance_sheet] income_expense
-
-✓ Created ledger: Personal
-
-Add some line items (rows in this ledger). Type 'done' when finished.
-> Income::Salary (item_type: income)
-> Income::Side gigs (income)
-> Expense::Groceries
-> Expense::Dining
-> Expense::Rent
-> Expense::Subscriptions
-> done
-
-✓ Added 6 line items to Personal
-
-Add another ledger? [Y/n] y
-> Rental Property — 103 Ardsley
-> Add items: Tenant Rent (income), Mortgage, Property Tax, Insurance,
-            Utilities, Maintenance
-> done
-
-Add another? [Y/n] n
-```
-
-### Step 5: Teach it how you think
-
-Give the LLM natural-language hints about how to classify things.
-
-```
-Now teach the system about your habits. Write hints in plain English:
-
-> Tim Hortons is always personal.
-> Home Depot under $50 is personal; over $50 is usually rental maintenance.
-> Anything with "STRATA" or "PROPERTY MGMT" is the rental.
-> Grocery stores in London Ontario are for the rental property snacks.
-> done
-
-✓ Saved 4 classification hints
-```
-
-### Step 6: Pull your transactions
-
-```
-Syncing transactions from all connected banks...
-
-✓ Synced 247 transactions
-  - 198 auto-routed by rules
-  - 41 auto-routed by LLM (avg confidence 0.89)
-  - 8 need your review
-
-You can review the 8 unclear transactions now, or HAL will ask you about
-them later. Review now? [Y/n] y
-```
-
-### Step 7: Review the ambiguous ones
-
-```
-Transaction 1 of 8:
-  Date: 2026-05-14
-  Merchant: HOME DEPOT #3847
-  Amount: $127.45
-  Account: Chase Credit
-  Plaid category: Hardware / Home Improvement
-
-  My guess: Rental Property — 103 Ardsley / Maintenance (confidence: 0.71)
-  Reasoning: "Amount > $50 matches your hint about Home Depot;
-              no recent personal projects logged"
-
-  [a] Accept the guess
-  [c] Choose a different ledger/item
-  [s] Split between multiple ledgers
-  [k] Keep unrouted for now
-
-> a
-✓ Routed to Rental Property — 103 Ardsley / Maintenance
-  Created auto-rule for "HOME DEPOT" → 103 Ardsley / Maintenance
-```
-
-### Step 8: Set up auto-sync
-
-```
-Schedule daily sync? [Y/n] y
-What time? [9am] 6am
-
-✓ Cron job installed. Will sync every day at 6:00 AM.
-
-You're all set! Try asking HAL:
-  - "Show me this month's spending"
-  - "How much did I spend on dining this year?"
-  - "Export my Personal ledger to Excel"
-```
+HAL:  ✓ Hamilton Duplex created, with Tenant 1 Rent + Tenant 2 Rent
+      rows. Done.
 
 ---
 

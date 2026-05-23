@@ -297,10 +297,17 @@ CREATE TABLE sync_cursors (
 - `refresh_connection(connection_id)` — Update Mode for broken connections
 - `disconnect_bank(connection_id)`
 
-### Ledgers & Line Items
-- `create_ledger(name, type?, currency?, color?, icon?)`
+### Setup (LLM-driven, defaults-first)
+- `list_templates()` — returns all built-in ledger templates with their default line items
+- `suggest_setup(description)` — LLM-friendly: takes a natural-language description of the user's finances, returns a proposed structure (list of ledgers + line items) using matched templates. Does **not** commit.
+- `apply_setup(ledgers[])` — commits a full proposed structure in one call. Accepts an array of ledgers with their line items so the LLM can build the whole tree from a conversation without N tool calls.
+- `quick_setup(profile)` — one-shot setup for the common cases. `profile` is one of: `individual`, `couple`, `landlord_1`, `landlord_2`, `landlord_n`, `freelancer`, `small_business`, `nonprofit`. Creates default ledgers + line items immediately.
+
+### Ledgers & Line Items (low-level editing)
+- `create_ledger(name, type?, currency?, color?, icon?, template?)` — if `template` is set, pre-populates line items from a template
 - `list_ledgers()` / `update_ledger(id, ...)` / `delete_ledger(id)`
 - `add_line_item(ledger_id, name, item_type?, expected_amount?)`
+- `add_line_items_batch(ledger_id, items[])` — bulk add
 - `list_line_items(ledger_id)` / `update_line_item(id, ...)` / `remove_line_item(id)`
 
 ### Classification — Rules (Tier 1)
@@ -424,17 +431,70 @@ Each workbook:
 
 ---
 
+## Templates (Built-in Defaults)
+
+Friday Budgeting Pro ships with a `templates/` directory of pre-built ledger
+structures. The LLM picks one based on the user's description, applies it,
+and the user only edits what's different.
+
+Each template is a JSON file:
+
+```json
+{
+  "id": "landlord_property",
+  "name": "Rental Property",
+  "icon": "🏠",
+  "line_items": [
+    { "name": "Tenant Rent",      "type": "income" },
+    { "name": "Other Income",     "type": "income"  },
+    { "name": "Mortgage",         "type": "expense" },
+    { "name": "Property Tax",     "type": "expense" },
+    { "name": "Insurance",        "type": "expense" },
+    { "name": "Utilities",        "type": "expense" },
+    { "name": "Maintenance",      "type": "expense" },
+    { "name": "Management Fee",   "type": "expense" }
+  ]
+}
+```
+
+Built-in templates:
+- `personal_individual` — Salary, Side Income, Groceries, Dining, Transport, etc.
+- `personal_couple` — Same as individual but income includes both partners
+- `landlord_property` — Tenant Rent + standard property expenses
+- `landlord_condo` — Adds Strata/HOA Fee
+- `freelancer` — Client Income + Business Expenses + Tax Reserve
+- `small_business` — Revenue, COGS, Operating Costs, Payroll
+- `nonprofit` — Donations, Program Expenses, Admin
+- `savings_goals` — Flexible, user fills in specific goals
+
+The `suggest_setup` MCP tool uses the LLM to map a user description to one
+or more templates, then returns the proposed structure for confirmation
+before committing.
+
+---
+
 ## Project Structure
 
 ```
 friday-budgeting-pro/
 ├── README.md
 ├── SKILL.md                  ← ClawHub skill manifest
+├── ARCHITECTURE.md
 ├── PLAN.md
 ├── package.json              ← npm metadata for clawhub publish
 ├── requirements.txt
 ├── .env.example
 ├── .gitignore
+│
+├── templates/                ← built-in ledger templates
+│   ├── personal_individual.json
+│   ├── personal_couple.json
+│   ├── landlord_property.json
+│   ├── landlord_condo.json
+│   ├── freelancer.json
+│   ├── small_business.json
+│   ├── nonprofit.json
+│   └── savings_goals.json
 │
 ├── db/
 │   ├── schema.sql
@@ -445,6 +505,7 @@ friday-budgeting-pro/
 │   └── tools/
 │       ├── account.py
 │       ├── banks.py
+│       ├── setup.py              ← suggest_setup, apply_setup, templates
 │       ├── ledgers.py
 │       ├── routing.py
 │       ├── hints.py
