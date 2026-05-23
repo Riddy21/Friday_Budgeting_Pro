@@ -245,6 +245,29 @@ CREATE TABLE sync_cursors (
   cursor TEXT,
   last_synced_at INTEGER
 );
+
+-- UI auth: single-row app config (single-user system)
+CREATE TABLE app_config (
+  id INTEGER PRIMARY KEY CHECK (id = 1),
+  ui_password_hash TEXT,           -- argon2id hash
+  ui_password_set_at INTEGER
+);
+
+-- UI session cookies (server-side store, survives restarts)
+CREATE TABLE sessions (
+  id TEXT PRIMARY KEY,             -- session token (random 32 bytes hex)
+  created_at INTEGER NOT NULL,
+  last_seen_at INTEGER NOT NULL,
+  expires_at INTEGER NOT NULL,
+  user_agent TEXT
+);
+
+-- Login attempt log for rate limiting
+CREATE TABLE login_attempts (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  attempted_at INTEGER NOT NULL,
+  success INTEGER NOT NULL         -- 0 = failed, 1 = success
+);
 ```
 
 That's all of it. No `users` table (single user). No `budget_targets`,
@@ -361,10 +384,19 @@ user is currently on. OpenClaw routes it. Zero config.
 
 ## Account UI
 
-A tiny local-only web app for things that are awkward in chat: scanning your
-linked banks, seeing which connections are about to expire, and editing your
-ledger structure visually. **Day-to-day spending review, sync prompts, and
-classification all stay in chat.** The UI is for management chores only.
+A tiny local-only web app that's **always on** while the MCP server is running.
+It's open in your browser whenever you want it — no need to ask the agent to
+launch it. You log in once with a password, then browse freely.
+
+Use cases for v0.1: scanning your linked banks, seeing which connections are
+about to expire, connecting new banks at any time, and editing your ledger
+structure visually. **Day-to-day spending review, sync prompts, and
+classification still happen in chat** (the chat path is more efficient for
+those). The UI complements the chat — it doesn't replace it.
+
+**Future direction:** every MCP tool should eventually have a UI equivalent
+so the system is fully usable without an LLM if you want. v0.1 ships with
+just the four pages below; more arrive in follow-on tickets.
 
 ### Pages (v0.1)
 
@@ -416,29 +448,52 @@ classification all stay in chat.** The UI is for management chores only.
 - Minimal styling. Looks fine on mobile in case the user opens it from their
   phone over Tailscale, but no mobile-specific features.
 
-### How it's launched
+### Lifecycle: always-on with the MCP server
 
-The UI is **not always-on**. It's launched on demand in one of two ways:
+The UI starts the moment the MCP server starts and stays up as long as the
+server is running. In a normal OpenClaw setup, the MCP server is started by
+OpenClaw on demand and persists as long as OpenClaw is up — so for users on
+OpenClaw, the UI is effectively "always on."
 
-1. Chat: user says “open my finances UI” → OpenClaw agent calls the
-   `open_ui()` MCP tool → tool starts the local server, returns a URL with a
-   one-time session token → user clicks the URL.
-2. CLI: `friday-budgeting open` does the same thing (for users not on
-   OpenClaw).
+- Default URL: `http://127.0.0.1:6789` (configurable via env var)
+- Implementation: the UI server is launched as a child task inside the MCP
+  server process (single Python process, ASGI app for the UI, FastMCP for
+  the MCP tools). One process, one lifecycle.
+- If the MCP server is not running, the UI is not reachable. That's by
+  design — there's no separate daemon to manage.
 
-The server stays up for the duration of the session (default 30 min idle
-timeout) and shuts itself down. It never autostarts at boot.
+### Authentication: log in once, browse freely
+
+No launch tokens. No URL-encoded secrets. A standard login page with a
+password you set during initial setup.
+
+- **Password storage:** argon2id hash stored in the local DB. Never sent
+  back to the browser.
+- **Initial password:** picked by the user during the conversational setup
+  flow. The setup tool calls a `set_ui_password()` MCP tool that records
+  the hash.
+- **Login flow:** GET `/login` → POST with password → server validates →
+  sets HttpOnly + SameSite=Strict session cookie → redirects to `/accounts`.
+- **Session lifetime:** 7 days idle, then re-login required.
+- **Sessions:** server-side store in the DB (`sessions` table) so they
+  survive MCP restarts.
+- **Rate limit:** 5 failed attempts → 5-minute lockout per source IP
+  (which is always `127.0.0.1`, but the lockout still helps against a
+  malicious local process).
+- **Password reset path:** chat command. User says "reset my finance UI
+  password" → agent calls `reset_ui_password()` MCP tool → either prompts
+  for a new password directly or issues a one-time recovery link.
 
 ### Security (same rules as the rest of the system)
 
-- Bound to `127.0.0.1:<random port>` only. Refuses to start on any other
-  interface.
-- Every page requires a session cookie set from a single-use token in the
-  launch URL. Without the token, every route returns 401.
+- Bound to `127.0.0.1:6789` only. Refuses to start on any other interface.
+- All routes (except `/login` and `/static/*`) require a valid session
+  cookie. Without one, every route returns 401 or redirects to `/login`.
 - Sensitive values (Plaid access tokens) are never sent to the browser —
   only metadata (status, last synced, institution name).
 - All state writes go through the same MCP tool layer the chat path uses;
   no separate code path means no separate set of vulnerabilities.
+- Login attempts are rate-limited (above).
 
 ---
 
@@ -557,11 +612,13 @@ friday-budgeting-pro/
 │   └── excel_export.py
 │
 └── ui/
-    ├── server.py            ← FastAPI app, 127.0.0.1 only, on-demand launch
+    ├── server.py            ← FastAPI app, 127.0.0.1:6789, always-on with MCP
+    ├── auth.py              ← argon2 + session cookies + rate limit
     ├── templates/
     │   ├── base.html
+    │   ├── login.html           ← login page (only public route)
     │   ├── profile.html
-    │   ├── accounts.html        ← linked banks + status
+    │   ├── accounts.html        ← linked banks + status + add new
     │   ├── ledgers.html         ← ledger structure editor
     │   ├── link.html            ← Plaid Link flow
     │   └── dashboard.html       ← placeholder ("Coming soon")
