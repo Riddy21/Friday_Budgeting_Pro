@@ -11,6 +11,9 @@ from typing import List, Optional
 
 import fastmcp
 
+from server.db import get_db
+import server.paths
+
 mcp = fastmcp.FastMCP("friday-budgeting-pro")
 
 # ---------------------------------------------------------------------------
@@ -111,14 +114,74 @@ def sync() -> dict:
 
 @mcp.tool
 def list(filters: Optional[dict] = None) -> dict:
-    """Query transactions with optional filters."""
-    return {"status": "not_implemented"}
+    """Query transactions with optional filters.
+
+    Supported filter keys (all optional):
+      date_from    (str, ISO date, inclusive)
+      date_to      (str, ISO date, inclusive)
+      ledger_id    (str)
+      line_item_id (str)
+      reviewed     (bool)
+      source       (str: "rule" | "llm" | "manual")
+    """
+    filters = filters or {}
+    conditions: list[str] = []
+    params: list = []
+
+    if "date_from" in filters:
+        conditions.append("t.date >= ?")
+        params.append(filters["date_from"])
+    if "date_to" in filters:
+        conditions.append("t.date <= ?")
+        params.append(filters["date_to"])
+    if "ledger_id" in filters:
+        conditions.append("te.ledger_id = ?")
+        params.append(filters["ledger_id"])
+    if "line_item_id" in filters:
+        conditions.append("te.line_item_id = ?")
+        params.append(filters["line_item_id"])
+    if "reviewed" in filters:
+        conditions.append("te.reviewed = ?")
+        params.append(1 if filters["reviewed"] else 0)
+    if "source" in filters:
+        conditions.append("te.source = ?")
+        params.append(filters["source"])
+
+    where_clause = ("WHERE " + " AND ".join(conditions)) if conditions else ""
+
+    sql = f"""
+        SELECT
+            te.id,
+            te.transaction_id,
+            te.ledger_id,
+            te.line_item_id,
+            te.amount,
+            te.source,
+            te.confidence,
+            te.reviewed,
+            t.date,
+            t.merchant,
+            t.amount AS transaction_amount
+        FROM transaction_entries te
+        JOIN transactions t ON t.id = te.transaction_id
+        {where_clause}
+        ORDER BY t.date DESC, te.id
+    """
+
+    conn = get_db(server.paths.DB_PATH)
+    try:
+        rows = conn.execute(sql, params).fetchall()
+        entries = [dict(r) for r in rows]
+    finally:
+        conn.close()
+
+    return {"entries": entries}
 
 
 @mcp.tool
 def get_needs_review() -> dict:
     """Return transactions that require manual classification review."""
-    return {"status": "not_implemented"}
+    return list(filters={"reviewed": False})
 
 
 @mcp.tool
