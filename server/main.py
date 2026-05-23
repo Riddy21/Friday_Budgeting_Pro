@@ -14,6 +14,8 @@ from typing import List, Optional
 
 import fastmcp
 
+import server.excel_export as excel_export
+
 from server.db import get_db, transaction as db_txn
 from server.sync_lock import sync_lock, LockBusy
 from server.classifier import apply_rules
@@ -635,7 +637,17 @@ def summary(period: str) -> dict:
 @mcp.tool
 def export_excel(years: Optional[List] = None) -> dict:
     """Generate and return an Excel export of transactions."""
-    return {"status": "not_implemented"}
+    server.paths.ensure_app_dir()
+    import datetime
+    timestamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+    filename = f"friday-bp-{timestamp}.xlsx"
+    path = server.paths.EXPORTS_DIR / filename
+    conn = get_db(server.paths.DB_PATH)
+    try:
+        excel_export.export_to_file(conn, path, years if years else None)
+    finally:
+        conn.close()
+    return {"status": "ok", "path": str(path), "size_bytes": path.stat().st_size}
 
 
 # ---------------------------------------------------------------------------
