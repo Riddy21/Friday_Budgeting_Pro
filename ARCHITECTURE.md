@@ -26,6 +26,12 @@ These are hard rules. Don't add features that violate them.
 8. **No features that aren't directly useful for personal finance.** No
    nonprofits, no business templates, no balance sheets, no multi-currency,
    no investment tracking. If/when needed later, add it. Not now.
+9. **Local-network only.** Nothing this skill runs is reachable from the public
+   internet. No webhooks. No port forwarding. No tunnels. Everything binds to
+   `127.0.0.1` only. See [Security](#security) below for details.
+10. **Secrets never live in plaintext on disk.** Plaid access tokens are
+    encrypted with Fernet; the encryption key is stored in the macOS Keychain,
+    not on the filesystem.
 
 ---
 
@@ -344,6 +350,82 @@ work, the skill provides the tools.
 There's no notification system in the skill. When HAL needs to ask the user
 about something, it just sends a chat message through whatever channel the
 user is currently on. OpenClaw routes it. Zero config.
+
+---
+
+## Security
+
+> Less surface area is the best security. The whole design is built around
+> staying small and offline.
+
+### Threat model
+
+What we defend against:
+- **Other devices on the same WiFi/LAN** — they should not see anything.
+- **Other macOS users on this machine** — they should not read tokens or DB.
+- **Untrusted local processes** — they should not call our MCP tools or POST
+  to our Plaid Link page.
+- **Stolen disk image / backup** — tokens should be unreadable without
+  Keychain access.
+
+What we do *not* try to defend against (out of scope):
+- A root-level attacker on the user's machine.
+- A compromised OpenClaw or HAL itself (those have legitimate access).
+- Plaid or the chosen LLM provider being malicious.
+
+### Defenses (and why each is enough)
+
+| Surface | Defense |
+|---|---|
+| MCP server transport | **stdio only.** No HTTP listener. Only the parent OpenClaw process can call our tools. |
+| Plaid Link UI | Bound to `127.0.0.1:0` (random port). Runs only during active link flow, **auto-shuts down** within 60s of completion. URL includes a single-use random token. |
+| Plaid webhooks | **Not used.** All connection health is polled from inside `sync()`. Removes the only would-be public surface. |
+| Plaid access tokens | Encrypted with Fernet before write. Key stored in macOS Keychain (`security add-generic-password` / `keyring` lib). DB file alone is useless. |
+| SQLite DB | Path `~/.friday-bp/data.db`, permissions `0600` (user only). Parent dir `0700`. |
+| Concurrent sync | Single-flight lock file in `~/.friday-bp/sync.lock`. Prevents double-inserts and cursor races. |
+| LLM data exposure | Only merchant name + amount + plaid_category + user's own hints are sent. No account numbers, no full transaction IDs. User picks the LLM provider. |
+| Auto-promoted rules | Every promotion is logged + reversible. User can say "undo the last rule HAL learned" any time. |
+| LLM output validation | Returned `ledger_id` and `line_item_id` are checked against the DB before any routing happens. LLM hallucinations are rejected, not stored. |
+| Sandbox vs Production | The Plaid environment is a config flag stored once at setup; tokens from one environment cannot be used in the other (DB tracks env per connection). |
+
+### What this means in practice
+
+- Nothing this skill runs is reachable from the public internet.
+- No port forwarding, no ngrok, no Tailscale Funnel, no cloud proxy required.
+- A device on the same WiFi as the Mac cannot see the MCP server, the Link
+  UI, the DB, or anything else — because nothing listens on a non-loopback
+  interface.
+- If the Mac's disk is stolen, the encrypted DB + encrypted tokens are
+  useless without the Keychain entry (which is itself protected by macOS
+  login).
+
+### What we give up by going polling-only
+
+Plaid's webhooks would let us know about `PENDING_EXPIRATION` ~7 days early.
+Without them, we learn about an expired connection on the next daily sync
+(0-24h after it actually expires). The user is still proactively notified in
+chat — just slightly later than ideal. **Acceptable tradeoff for zero internet
+exposure.**
+
+---
+
+## Pitfalls We're Explicitly Avoiding
+
+Things that often go wrong in this kind of system, and how this design dodges them:
+
+| Pitfall | How we avoid it |
+|---|---|
+| Bound the Link UI to `0.0.0.0` by accident → LAN exposure | Explicit `127.0.0.1` bind + integration test that asserts the bind |
+| Two sync jobs racing (cron + manual) → duplicate transactions | Lock file + single-flight wrapper around `sync()` |
+| LLM returns made-up `ledger_id` → corrupt routing | All returned IDs validated against DB before commit |
+| Bad LLM decision gets auto-promoted to a Tier 1 rule | Promotion needs 3 consecutive same-merchant matches + always reversible |
+| Token file leaked from a backup | Tokens encrypted, key in Keychain (not on disk) |
+| Sandbox token tried against production (or vice versa) | DB tracks Plaid env per connection; mismatch = hard error |
+| Connection broken silently → stale spreadsheet for weeks | Health check on every sync; user gets a chat alert within 24h |
+| Plaid API down during sync → partial data | Cursor only advances on full success; sync is idempotent on retry |
+| User changes ledger structure mid-flight | All entries reference IDs, not names; renames are safe |
+| Excel export concurrent with sync | Excel writes go to a temp file then atomic rename |
+| Cron job runs while user is mid-classification chat | Sync uses the same lock; classification prompts queue, don't collide |
 
 ---
 
