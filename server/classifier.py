@@ -12,6 +12,7 @@ This is the first tier in the three-tier classification pipeline:
 
 from __future__ import annotations
 
+import json
 import sqlite3
 
 
@@ -72,3 +73,181 @@ def apply_rules(
             }
 
     return None
+
+
+# ---------------------------------------------------------------------------
+# Tier 2 — LLM-based classifier
+# ---------------------------------------------------------------------------
+
+
+def classify_with_llm(
+    conn: sqlite3.Connection,
+    transaction: dict | sqlite3.Row,
+) -> dict:
+    """Classify *transaction* using the LLM and return an entry dict.
+
+    Builds rich context from the DB (ledger tree, classification hints, recent
+    similar transactions) and asks the LLM to pick the best line_item.
+
+    Args:
+        conn: An open sqlite3 connection with row_factory = sqlite3.Row.
+        transaction: A dict or sqlite3.Row with at minimum:
+            - id        (str)
+            - merchant  (str)
+            - amount    (real)
+            - date      (str, ISO format)
+
+    Returns:
+        A transaction_entry dict::
+
+            {
+                "transaction_id": <str>,
+                "ledger_id":      <str>,
+                "line_item_id":   <str>,
+                "amount":         <real>,
+                "source":         "llm",
+                "confidence":     <float>,
+                "reviewed":       0,
+            }
+
+    Raises:
+        ValueError: If the LLM response is not valid JSON, is missing required
+            fields, or references a line_item_id that does not exist in the DB.
+    """
+    from server.llm import chat  # local import keeps chat patchable in tests
+
+    # ------------------------------------------------------------------
+    # 1. Build context: full ledger tree
+    # ------------------------------------------------------------------
+    ledgers_rows = conn.execute(
+        "SELECT id, name FROM ledgers ORDER BY name"
+    ).fetchall()
+
+    line_items_rows = conn.execute(
+        "SELECT li.id, li.name, li.ledger_id, l.name AS ledger_name"
+        "  FROM line_items li"
+        "  JOIN ledgers l ON l.id = li.ledger_id"
+        " ORDER BY l.name, li.name"
+    ).fetchall()
+
+    # Group line_items by ledger for a readable tree
+    ledger_tree_lines: list[str] = []
+    for ledger_row in ledgers_rows:
+        ledger_tree_lines.append(f"  Ledger: {ledger_row['name']} (id={ledger_row['id']})")
+        for li in line_items_rows:
+            if li["ledger_id"] == ledger_row["id"]:
+                ledger_tree_lines.append(f"    - {li['name']} (id={li['id']})")
+
+    ledger_tree_text = "\n".join(ledger_tree_lines)
+
+    # ------------------------------------------------------------------
+    # 2. Build context: classification hints
+    # ------------------------------------------------------------------
+    hints_rows = conn.execute(
+        "SELECT text FROM classification_hints ORDER BY id"
+    ).fetchall()
+    hints_text = "\n".join(f"  - {r['text']}" for r in hints_rows)
+    if not hints_text:
+        hints_text = "  (none)"
+
+    # ------------------------------------------------------------------
+    # 3. Build context: 5 most recent reviewed entries with same merchant
+    # ------------------------------------------------------------------
+    merchant: str = transaction["merchant"] or ""
+    recent_rows = conn.execute(
+        "SELECT t.merchant, t.amount, t.date, te.line_item_id, li.name AS li_name,"
+        "       l.name AS ledger_name"
+        "  FROM transaction_entries te"
+        "  JOIN transactions t  ON t.id  = te.transaction_id"
+        "  JOIN line_items   li ON li.id = te.line_item_id"
+        "  JOIN ledgers      l  ON l.id  = te.ledger_id"
+        " WHERE te.reviewed = 1"
+        "   AND t.merchant = ?"
+        " ORDER BY t.date DESC"
+        " LIMIT 5",
+        (merchant,),
+    ).fetchall()
+
+    if recent_rows:
+        recent_lines = [
+            f"  - {r['date']} | {r['merchant']} | ${r['amount']:.2f}"
+            f" → {r['ledger_name']} / {r['li_name']} (id={r['line_item_id']})"
+            for r in recent_rows
+        ]
+        recent_text = "\n".join(recent_lines)
+    else:
+        recent_text = "  (none)"
+
+    # ------------------------------------------------------------------
+    # 4. Compose the prompt
+    # ------------------------------------------------------------------
+    system_msg = (
+        "You are a personal finance classifier. Your job is to classify a bank "
+        "transaction into exactly ONE line item from the user's ledger. "
+        "Reply with ONLY a JSON object — no markdown, no explanation outside the JSON — "
+        "with these keys:\n"
+        '  {"line_item_id": "<exact id>", "confidence": <0.0-1.0>, "reasoning": "<short>"}\n'
+        "Choose the line_item_id that best fits the transaction based on the ledger tree, "
+        "the user's hints, and any recent similar transactions."
+    )
+
+    user_msg = (
+        f"## Ledger Tree\n{ledger_tree_text}\n\n"
+        f"## Classification Hints\n{hints_text}\n\n"
+        f"## Recent Similar Transactions (reviewed)\n{recent_text}\n\n"
+        f"## Transaction to Classify\n"
+        f"  Merchant : {merchant}\n"
+        f"  Amount   : ${transaction['amount']:.2f}\n"
+        f"  Date     : {transaction.get('date', 'unknown')}\n\n"
+        "Reply with the JSON object only."
+    )
+
+    messages = [
+        {"role": "system", "content": system_msg},
+        {"role": "user",   "content": user_msg},
+    ]
+
+    # ------------------------------------------------------------------
+    # 5. Call the LLM and parse the response
+    # ------------------------------------------------------------------
+    raw = chat(messages, temperature=0.0)
+
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise ValueError(
+            f"LLM returned non-JSON response: {raw!r}"
+        ) from exc
+
+    if "line_item_id" not in parsed:
+        raise ValueError(
+            f"LLM JSON missing 'line_item_id' key: {parsed!r}"
+        )
+
+    line_item_id: str = parsed["line_item_id"]
+    confidence: float = float(parsed.get("confidence", 0.0))
+
+    # ------------------------------------------------------------------
+    # 6. Resolve ledger_id from the DB (validates line_item_id exists)
+    # ------------------------------------------------------------------
+    li_row = conn.execute(
+        "SELECT ledger_id FROM line_items WHERE id = ?",
+        (line_item_id,),
+    ).fetchone()
+
+    if li_row is None:
+        raise ValueError(
+            f"LLM returned line_item_id={line_item_id!r} which does not exist in the DB."
+        )
+
+    ledger_id: str = li_row["ledger_id"]
+
+    return {
+        "transaction_id": transaction["id"],
+        "ledger_id":      ledger_id,
+        "line_item_id":   line_item_id,
+        "amount":         transaction["amount"],
+        "source":         "llm",
+        "confidence":     confidence,
+        "reviewed":       0,
+    }
