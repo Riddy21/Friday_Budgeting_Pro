@@ -251,3 +251,133 @@ def classify_with_llm(
         "confidence":     confidence,
         "reviewed":       0,
     }
+
+
+# ---------------------------------------------------------------------------
+# Tier 3 — review-flag + auto-promotion
+# ---------------------------------------------------------------------------
+
+
+def flag_for_review(
+    transaction: dict,
+    llm_result: dict,
+    threshold: float = 0.75,
+) -> dict:
+    """Tag low-confidence LLM results as needing human review.
+
+    This is a **pure function** — it performs no database reads or writes.
+
+    Args:
+        transaction: The raw transaction dict (used for context, not mutated).
+        llm_result:  The entry dict produced by :func:`classify_with_llm`.
+            Expected keys: ``transaction_id``, ``ledger_id``,
+            ``line_item_id``, ``amount``, ``source``, ``confidence``,
+            ``reviewed``.
+        threshold:   Minimum confidence (inclusive) required for the result to
+            pass through unchanged.  Defaults to **0.75**.  Callers can
+            override — e.g. ``flag_for_review(txn, res, threshold=0.9)``
+            for a stricter policy.
+
+    Returns:
+        A copy of *llm_result* with ``source`` set to ``"llm-needs-review"``
+        when ``confidence < threshold``, otherwise *llm_result* unchanged.
+        ``reviewed`` is always ``0`` on the returned entry.
+    """
+    if llm_result["confidence"] < threshold:
+        flagged = dict(llm_result)
+        flagged["source"] = "llm-needs-review"
+        return flagged
+    return llm_result
+
+
+def maybe_promote_to_rule(
+    conn: sqlite3.Connection,
+    transaction: dict | sqlite3.Row,
+    llm_result: dict,
+) -> dict | None:
+    """Auto-create a Tier-1 routing rule after 3+ consistent reviewed entries.
+
+    Looks at recent ``transaction_entries`` for the same merchant that have
+    ``source IN ('llm', 'manual')`` and ``reviewed = 1``.  If at least **3**
+    of them share the same ``line_item_id`` as *llm_result*, a new
+    ``routing_rule`` is inserted.
+
+    **Idempotent** — if a rule with the same
+    ``(merchant_pattern, line_item_id)`` pair already exists, the existing
+    rule is returned and no duplicate is created.
+
+    Args:
+        conn:        An open sqlite3 connection.
+        transaction: A dict or sqlite3.Row with at least a ``merchant`` key.
+        llm_result:  The entry dict produced by :func:`classify_with_llm`
+            (or :func:`flag_for_review`).  Must contain ``line_item_id``.
+
+    Returns:
+        A dict ``{"id": …, "merchant_pattern": …, "line_item_id": …}``
+        for the new (or pre-existing) rule, or ``None`` if the promotion
+        threshold was not met.
+    """
+    import uuid
+
+    merchant: str = transaction["merchant"] or ""
+    target_line_item_id: str = llm_result["line_item_id"]
+
+    # ------------------------------------------------------------------
+    # 1. Count consistent reviewed entries for this merchant + line_item
+    # ------------------------------------------------------------------
+    row = conn.execute(
+        """
+        SELECT COUNT(*) AS cnt
+          FROM transaction_entries te
+          JOIN transactions t ON t.id = te.transaction_id
+         WHERE t.merchant = ?
+           AND te.source IN ('llm', 'manual')
+           AND te.reviewed = 1
+           AND te.line_item_id = ?
+        """,
+        (merchant, target_line_item_id),
+    ).fetchone()
+
+    consistent_count: int = row[0] if row else 0
+
+    if consistent_count < 3:
+        return None
+
+    # ------------------------------------------------------------------
+    # 2. Idempotency check — return existing rule if one already exists
+    # ------------------------------------------------------------------
+    existing = conn.execute(
+        """
+        SELECT id, merchant_pattern, line_item_id
+          FROM routing_rules
+         WHERE merchant_pattern = ?
+           AND line_item_id = ?
+        """,
+        (merchant, target_line_item_id),
+    ).fetchone()
+
+    if existing is not None:
+        return {
+            "id":               existing[0],
+            "merchant_pattern": existing[1],
+            "line_item_id":     existing[2],
+        }
+
+    # ------------------------------------------------------------------
+    # 3. Create the new routing rule
+    # ------------------------------------------------------------------
+    new_id = str(uuid.uuid4())
+    conn.execute(
+        """
+        INSERT INTO routing_rules (id, merchant_pattern, line_item_id)
+        VALUES (?, ?, ?)
+        """,
+        (new_id, merchant, target_line_item_id),
+    )
+    conn.commit()
+
+    return {
+        "id":               new_id,
+        "merchant_pattern": merchant,
+        "line_item_id":     target_line_item_id,
+    }
