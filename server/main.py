@@ -21,7 +21,9 @@ from server.sync_lock import sync_lock, LockBusy
 from server.classifier import apply_rules
 import server.paths
 import server.crypto
-import server.plaid_client
+from server.providers.plaid import PlaidProvider
+
+_plaid = PlaidProvider()
 
 mcp = fastmcp.FastMCP("friday-budgeting-pro")
 
@@ -189,10 +191,10 @@ def apply_initial_setup(
 def start_link() -> dict:
     """Return a URL to open Plaid Link.
 
-    Calls plaid_client.create_link_token() and returns a URL pointing at
+    Calls PlaidProvider.create_link_token() and returns a URL pointing at
     the (future) UI link page (served by #14).
     """
-    link_token = server.plaid_client.create_link_token()
+    link_token = _plaid.create_link_token()
     return {"url": f"http://127.0.0.1:6789/link?token={link_token}"}
 
 
@@ -207,7 +209,7 @@ def complete_link(public_token: str) -> dict:
     institution_name is left NULL for now — fetching it requires
     Plaid /institutions/get_by_id which is out of scope; see issue #34.
     """
-    result = server.plaid_client.exchange_public_token(public_token)
+    result = _plaid.exchange_public_token(public_token)
     access_token = result["access_token"]
     item_id = result["item_id"]
 
@@ -267,7 +269,7 @@ def refresh_connection(id: str) -> dict:
     an optional access_token kwarg).  Tracked in issue #34.
     """
     # For now, generate a fresh link token (same as start_link)
-    link_token = server.plaid_client.create_link_token()
+    link_token = _plaid.create_link_token()
     return {"url": f"http://127.0.0.1:6789/link?token={link_token}"}
 
 
@@ -379,7 +381,7 @@ def sync() -> dict:
                     cursor = cursor_row["cursor"] if cursor_row else None
 
                     try:
-                        result = server.plaid_client.sync_transactions(access_token, cursor)
+                        result = _plaid.sync_transactions(access_token, cursor)
                     except Exception as e:
                         if _is_reauth_error(e):
                             with db_txn(db_conn):

@@ -122,7 +122,7 @@ def env(tmp_path, monkeypatch):
 # ---------------------------------------------------------------------------
 
 def test_sync_normal(env, monkeypatch):
-    monkeypatch.setattr("server.plaid_client.sync_transactions", _mock_sync_ok)
+    monkeypatch.setattr("server.main._plaid.sync_transactions", _mock_sync_ok)
     monkeypatch.setattr("server.crypto.decrypt", lambda x: x)
 
     result = sync()
@@ -167,7 +167,7 @@ def test_sync_item_login_required(env, monkeypatch):
     def _raise_reauth(access_token, cursor=None):
         raise _FakePlaidError("ITEM_LOGIN_REQUIRED")
 
-    monkeypatch.setattr("server.plaid_client.sync_transactions", _raise_reauth)
+    monkeypatch.setattr("server.main._plaid.sync_transactions", _raise_reauth)
     monkeypatch.setattr("server.crypto.decrypt", lambda x: x)
 
     result = sync()
@@ -190,7 +190,7 @@ def test_sync_item_login_required(env, monkeypatch):
 # ---------------------------------------------------------------------------
 
 def test_sync_idempotent(env, monkeypatch):
-    monkeypatch.setattr("server.plaid_client.sync_transactions", _mock_sync_ok)
+    monkeypatch.setattr("server.main._plaid.sync_transactions", _mock_sync_ok)
     monkeypatch.setattr("server.crypto.decrypt", lambda x: x)
 
     sync()
@@ -209,7 +209,7 @@ def test_sync_idempotent(env, monkeypatch):
 def test_sync_lock_contention(env, monkeypatch):
     from server.sync_lock import acquire_sync_lock
 
-    monkeypatch.setattr("server.plaid_client.sync_transactions", _mock_sync_ok)
+    monkeypatch.setattr("server.main._plaid.sync_transactions", _mock_sync_ok)
     monkeypatch.setattr("server.crypto.decrypt", lambda x: x)
 
     # Hold the lock ourselves so sync() cannot acquire it
