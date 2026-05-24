@@ -145,5 +145,5 @@ Or tell the main HAL session: "pause the friday budgeting swarm."
 ## Honest Limits
 
 - AI workers will sometimes get stuck or write nonsense. The PM kills + retries; if a ticket fails 3 times, the PM labels it `human-needed` and moves on.
-- Some tickets need real Plaid credentials — workers mock those. E2E (#28) is manual (Ridvan runs it).
-- **Ridvan still does:** final manual E2E test, Plaid Production setup, `clawhub publish`.
+- Some tickets need real Plaid credentials — workers mock those. E2E (#28) is manual (run by the user).
+- **The user still does:** final manual E2E test, Plaid Production setup, `clawhub publish`.

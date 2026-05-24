@@ -118,11 +118,11 @@ class TestNoInstitutionFiltering(unittest.TestCase):
         with patch.dict(os.environ, _env(), clear=False):
             from server.providers.plaid import PlaidProvider
 
-            token = PlaidProvider().create_link_token(user_id="ridvan-wealthsimple-cash")
+            token = PlaidProvider().create_link_token(user_id="test-user-wealthsimple")
 
         call_args = api.link_token_create.call_args
         request = call_args[0][0]
-        self.assertEqual(request.user.client_user_id, "ridvan-wealthsimple-cash")
+        self.assertEqual(request.user.client_user_id, "test-user-wealthsimple")
 
 
 if __name__ == "__main__":
