@@ -1195,8 +1195,10 @@ def link_start(request: Request):
     """Generate a Plaid link token and redirect to /link?token=..."""
     if not _is_authenticated(request):
         return _redirect("/login")
-    import server.main as _sm
     import os as _os
+
+    import server.main as _sm
+
     plaid_env = _os.environ.get("PLAID_ENV", "sandbox").lower()
 
     result = _sm.start_link(plaid_env=plaid_env)
@@ -1210,6 +1212,7 @@ def link_start(request: Request):
 
 # ── /link/complete ─────────────────────────────────────────────────────────
 
+
 @app.post("/link/complete")
 async def link_complete(request: Request, next: str = "/profile"):
     """Exchange Plaid public_token for access token and store connection.
@@ -1219,8 +1222,10 @@ async def link_complete(request: Request, next: str = "/profile"):
     """
     if not _is_authenticated(request):
         return _redirect("/login")
-    import server.main as _sm
     import os as _os
+
+    import server.main as _sm
+
     form = await request.form()
     public_token = form.get("public_token", "")
     if not public_token:
@@ -1233,6 +1238,7 @@ async def link_complete(request: Request, next: str = "/profile"):
         return _redirect("/profile?error=link_exchange_failed")
     except Exception as exc:
         import logging
+
         logging.getLogger(__name__).error("link_complete failed: %s", exc)
         return _redirect("/profile?error=link_exchange_failed")
 
