@@ -193,3 +193,18 @@ class PlaidProvider(BankProvider):
             "error_message": error_message,
             "item_id": item_id,
         }
+
+    def get_institution_name(self, access_token: str) -> str:
+        """Return institution name for an access token."""
+        from plaid.model.item_get_request import ItemGetRequest
+        from plaid.model.institutions_get_by_id_request import InstitutionsGetByIdRequest
+        from plaid.model.country_code import CountryCode
+        client = self._build_client()
+        item = client.item_get(ItemGetRequest(access_token=access_token))
+        inst_id = item["item"]["institution_id"]
+        inst = client.institutions_get_by_id(InstitutionsGetByIdRequest(
+            institution_id=inst_id,
+            country_codes=[CountryCode("US"), CountryCode("CA")],
+        ))
+        return inst["institution"]["name"]
+

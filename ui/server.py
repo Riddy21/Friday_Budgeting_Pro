@@ -581,6 +581,15 @@ def link_start(request: Request):
         return HTMLResponse(f"<h2>Could not start Plaid Link</h2><pre>{exc}</pre><p><a href='/profile'>Back</a></p>", status_code=500)
 
 
+
+def _get_institution_name(access_token: str) -> str:
+    """Fetch institution name from Plaid, fallback to 'Connected Bank'."""
+    try:
+        from server.providers.plaid import PlaidProvider as _PP
+        return _PP().get_institution_name(access_token)
+    except Exception:
+        return "Connected Bank"
+
 @app.post("/link/complete")
 async def link_complete(request: Request):
     if not _is_authenticated(request):
@@ -596,7 +605,7 @@ async def link_complete(request: Request):
         try:
             conn.execute(
                 "INSERT OR IGNORE INTO bank_connections (id, plaid_item_id, plaid_access_token_encrypted, institution_name, status) VALUES (?, ?, ?, ?, 'active')",
-                (str(_uuid.uuid4()), result["item_id"], encrypt(result["access_token"]), "Connected Bank"),
+                (str(_uuid.uuid4()), result["item_id"], encrypt(result["access_token"]), _get_institution_name(result["access_token"])),
             )
             conn.commit()
         finally:
