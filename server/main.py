@@ -1120,6 +1120,49 @@ def configure_plaid(
 
 
 # ---------------------------------------------------------------------------
+# UI URL tool
+# ---------------------------------------------------------------------------
+
+_VALID_PAGES = {"accounts", "ledgers", "profile", "dashboard"}
+
+
+@mcp.tool
+def get_ui_url(page: str = None) -> dict:
+    """Return the local UI URL, optionally deep-linked to a specific page.
+
+    Parameters
+    ----------
+    page : str, optional
+        One of ``'accounts'``, ``'ledgers'``, ``'profile'``, or
+        ``'dashboard'``.  When provided the returned URL includes the page
+        path so the user can navigate directly there.  Omit (or pass
+        ``None``) to get the base URL.
+
+    Returns
+    -------
+    dict
+        ``{"url": "http://127.0.0.1:<port>[/<page>]"}``
+    """
+    raw = os.environ.get("FRIDAY_BP_UI_PORT")
+    try:
+        port = int(raw) if raw is not None else 6789
+    except ValueError:
+        port = 6789
+
+    base = f"http://127.0.0.1:{port}"
+
+    if page is None:
+        return {"url": base}
+
+    if page not in _VALID_PAGES:
+        raise ValueError(
+            f"page must be one of {sorted(_VALID_PAGES)!r}, got {page!r}"
+        )
+
+    return {"url": f"{base}/{page}"}
+
+
+# ---------------------------------------------------------------------------
 # Entrypoint
 # ---------------------------------------------------------------------------
 
