@@ -632,7 +632,54 @@ def route(transaction_id: str, allocations: List) -> dict:
 @mcp.tool
 def add_hint(text: str) -> dict:
     """Save a natural-language classification hint."""
-    return {"status": "not_implemented"}
+    cleaned = text.strip()
+    if len(cleaned) < 1:
+        raise ValueError("hint text must be non-empty")
+    conn = get_db(server.paths.DB_PATH)
+    try:
+        existing = conn.execute(
+            "SELECT id FROM classification_hints WHERE text = ?",
+            (cleaned,),
+        ).fetchone()
+        if existing:
+            return {"id": existing["id"], "text": cleaned, "created": False}
+        new_id = str(uuid.uuid4())
+        conn.execute(
+            "INSERT INTO classification_hints (id, text) VALUES (?, ?)",
+            (new_id, cleaned),
+        )
+        conn.commit()
+        return {"id": new_id, "text": cleaned, "created": True}
+    finally:
+        conn.close()
+
+
+@mcp.tool
+def list_hints() -> dict:
+    """Return all classification hints."""
+    conn = get_db(server.paths.DB_PATH)
+    try:
+        rows = conn.execute(
+            "SELECT id, text FROM classification_hints ORDER BY rowid"
+        ).fetchall()
+        return {"hints": [{"id": row["id"], "text": row["text"]} for row in rows]}
+    finally:
+        conn.close()
+
+
+@mcp.tool
+def remove_hint(id: str) -> dict:
+    """Delete a classification hint by id."""
+    conn = get_db(server.paths.DB_PATH)
+    try:
+        cursor = conn.execute(
+            "DELETE FROM classification_hints WHERE id = ?",
+            (id,),
+        )
+        conn.commit()
+        return {"ok": True, "removed": cursor.rowcount > 0}
+    finally:
+        conn.close()
 
 
 # ---------------------------------------------------------------------------
