@@ -10,9 +10,8 @@ import sqlite3
 
 import pytest
 
-from server.db import get_db, init_db
 from server.classifier import apply_rules
-
+from server.db import get_db, init_db
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -109,7 +108,7 @@ def test_first_rule_wins_on_multiple_matches(db):
     # Add a second rule that also matches "Starbucks"
     db.execute(
         "INSERT INTO routing_rules (id, merchant_pattern, line_item_id) VALUES (?, ?, ?)",
-        ("rule-0", "Starbucks", "li-retail"),   # id sorts before "rule-1"
+        ("rule-0", "Starbucks", "li-retail"),  # id sorts before "rule-1"
     )
     db.commit()
 

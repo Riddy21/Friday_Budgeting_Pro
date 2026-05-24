@@ -5,15 +5,15 @@ Uses keyring's in-memory test backend so that no actual macOS Keychain
 entries are created during CI or local test runs.
 """
 
-import pytest
 import keyring
 import keyring.errors
+import pytest
 from keyring.backend import KeyringBackend
-
 
 # ---------------------------------------------------------------------------
 # In-memory keyring backend (avoids touching the real macOS Keychain)
 # ---------------------------------------------------------------------------
+
 
 class _InMemoryKeyring(KeyringBackend):
     """Simple dict-backed keyring for testing."""
@@ -52,6 +52,7 @@ class _BrokenKeyring(KeyringBackend):
 # Fixtures
 # ---------------------------------------------------------------------------
 
+
 @pytest.fixture(autouse=False)
 def in_memory_keyring():
     """
@@ -65,6 +66,7 @@ def in_memory_keyring():
 
     # Reset cached Fernet instance inside the module under test
     import server.crypto as crypto_mod
+
     crypto_mod._fernet = None
 
     yield mem
@@ -81,6 +83,7 @@ def broken_keyring():
     keyring.set_keyring(_BrokenKeyring())
 
     import server.crypto as crypto_mod
+
     crypto_mod._fernet = None
 
     yield
@@ -93,9 +96,10 @@ def broken_keyring():
 # Tests
 # ---------------------------------------------------------------------------
 
+
 def test_round_trip(in_memory_keyring):
     """encrypt then decrypt returns the original plaintext."""
-    from server.crypto import encrypt, decrypt
+    from server.crypto import decrypt, encrypt
 
     plaintext = "access-sandbox-abc123def456"
     assert decrypt(encrypt(plaintext)) == plaintext
@@ -104,7 +108,8 @@ def test_round_trip(in_memory_keyring):
 def test_tampered_ciphertext_raises(in_memory_keyring):
     """Decrypting a tampered ciphertext raises InvalidToken."""
     from cryptography.fernet import InvalidToken
-    from server.crypto import encrypt, decrypt
+
+    from server.crypto import decrypt, encrypt
 
     ciphertext = encrypt("some-plaid-token")
     # Flip a few bytes in the middle of the ciphertext
@@ -148,7 +153,7 @@ def test_encrypt_returns_string(in_memory_keyring):
 
 def test_decrypt_returns_string(in_memory_keyring):
     """decrypt() must return a plain string."""
-    from server.crypto import encrypt, decrypt
+    from server.crypto import decrypt, encrypt
 
     result = decrypt(encrypt("world"))
     assert isinstance(result, str)
@@ -156,7 +161,7 @@ def test_decrypt_returns_string(in_memory_keyring):
 
 def test_key_persisted_across_calls(in_memory_keyring):
     """The same key is reused across multiple encrypt/decrypt calls."""
-    from server.crypto import encrypt, decrypt
+    from server.crypto import decrypt, encrypt
 
     ct = encrypt("persistent-token")
     # Decrypting with the *same* module (same key) should succeed
@@ -165,8 +170,9 @@ def test_key_persisted_across_calls(in_memory_keyring):
 
 def test_key_generated_and_stored_in_keychain(in_memory_keyring):
     """get_or_create_key() stores the key in the keyring on first call."""
-    from server.crypto import get_or_create_key
     import keyring as kr
+
+    from server.crypto import get_or_create_key
 
     get_or_create_key()
     stored = kr.get_password("friday-budgeting-pro", "fernet-key")

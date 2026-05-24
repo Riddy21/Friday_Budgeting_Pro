@@ -20,10 +20,10 @@ from fastapi.testclient import TestClient
 import server.paths
 from server.db import get_db, init_db
 
-
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
+
 
 @pytest.fixture()
 def db_path(tmp_path: Path, monkeypatch) -> Path:
@@ -60,6 +60,7 @@ def db_with_account(db_path: Path) -> tuple[Path, str, str]:
 @pytest.fixture()
 def client(db_path: Path) -> TestClient:
     from ui.server import app
+
     return TestClient(app, follow_redirects=False)
 
 
@@ -79,7 +80,8 @@ def authed_client(db_with_account) -> tuple[TestClient, Path, str]:
     conn.commit()
     conn.close()
 
-    from ui.server import app, SESSION_COOKIE
+    from ui.server import SESSION_COOKIE, app
+
     c = TestClient(app, follow_redirects=False)
     c.cookies.set(SESSION_COOKIE, token)
     return c, db_path, acct_id
@@ -88,6 +90,7 @@ def authed_client(db_with_account) -> tuple[TestClient, Path, str]:
 # ---------------------------------------------------------------------------
 # Tests
 # ---------------------------------------------------------------------------
+
 
 def test_patch_description_returns_200(authed_client):
     client, db_path, acct_id = authed_client
@@ -108,9 +111,7 @@ def test_patch_description_persists(authed_client):
         json={"description": "Savings buffer"},
     )
     conn = get_db(db_path)
-    row = conn.execute(
-        "SELECT description FROM bank_accounts WHERE id = ?", (acct_id,)
-    ).fetchone()
+    row = conn.execute("SELECT description FROM bank_accounts WHERE id = ?", (acct_id,)).fetchone()
     conn.close()
     assert row["description"] == "Savings buffer"
 
@@ -151,8 +152,6 @@ def test_patch_description_empty_string_clears(authed_client):
     assert resp.status_code == 200
 
     conn = get_db(db_path)
-    row = conn.execute(
-        "SELECT description FROM bank_accounts WHERE id = ?", (acct_id,)
-    ).fetchone()
+    row = conn.execute("SELECT description FROM bank_accounts WHERE id = ?", (acct_id,)).fetchone()
     conn.close()
     assert row["description"] is None

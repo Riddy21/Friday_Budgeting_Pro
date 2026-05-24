@@ -23,12 +23,12 @@ import pytest
 import server.paths
 from server.db import get_db, init_db
 from server.excel_export import ExportBusy, export_to_file
-from server.sync_lock import LockBusy, acquire_sync_lock
-
+from server.sync_lock import acquire_sync_lock
 
 # ---------------------------------------------------------------------------
 # Fixtures (same seeded-db setup as test_excel_export.py)
 # ---------------------------------------------------------------------------
+
 
 @pytest.fixture()
 def patched_paths(tmp_path: Path, monkeypatch):
@@ -110,6 +110,7 @@ def seeded_db(patched_paths) -> sqlite3.Connection:
 # Test: crash simulation — original file must be unchanged
 # ---------------------------------------------------------------------------
 
+
 def test_crash_leaves_original_unchanged(seeded_db, patched_paths, tmp_path):
     """If Workbook.save raises mid-write, the original target file is untouched."""
     dest = tmp_path / "budget.xlsx"
@@ -131,9 +132,9 @@ def test_crash_leaves_original_unchanged(seeded_db, patched_paths, tmp_path):
             export_to_file(seeded_db, dest)
 
     # Original file must be byte-for-byte unchanged.
-    assert dest.read_bytes() == sentinel_content, (
-        "Original file was modified despite a crash during export"
-    )
+    assert (
+        dest.read_bytes() == sentinel_content
+    ), "Original file was modified despite a crash during export"
 
     # No temp file should remain with the non-crashing content.
     # (The crash path cleans up the .tmp.<pid> file.)
@@ -144,6 +145,7 @@ def test_crash_leaves_original_unchanged(seeded_db, patched_paths, tmp_path):
 # ---------------------------------------------------------------------------
 # Test: concurrent sync + export — ExportBusy raised, nothing corrupted
 # ---------------------------------------------------------------------------
+
 
 def test_export_busy_when_sync_lock_held(seeded_db, patched_paths, tmp_path):
     """export_to_file raises ExportBusy when sync_lock is already held."""
@@ -161,14 +163,13 @@ def test_export_busy_when_sync_lock_held(seeded_db, patched_paths, tmp_path):
         held_lock.close()
 
     # The destination must not have been created or corrupted.
-    assert not dest.exists(), (
-        "Export should not have written anything when the lock was held"
-    )
+    assert not dest.exists(), "Export should not have written anything when the lock was held"
 
 
 # ---------------------------------------------------------------------------
 # Test: happy path — lock is released after export completes
 # ---------------------------------------------------------------------------
+
 
 def test_lock_released_after_successful_export(seeded_db, patched_paths, tmp_path):
     """After a successful export the sync lock is released (can be re-acquired)."""
@@ -181,15 +182,14 @@ def test_lock_released_after_successful_export(seeded_db, patched_paths, tmp_pat
 
     # The lock should now be available again.
     lock = acquire_sync_lock(timeout=0.0)
-    assert lock is not None, (
-        "sync_lock was NOT released after export completed"
-    )
+    assert lock is not None, "sync_lock was NOT released after export completed"
     lock.close()
 
 
 # ---------------------------------------------------------------------------
 # Test: PID suffix on temp file
 # ---------------------------------------------------------------------------
+
 
 def test_pid_suffix_on_temp_file(seeded_db, patched_paths, tmp_path):
     """The temp file created during export has the current PID as its suffix."""
@@ -209,6 +209,6 @@ def test_pid_suffix_on_temp_file(seeded_db, patched_paths, tmp_path):
 
     assert recorded_src, "os.replace was never called"
     src_path = recorded_src[0]
-    assert f".tmp.{current_pid}" in src_path, (
-        f"Expected PID {current_pid} in temp path, got: {src_path}"
-    )
+    assert (
+        f".tmp.{current_pid}" in src_path
+    ), f"Expected PID {current_pid} in temp path, got: {src_path}"

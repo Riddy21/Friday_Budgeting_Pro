@@ -13,6 +13,7 @@ def test_python_works():
 def test_repo_structure_exists():
     """The directories we plan to have should exist (or be planned)."""
     import os
+
     root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     # These docs should always be present
     for f in ("README.md", "ARCHITECTURE.md", "PLAN.md"):

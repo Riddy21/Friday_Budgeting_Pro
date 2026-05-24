@@ -17,16 +17,16 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
 
+
 @pytest.fixture()
 def db_path(tmp_path: Path, monkeypatch) -> Path:
     """Initialise a fresh SQLite DB in tmp_path and monkeypatch DB_PATH."""
-    from server.db import init_db
     import server.paths as paths
+    from server.db import init_db
 
     db = tmp_path / "test.db"
     init_db(db)
@@ -39,9 +39,8 @@ def db_path(tmp_path: Path, monkeypatch) -> Path:
 @pytest.fixture()
 def authed_client(db_path: Path) -> TestClient:
     """TestClient with a valid session cookie and password set."""
-    from server.db import get_db
+    from ui.auth import SESSION_COOKIE, create_session, hash_password, set_password_hash
     from ui.server import app
-    from ui.auth import hash_password, set_password_hash, create_session, SESSION_COOKIE
 
     # Set password
     set_password_hash(db_path, hash_password("testpassword123"))
@@ -87,6 +86,7 @@ def seeded_db(db_path: Path) -> tuple[Path, str, str]:
 # ---------------------------------------------------------------------------
 # Tests
 # ---------------------------------------------------------------------------
+
 
 class TestProfileGetLinkedAccounts:
     def test_shows_institution_name(self, authed_client, seeded_db):
@@ -148,10 +148,13 @@ class TestProfilePostDisconnectBank:
 
         db_path, active_id, reauth_id = seeded_db
 
-        r = authed_client.post("/profile", data={
-            "action": "disconnect_bank",
-            "bank_id": active_id,
-        })
+        r = authed_client.post(
+            "/profile",
+            data={
+                "action": "disconnect_bank",
+                "bank_id": active_id,
+            },
+        )
         assert r.status_code == 200
 
         # Verify the row is gone
@@ -168,10 +171,13 @@ class TestProfilePostDisconnectBank:
     def test_disconnect_shows_success(self, authed_client, seeded_db):
         """POST /profile action=disconnect_bank shows a success message."""
         db_path, active_id, reauth_id = seeded_db
-        r = authed_client.post("/profile", data={
-            "action": "disconnect_bank",
-            "bank_id": active_id,
-        })
+        r = authed_client.post(
+            "/profile",
+            data={
+                "action": "disconnect_bank",
+                "bank_id": active_id,
+            },
+        )
         assert r.status_code == 200
         assert "disconnect" in r.text.lower() or "success" in r.text.lower()
 
@@ -182,14 +188,16 @@ class TestProfilePostReconnectBank:
         import server.main as _sm
 
         fake_url = "http://127.0.0.1:6789/link?token=test-link-token-xyz"
-        monkeypatch.setattr(_sm, "refresh_connection",
-                            lambda id: {"url": fake_url})
+        monkeypatch.setattr(_sm, "refresh_connection", lambda id: {"url": fake_url})
 
         db_path, active_id, reauth_id = seeded_db
-        r = authed_client.post("/profile", data={
-            "action": "reconnect_bank",
-            "bank_id": reauth_id,
-        })
+        r = authed_client.post(
+            "/profile",
+            data={
+                "action": "reconnect_bank",
+                "bank_id": reauth_id,
+            },
+        )
         assert r.status_code == 200
         assert fake_url in r.text or "test-link-token-xyz" in r.text
 
@@ -203,9 +211,12 @@ class TestProfilePostReconnectBank:
         monkeypatch.setattr(_sm, "refresh_connection", _bad_refresh)
 
         db_path, active_id, reauth_id = seeded_db
-        r = authed_client.post("/profile", data={
-            "action": "reconnect_bank",
-            "bank_id": reauth_id,
-        })
+        r = authed_client.post(
+            "/profile",
+            data={
+                "action": "reconnect_bank",
+                "bank_id": reauth_id,
+            },
+        )
         assert r.status_code == 200
         assert "Plaid token expired" in r.text or "failed" in r.text.lower()

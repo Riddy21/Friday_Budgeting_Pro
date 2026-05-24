@@ -6,11 +6,9 @@ the test suite runs without a live OpenClaw instance or macOS notification
 permissions.
 """
 
-import importlib
 import os
 import sqlite3
 import sys
-import time
 import uuid
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -18,10 +16,10 @@ from urllib.error import URLError
 
 import pytest
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _init_db(db_path: str) -> None:
     """Run the canonical schema against a fresh SQLite file."""
@@ -62,6 +60,7 @@ def _get_notification(db_path: str) -> dict:
 # Fixture: isolated DB + patched module
 # ---------------------------------------------------------------------------
 
+
 @pytest.fixture
 def notify_module(tmp_path):
     """
@@ -85,6 +84,7 @@ def notify_module(tmp_path):
             sys.path.insert(0, repo_root)
 
         import server.notify as notify_mod
+
         # Re-bind _DB_PATH since it may have been set at import time before patch.
         notify_mod._DB_PATH = db_path
         yield notify_mod, db_path
@@ -93,6 +93,7 @@ def notify_module(tmp_path):
 # ---------------------------------------------------------------------------
 # Test cases
 # ---------------------------------------------------------------------------
+
 
 class TestOpenClawPreferred:
     """Preferred channel = openclaw_chat"""
@@ -187,8 +188,7 @@ class TestInUIPreferred:
         mod, db_path = notify_module
         _seed_config(db_path, "in_ui")
 
-        with patch("urllib.request.urlopen") as mock_url, \
-             patch("subprocess.run") as mock_proc:
+        with patch("urllib.request.urlopen") as mock_url, patch("subprocess.run") as mock_proc:
             result = mod.send("UI only")
 
             mock_url.assert_not_called()
@@ -202,20 +202,23 @@ class TestInUIPreferred:
 class TestRowPersistence:
     """All delivery paths must write a notifications row."""
 
-    @pytest.mark.parametrize("channel,url_side_effect,proc_returncode,expected_via", [
-        # openclaw_chat success
-        ("openclaw_chat", None, 0, "openclaw_chat"),
-        # openclaw_chat fails → macos success
-        ("openclaw_chat", URLError("x"), 0, "macos"),
-        # openclaw_chat fails → macos fails → in_ui
-        ("openclaw_chat", URLError("x"), 1, "in_ui"),
-        # macos success
-        ("macos", None, 0, "macos"),
-        # macos fails → in_ui
-        ("macos", None, 1, "in_ui"),
-        # in_ui direct
-        ("in_ui", None, 0, "in_ui"),
-    ])
+    @pytest.mark.parametrize(
+        "channel,url_side_effect,proc_returncode,expected_via",
+        [
+            # openclaw_chat success
+            ("openclaw_chat", None, 0, "openclaw_chat"),
+            # openclaw_chat fails → macos success
+            ("openclaw_chat", URLError("x"), 0, "macos"),
+            # openclaw_chat fails → macos fails → in_ui
+            ("openclaw_chat", URLError("x"), 1, "in_ui"),
+            # macos success
+            ("macos", None, 0, "macos"),
+            # macos fails → in_ui
+            ("macos", None, 1, "in_ui"),
+            # in_ui direct
+            ("in_ui", None, 0, "in_ui"),
+        ],
+    )
     def test_row_always_inserted(
         self,
         notify_module,
@@ -237,13 +240,17 @@ class TestRowPersistence:
 
         url_effect = url_side_effect if url_side_effect else mock_resp
 
-        with patch("urllib.request.urlopen", side_effect=url_side_effect if url_side_effect else None, return_value=mock_resp if not url_side_effect else None):
+        with patch(
+            "urllib.request.urlopen",
+            side_effect=url_side_effect if url_side_effect else None,
+            return_value=mock_resp if not url_side_effect else None,
+        ):
             with patch("subprocess.run", return_value=mock_proc):
                 result = mod.send("Persistence check", urgency="normal")
 
-        assert _count_notifications(db_path) == 1, (
-            f"Expected 1 notification row for channel={channel}, got 0"
-        )
+        assert (
+            _count_notifications(db_path) == 1
+        ), f"Expected 1 notification row for channel={channel}, got 0"
         row = _get_notification(db_path)
         assert row["delivered_via"] == expected_via
         assert uuid.UUID(result["notification_id"])  # valid UUID4

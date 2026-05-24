@@ -16,6 +16,17 @@ jobs:
       - run: pip install -r requirements.txt
       - run: pytest -q --ignore=tests/test_plaid_e2e.py
 
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: pip install black ruff
+      - run: ruff check .
+      - run: black --check .
+
   mcp-smoke:
     runs-on: ubuntu-latest
     steps:

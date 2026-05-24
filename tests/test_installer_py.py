@@ -10,12 +10,9 @@ import json
 import os
 import sys
 from pathlib import Path
-from unittest.mock import MagicMock, call, patch
-
-import pytest
+from unittest.mock import patch
 
 import server.installer as installer
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -241,9 +238,9 @@ def test_install_is_idempotent(tmp_path: Path) -> None:
 
     config_path = tmp_path / ".openclaw" / "config.json"
     data = json.loads(config_path.read_text())
-    assert isinstance(data["mcpServers"]["friday-budgeting-pro"], dict), (
-        "Re-running install() corrupted the mcpServers entry"
-    )
+    assert isinstance(
+        data["mcpServers"]["friday-budgeting-pro"], dict
+    ), "Re-running install() corrupted the mcpServers entry"
     # Ensure there's exactly one top-level "mcpServers" key (no duplication).
     raw = config_path.read_text()
     assert raw.count('"mcpServers"') == 1, "mcpServers key duplicated"

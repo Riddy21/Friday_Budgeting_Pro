@@ -14,7 +14,6 @@ import pytest
 import server.paths
 from server.db import get_db, init_db
 
-
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
@@ -33,7 +32,7 @@ def db_path(tmp_path, monkeypatch):
 def patch_crypto(monkeypatch):
     """Patch encrypt/decrypt with transparent passthrough fakes."""
     fake_encrypt = MagicMock(side_effect=lambda plaintext: "enc:" + plaintext)
-    fake_decrypt = MagicMock(side_effect=lambda ciphertext: ciphertext[len("enc:"):])
+    fake_decrypt = MagicMock(side_effect=lambda ciphertext: ciphertext[len("enc:") :])
     monkeypatch.setattr("server.crypto.encrypt", fake_encrypt)
     monkeypatch.setattr("server.crypto.decrypt", fake_decrypt)
 
@@ -44,8 +43,11 @@ def patch_crypto(monkeypatch):
 
 
 def test_start_link_returns_url_with_link_token(db_path):
-    with patch("server.main._plaid.create_link_token", return_value="link-token-abc") as mock_create:
+    with patch(
+        "server.main._plaid.create_link_token", return_value="link-token-abc"
+    ) as mock_create:
         from server.main import start_link
+
         result = start_link()
 
     assert "url" in result
@@ -61,8 +63,11 @@ def test_start_link_returns_url_with_link_token(db_path):
 def test_complete_link_inserts_row_and_returns_connection_id(db_path):
     exchange_result = {"access_token": "access-sandbox-xyz", "item_id": "item-abc"}
 
-    with patch("server.main._plaid.exchange_public_token", return_value=exchange_result) as mock_exchange:
+    with patch(
+        "server.main._plaid.exchange_public_token", return_value=exchange_result
+    ) as mock_exchange:
         from server.main import complete_link
+
         result = complete_link("public-token-test")
 
     assert "connection_id" in result
@@ -72,9 +77,7 @@ def test_complete_link_inserts_row_and_returns_connection_id(db_path):
 
     # Verify the row was inserted and the encrypted token is stored
     conn = get_db(db_path)
-    row = conn.execute(
-        "SELECT * FROM bank_connections WHERE id = ?", (connection_id,)
-    ).fetchone()
+    row = conn.execute("SELECT * FROM bank_connections WHERE id = ?", (connection_id,)).fetchone()
     conn.close()
 
     assert row is not None
@@ -94,8 +97,12 @@ def test_list_connections_returns_all_without_encrypted_token(db_path):
     exchange_result_1 = {"access_token": "access-1", "item_id": "item-1"}
     exchange_result_2 = {"access_token": "access-2", "item_id": "item-2"}
 
-    with patch("server.main._plaid.exchange_public_token", side_effect=[exchange_result_1, exchange_result_2]):
+    with patch(
+        "server.main._plaid.exchange_public_token",
+        side_effect=[exchange_result_1, exchange_result_2],
+    ):
         from server.main import complete_link, list_connections
+
         complete_link("public-token-1")
         complete_link("public-token-2")
 
@@ -124,6 +131,7 @@ def test_disconnect_removes_connection_and_sync_cursor(db_path):
 
     with patch("server.main._plaid.exchange_public_token", return_value=exchange_result):
         from server.main import complete_link
+
         result = complete_link("public-token-del")
 
     connection_id = result["connection_id"]
@@ -138,6 +146,7 @@ def test_disconnect_removes_connection_and_sync_cursor(db_path):
     conn.close()
 
     from server.main import disconnect
+
     disconnect_result = disconnect(connection_id)
     assert disconnect_result == {"ok": True}
 
@@ -161,8 +170,11 @@ def test_disconnect_removes_connection_and_sync_cursor(db_path):
 
 
 def test_refresh_connection_returns_url_with_link_token(db_path):
-    with patch("server.main._plaid.create_link_token", return_value="link-update-token") as mock_create:
+    with patch(
+        "server.main._plaid.create_link_token", return_value="link-update-token"
+    ) as mock_create:
         from server.main import refresh_connection
+
         result = refresh_connection("any-connection-id")
 
     assert "url" in result

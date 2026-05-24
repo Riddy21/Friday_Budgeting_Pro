@@ -24,20 +24,20 @@ when they run; "month"/"year"/"ytd" tests use monkeypatched datetime.
 from __future__ import annotations
 
 import uuid
-from datetime import date, datetime
+from datetime import datetime
 from pathlib import Path
 from unittest.mock import patch
 
 import pytest
 
+import server.main as main_module
 import server.paths
 from server.db import get_db, init_db
-import server.main as main_module
-
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _uid() -> str:
     return str(uuid.uuid4())
@@ -93,15 +93,16 @@ def seed_db(db_path: Path) -> dict:
     conn.close()
 
     return {
-        "ledger_id":     ledger_id,
-        "li_salary":     li_salary,
-        "li_groceries":  li_groceries,
+        "ledger_id": ledger_id,
+        "li_salary": li_salary,
+        "li_groceries": li_groceries,
     }
 
 
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
+
 
 @pytest.fixture
 def seeded_db(tmp_path: Path, monkeypatch):
@@ -125,14 +126,15 @@ FROZEN_DATE = datetime(2026, 5, 26)
 # Tests: specific ISO month
 # ---------------------------------------------------------------------------
 
+
 def test_specific_month(seeded_db):
     """summary('2026-05') returns only May 2026 totals."""
     result = main_module.summary("2026-05")
 
     assert result["period"] == "2026-05"
-    assert result["income"]   == pytest.approx(5000.00)   # 4000 + 1000
+    assert result["income"] == pytest.approx(5000.00)  # 4000 + 1000
     assert result["expenses"] == pytest.approx(-345.67)
-    assert result["net"]      == pytest.approx(5000.00 - (-345.67))
+    assert result["net"] == pytest.approx(5000.00 - (-345.67))
 
 
 def test_specific_month_excludes_other_months(seeded_db):
@@ -146,16 +148,17 @@ def test_specific_month_excludes_other_months(seeded_db):
 # Tests: specific ISO year
 # ---------------------------------------------------------------------------
 
+
 def test_specific_year(seeded_db):
     """summary('2026') returns totals for the whole of 2026."""
     result = main_module.summary("2026")
 
     assert result["period"] == "2026"
     # income: 4000 + 1000 = 5000 (2025 salary excluded)
-    assert result["income"]   == pytest.approx(5000.00)
+    assert result["income"] == pytest.approx(5000.00)
     # expenses: -200 (Apr) + -345.67 (May) = -545.67
     assert result["expenses"] == pytest.approx(-545.67)
-    assert result["net"]      == pytest.approx(5000.00 - (-545.67))
+    assert result["net"] == pytest.approx(5000.00 - (-545.67))
 
 
 def test_specific_year_excludes_prior_year(seeded_db):
@@ -168,13 +171,14 @@ def test_specific_year_excludes_prior_year(seeded_db):
 # Tests: "month" (relative — frozen to 2026-05-26)
 # ---------------------------------------------------------------------------
 
+
 def test_month_returns_current_month(seeded_db):
     """summary('month') with today=2026-05-26 returns May 2026 totals."""
     with patch.object(main_module, "_datetime") as mock_dt:
         mock_dt.now.return_value = FROZEN_DATE
         result = main_module.summary("month")
 
-    assert result["income"]   == pytest.approx(5000.00)
+    assert result["income"] == pytest.approx(5000.00)
     assert result["expenses"] == pytest.approx(-345.67)
 
 
@@ -182,19 +186,21 @@ def test_month_returns_current_month(seeded_db):
 # Tests: "year" (relative — frozen to 2026-05-26)
 # ---------------------------------------------------------------------------
 
+
 def test_year_returns_current_year(seeded_db):
     """summary('year') with today=2026-05-26 returns full 2026 totals."""
     with patch.object(main_module, "_datetime") as mock_dt:
         mock_dt.now.return_value = FROZEN_DATE
         result = main_module.summary("year")
 
-    assert result["income"]   == pytest.approx(5000.00)
+    assert result["income"] == pytest.approx(5000.00)
     assert result["expenses"] == pytest.approx(-545.67)
 
 
 # ---------------------------------------------------------------------------
 # Tests: "ytd" (relative — frozen to 2026-05-26)
 # ---------------------------------------------------------------------------
+
 
 def test_ytd_returns_year_to_date(seeded_db):
     """summary('ytd') includes Jan-May 2026 inclusive."""
@@ -203,7 +209,7 @@ def test_ytd_returns_year_to_date(seeded_db):
         result = main_module.summary("ytd")
 
     # Same as full year 2026 since all 2026 dates are <= 2026-05-26
-    assert result["income"]   == pytest.approx(5000.00)
+    assert result["income"] == pytest.approx(5000.00)
     assert result["expenses"] == pytest.approx(-545.67)
 
 
@@ -220,6 +226,7 @@ def test_ytd_excludes_prior_year(seeded_db):
 # Tests: net = income - expenses
 # ---------------------------------------------------------------------------
 
+
 def test_net_is_income_minus_expenses(seeded_db):
     """Net must equal income - expenses regardless of period."""
     result = main_module.summary("2026")
@@ -235,15 +242,16 @@ def test_net_specific_month(seeded_db):
 # Tests: by_line_item structure and sorting
 # ---------------------------------------------------------------------------
 
+
 def test_by_line_item_structure(seeded_db):
     """Each entry in by_line_item must have the required keys."""
     result = main_module.summary("2026-05")
     assert "by_line_item" in result
     for item in result["by_line_item"]:
         assert "line_item" in item
-        assert "ledger"    in item
-        assert "type"      in item
-        assert "total"     in item
+        assert "ledger" in item
+        assert "type" in item
+        assert "total" in item
 
 
 def test_by_line_item_sorted_descending(seeded_db):
@@ -259,17 +267,18 @@ def test_by_line_item_values_for_may(seeded_db):
     by_name = {item["line_item"]: item for item in result["by_line_item"]}
 
     assert "Salary" in by_name
-    assert by_name["Salary"]["type"]  == "income"
+    assert by_name["Salary"]["type"] == "income"
     assert by_name["Salary"]["total"] == pytest.approx(5000.00)
 
     assert "Groceries" in by_name
-    assert by_name["Groceries"]["type"]  == "expense"
+    assert by_name["Groceries"]["type"] == "expense"
     assert by_name["Groceries"]["total"] == pytest.approx(-345.67)
 
 
 # ---------------------------------------------------------------------------
 # Tests: invalid period raises ValueError
 # ---------------------------------------------------------------------------
+
 
 def test_invalid_period_raises():
     with pytest.raises(ValueError, match="Invalid period"):

@@ -20,16 +20,16 @@ from unittest.mock import patch
 import pytest
 from fastapi.testclient import TestClient
 
-
 # ---------------------------------------------------------------------------
 # Fixtures  (identical pattern to test_ui_routes.py so tests are independent)
 # ---------------------------------------------------------------------------
 
+
 @pytest.fixture()
 def db_path(tmp_path: Path, monkeypatch) -> Path:
     """Initialise a fresh SQLite DB and monkeypatch DB_PATH."""
-    from server.db import init_db
     import server.paths as paths
+    from server.db import init_db
 
     db = tmp_path / "wizard_test.db"
     init_db(db)
@@ -41,12 +41,14 @@ def db_path(tmp_path: Path, monkeypatch) -> Path:
 @pytest.fixture()
 def client(db_path: Path) -> TestClient:
     from ui.server import app
+
     return TestClient(app, follow_redirects=False)
 
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _wizard_through_step1(client: TestClient, password: str = "securepass1") -> None:
     """Drive through step 1 with a valid password."""
@@ -70,6 +72,7 @@ def _wizard_through_step3(client: TestClient) -> None:
 # Tests — GET /setup (empty DB)
 # ---------------------------------------------------------------------------
 
+
 class TestSetupGet:
     def test_empty_db_returns_200(self, client):
         r = client.get("/setup")
@@ -83,40 +86,53 @@ class TestSetupGet:
 
     def test_wizard_cookie_is_set(self, client):
         r = client.get("/setup")
-        assert "friday_bp_wizard" in r.cookies or "friday_bp_wizard" in r.headers.get("set-cookie", "")
+        assert "friday_bp_wizard" in r.cookies or "friday_bp_wizard" in r.headers.get(
+            "set-cookie", ""
+        )
 
 
 # ---------------------------------------------------------------------------
 # Tests — POST /setup/1 validation
 # ---------------------------------------------------------------------------
 
+
 class TestSetupStep1Validation:
     def test_mismatched_passwords_returns_200_with_error(self, client):
-        r = client.post("/setup/1", data={
-            "password": "validpass1",
-            "password_confirm": "different1",
-        })
+        r = client.post(
+            "/setup/1",
+            data={
+                "password": "validpass1",
+                "password_confirm": "different1",
+            },
+        )
         assert r.status_code == 200
         assert b"do not match" in r.content.lower() or b"mismatch" in r.content.lower()
 
     def test_short_password_returns_200_with_error(self, client):
-        r = client.post("/setup/1", data={
-            "password": "short",
-            "password_confirm": "short",
-        })
+        r = client.post(
+            "/setup/1",
+            data={
+                "password": "short",
+                "password_confirm": "short",
+            },
+        )
         assert r.status_code == 200
         assert b"8" in r.content  # mentions minimum length
 
     def test_short_password_does_not_set_hash(self, client, db_path):
         from ui.auth import get_password_hash
+
         client.post("/setup/1", data={"password": "short", "password_confirm": "short"})
         assert get_password_hash(db_path) is None
 
     def test_mismatch_re_renders_step1(self, client):
-        r = client.post("/setup/1", data={
-            "password": "validpass1",
-            "password_confirm": "different2",
-        })
+        r = client.post(
+            "/setup/1",
+            data={
+                "password": "validpass1",
+                "password_confirm": "different2",
+            },
+        )
         assert r.status_code == 200
         # Step 1 indicators still present.
         assert b'type="password"' in r.content
@@ -126,37 +142,51 @@ class TestSetupStep1Validation:
 # Tests — POST /setup/1 success
 # ---------------------------------------------------------------------------
 
+
 class TestSetupStep1Success:
     def test_valid_password_returns_200(self, client):
-        r = client.post("/setup/1", data={
-            "password": "securepass1",
-            "password_confirm": "securepass1",
-        })
+        r = client.post(
+            "/setup/1",
+            data={
+                "password": "securepass1",
+                "password_confirm": "securepass1",
+            },
+        )
         assert r.status_code == 200
 
     def test_valid_password_sets_hash(self, client, db_path):
         from ui.auth import get_password_hash
-        client.post("/setup/1", data={
-            "password": "securepass1",
-            "password_confirm": "securepass1",
-        })
+
+        client.post(
+            "/setup/1",
+            data={
+                "password": "securepass1",
+                "password_confirm": "securepass1",
+            },
+        )
         assert get_password_hash(db_path) is not None
 
     def test_valid_password_creates_session_cookie(self, client):
-        r = client.post("/setup/1", data={
-            "password": "securepass1",
-            "password_confirm": "securepass1",
-        })
+        r = client.post(
+            "/setup/1",
+            data={
+                "password": "securepass1",
+                "password_confirm": "securepass1",
+            },
+        )
         assert r.status_code == 200
         # Session cookie should be set in the response headers.
         set_cookie = r.headers.get("set-cookie", "")
         assert "friday_bp_session" in set_cookie
 
     def test_step2_rendered_after_step1(self, client):
-        r = client.post("/setup/1", data={
-            "password": "securepass1",
-            "password_confirm": "securepass1",
-        })
+        r = client.post(
+            "/setup/1",
+            data={
+                "password": "securepass1",
+                "password_confirm": "securepass1",
+            },
+        )
         assert r.status_code == 200
         # Step 2 notification radio buttons should be present.
         assert b"notification_channel" in r.content or b"notification" in r.content.lower()
@@ -166,6 +196,7 @@ class TestSetupStep1Success:
 # Tests — POST /setup/2
 # ---------------------------------------------------------------------------
 
+
 class TestSetupStep2:
     def test_notification_channel_stored(self, client, db_path):
         _wizard_through_step1(client)
@@ -173,10 +204,9 @@ class TestSetupStep2:
         assert r.status_code == 200
         # Verify the value was persisted.
         from server.db import get_db
+
         conn = get_db(db_path)
-        row = conn.execute(
-            "SELECT notification_channel FROM app_config WHERE id = 1"
-        ).fetchone()
+        row = conn.execute("SELECT notification_channel FROM app_config WHERE id = 1").fetchone()
         conn.close()
         assert row is not None
         assert row["notification_channel"] == "macos"
@@ -185,10 +215,9 @@ class TestSetupStep2:
         _wizard_through_step1(client)
         client.post("/setup/2", data={"notification_channel": "openclaw_chat"})
         from server.db import get_db
+
         conn = get_db(db_path)
-        row = conn.execute(
-            "SELECT notification_channel FROM app_config WHERE id = 1"
-        ).fetchone()
+        row = conn.execute("SELECT notification_channel FROM app_config WHERE id = 1").fetchone()
         conn.close()
         assert row["notification_channel"] == "openclaw_chat"
 
@@ -196,10 +225,9 @@ class TestSetupStep2:
         _wizard_through_step1(client)
         client.post("/setup/2", data={"notification_channel": "in_ui"})
         from server.db import get_db
+
         conn = get_db(db_path)
-        row = conn.execute(
-            "SELECT notification_channel FROM app_config WHERE id = 1"
-        ).fetchone()
+        row = conn.execute("SELECT notification_channel FROM app_config WHERE id = 1").fetchone()
         conn.close()
         assert row["notification_channel"] == "in_ui"
 
@@ -208,7 +236,11 @@ class TestSetupStep2:
         r = client.post("/setup/2", data={"notification_channel": "macos"})
         assert r.status_code == 200
         # Step 3 bank-connect content should be rendered.
-        assert b"bank" in r.content.lower() or b"plaid" in r.content.lower() or b"skip" in r.content.lower()
+        assert (
+            b"bank" in r.content.lower()
+            or b"plaid" in r.content.lower()
+            or b"skip" in r.content.lower()
+        )
 
     def test_old_notification_pref_field_accepted(self, client, db_path):
         """Old form field name (notification_pref=openclaw) must still work."""
@@ -216,10 +248,9 @@ class TestSetupStep2:
         r = client.post("/setup/2", data={"notification_pref": "openclaw"})
         assert r.status_code == 200
         from server.db import get_db
+
         conn = get_db(db_path)
-        row = conn.execute(
-            "SELECT notification_channel FROM app_config WHERE id = 1"
-        ).fetchone()
+        row = conn.execute("SELECT notification_channel FROM app_config WHERE id = 1").fetchone()
         conn.close()
         # 'openclaw' should be mapped to 'openclaw_chat'.
         assert row["notification_channel"] == "openclaw_chat"
@@ -229,13 +260,18 @@ class TestSetupStep2:
 # Tests — POST /setup/3 skip
 # ---------------------------------------------------------------------------
 
+
 class TestSetupStep3:
     def test_skip_advances_to_step4(self, client):
         _wizard_through_step2(client)
         r = client.post("/setup/3", data={"action": "skip"})
         assert r.status_code == 200
         # Step 4 done-page content should be rendered.
-        assert b"profile" in r.content.lower() or b"done" in r.content.lower() or b"set" in r.content.lower()
+        assert (
+            b"profile" in r.content.lower()
+            or b"done" in r.content.lower()
+            or b"set" in r.content.lower()
+        )
 
     def test_no_action_treated_as_skip(self, client):
         """Sending no action field (e.g. legacy ledger_name form) advances to step 4."""
@@ -248,11 +284,18 @@ class TestSetupStep3:
 # Tests — POST /setup/4
 # ---------------------------------------------------------------------------
 
+
 class TestSetupStep4:
     def test_apply_initial_setup_called(self, client):
         _wizard_through_step3(client)
         with patch("server.main.apply_initial_setup") as mock_setup:
-            mock_setup.return_value = {"status": "ok", "ledgers_created": [], "line_items_created": 0, "hints_created": 0, "banks_to_link": []}
+            mock_setup.return_value = {
+                "status": "ok",
+                "ledgers_created": [],
+                "line_items_created": 0,
+                "hints_created": 0,
+                "banks_to_link": [],
+            }
             r = client.post("/setup/4", data={})
         mock_setup.assert_called_once_with(
             banks_to_link=[],
@@ -263,7 +306,13 @@ class TestSetupStep4:
     def test_redirects_to_profile(self, client):
         _wizard_through_step3(client)
         with patch("server.main.apply_initial_setup") as mock_setup:
-            mock_setup.return_value = {"status": "ok", "ledgers_created": [], "line_items_created": 0, "hints_created": 0, "banks_to_link": []}
+            mock_setup.return_value = {
+                "status": "ok",
+                "ledgers_created": [],
+                "line_items_created": 0,
+                "hints_created": 0,
+                "banks_to_link": [],
+            }
             r = client.post("/setup/4", data={})
         assert r.status_code == 302
         assert r.headers["location"] == "/profile"
@@ -272,7 +321,13 @@ class TestSetupStep4:
         """Session set during step 1 should let the client reach /profile."""
         _wizard_through_step3(client)
         with patch("server.main.apply_initial_setup") as mock_setup:
-            mock_setup.return_value = {"status": "ok", "ledgers_created": [], "line_items_created": 0, "hints_created": 0, "banks_to_link": []}
+            mock_setup.return_value = {
+                "status": "ok",
+                "ledgers_created": [],
+                "line_items_created": 0,
+                "hints_created": 0,
+                "banks_to_link": [],
+            }
             client.post("/setup/4", data={})
         # Session cookie was set at step 1; profile should be accessible now.
         r = client.get("/profile")
@@ -283,11 +338,18 @@ class TestSetupStep4:
 # Tests — setup returns 404 after complete
 # ---------------------------------------------------------------------------
 
+
 class TestSetupAfterComplete:
     def _complete(self, client):
         _wizard_through_step3(client)
         with patch("server.main.apply_initial_setup") as mock_setup:
-            mock_setup.return_value = {"status": "ok", "ledgers_created": [], "line_items_created": 0, "hints_created": 0, "banks_to_link": []}
+            mock_setup.return_value = {
+                "status": "ok",
+                "ledgers_created": [],
+                "line_items_created": 0,
+                "hints_created": 0,
+                "banks_to_link": [],
+            }
             client.post("/setup/4", data={})
 
     def test_get_setup_returns_404(self, client):
@@ -307,6 +369,7 @@ class TestSetupAfterComplete:
 # ---------------------------------------------------------------------------
 # Tests — middleware: non-setup routes redirect to /setup when no password set
 # ---------------------------------------------------------------------------
+
 
 class TestRedirectToSetupMiddleware:
     """Regression tests: routes that are not in the allow-list must redirect

@@ -19,6 +19,7 @@ REQUIRED_ENV_KEYS = {"PLAID_CLIENT_ID", "PLAID_SECRET", "PLAID_ENV"}
 # .env.example
 # ---------------------------------------------------------------------------
 
+
 def test_env_example_exists():
     """Ensure .env.example is committed at the project root."""
     assert (REPO_ROOT / ".env.example").exists(), ".env.example not found at repo root"
@@ -36,24 +37,28 @@ def test_env_example_has_all_required_keys():
 # .gitignore
 # ---------------------------------------------------------------------------
 
+
 def test_gitignore_ignores_dotenv():
     """.gitignore must contain a rule that matches .env (with or without leading slash)."""
     content = (REPO_ROOT / ".gitignore").read_text()
     # Accept both ".env" and "/.env" styles.
-    assert re.search(r"^/?\.env$", content, re.MULTILINE), \
-        ".gitignore does not contain a .env ignore rule"
+    assert re.search(
+        r"^/?\.env$", content, re.MULTILINE
+    ), ".gitignore does not contain a .env ignore rule"
 
 
 def test_gitignore_does_not_ignore_env_example():
     """.env.example must NOT be excluded by .gitignore — it should be committed."""
     content = (REPO_ROOT / ".gitignore").read_text()
-    assert ".env.example" not in content, \
-        ".gitignore incorrectly excludes .env.example (it should be committed)"
+    assert (
+        ".env.example" not in content
+    ), ".gitignore incorrectly excludes .env.example (it should be committed)"
 
 
 # ---------------------------------------------------------------------------
 # server.daemon import
 # ---------------------------------------------------------------------------
+
 
 def test_daemon_imports_without_error():
     """server.daemon must be importable without raising."""
@@ -71,6 +76,7 @@ def test_daemon_imports_without_error():
 # ---------------------------------------------------------------------------
 # load_dotenv is called from main()
 # ---------------------------------------------------------------------------
+
 
 def test_main_calls_load_dotenv(monkeypatch):
     """main() must call load_dotenv() before doing anything else."""
@@ -96,5 +102,6 @@ def test_main_calls_load_dotenv(monkeypatch):
     # The positional argument should be a path ending in ".env".
     dotenv_path = call_args.args[0] if call_args.args else call_args.kwargs.get("dotenv_path")
     assert dotenv_path is not None, "load_dotenv called with no path argument"
-    assert Path(dotenv_path).name == ".env", \
-        f"load_dotenv expected to load '.env', got: {dotenv_path}"
+    assert (
+        Path(dotenv_path).name == ".env"
+    ), f"load_dotenv expected to load '.env', got: {dotenv_path}"

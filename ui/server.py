@@ -37,13 +37,13 @@ import time
 from pathlib import Path
 from typing import Optional
 
-from fastapi import FastAPI, Form, Request
+from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 import server.paths as _paths
-from server.db import get_db, init_db
+from server.db import get_db
 from ui.auth import (
     SESSION_COOKIE,
     check_session,
@@ -51,7 +51,6 @@ from ui.auth import (
     create_user,
     delete_session,
     delete_user,
-    get_active_user_id,
     get_password_hash,
     get_session_user_id,
     get_user_by_id,
@@ -63,6 +62,12 @@ from ui.auth import (
     update_user_password,
     verify_password,
 )
+
+# ── Recovery token store (in-memory, 10-min TTL) ──────────────────────────
+# Maps token -> (user_id, expiry_float).  In-memory is fine for a local app;
+# tokens survive daemon restart only if users don't restart between steps.
+_recovery_tokens: dict[str, tuple[str, float]] = {}
+_RECOVERY_TOKEN_TTL = 600  # 10 minutes
 
 # ── App setup ───────────────────────────────────────────────────────────────
 
@@ -79,6 +84,7 @@ app.mount("/static", StaticFiles(directory=str(_STATIC_DIR)), name="static")
 _SETUP_COMPLETE_COOKIE = "friday_bp_setup"
 
 # ── Helpers ─────────────────────────────────────────────────────────────────
+
 
 def _db_path() -> Path:
     """Return the active DB path (test-overridable via server.paths.DB_PATH)."""
@@ -101,12 +107,11 @@ def _current_user_id(request: Request) -> Optional[str]:
 
 def _check_raw_session(db_path, token: str) -> bool:
     """Validate a raw session token without a Request object."""
-    from ui.auth import _now, _SESSION_TTL
+    from ui.auth import _SESSION_TTL, _now
+
     conn = get_db(db_path)
     try:
-        row = conn.execute(
-            "SELECT expires_at FROM sessions WHERE id = ?", (token,)
-        ).fetchone()
+        row = conn.execute("SELECT expires_at FROM sessions WHERE id = ?", (token,)).fetchone()
         if row is None:
             return False
         now = _now()
@@ -131,8 +136,13 @@ def _redirect(url: str) -> RedirectResponse:
 
 
 _CHANNEL_TO_PREF = {"openclaw_chat": "openclaw", "in_ui": "ui", "macos": "macos"}
-_PREF_TO_CHANNEL = {"openclaw": "openclaw_chat", "ui": "in_ui", "macos": "macos",
-                    "openclaw_chat": "openclaw_chat", "in_ui": "in_ui"}
+_PREF_TO_CHANNEL = {
+    "openclaw": "openclaw_chat",
+    "ui": "in_ui",
+    "macos": "macos",
+    "openclaw_chat": "openclaw_chat",
+    "in_ui": "in_ui",
+}
 
 
 def _get_username(user_id: Optional[str] = None) -> str:
@@ -140,15 +150,11 @@ def _get_username(user_id: Optional[str] = None) -> str:
     conn = get_db(_db_path())
     try:
         if user_id:
-            row = conn.execute(
-                "SELECT username FROM users WHERE id = ?", (user_id,)
-            ).fetchone()
+            row = conn.execute("SELECT username FROM users WHERE id = ?", (user_id,)).fetchone()
             if row and row["username"]:
                 return row["username"]
         # Fallback: first user or app_config
-        row2 = conn.execute(
-            "SELECT username FROM users ORDER BY created_at LIMIT 1"
-        ).fetchone()
+        row2 = conn.execute("SELECT username FROM users ORDER BY created_at LIMIT 1").fetchone()
         if row2 and row2["username"]:
             return row2["username"]
         try:
@@ -171,12 +177,14 @@ def _get_notification_channel() -> str:
             row = conn.execute("SELECT notification_channel FROM app_config WHERE id=1").fetchone()
             if row and row["notification_channel"]:
                 return row["notification_channel"]
-        except Exception: pass
+        except Exception:
+            pass
         try:
             row = conn.execute("SELECT notification_pref FROM app_config WHERE id=1").fetchone()
             if row and row["notification_pref"]:
                 return _PREF_TO_CHANNEL.get(row["notification_pref"], row["notification_pref"])
-        except Exception: pass
+        except Exception:
+            pass
         return "openclaw_chat"
     finally:
         conn.close()
@@ -192,7 +200,8 @@ def _set_notification_channel(channel: str) -> None:
         try:
             conn.execute("ALTER TABLE app_config ADD COLUMN notification_channel TEXT")
             conn.commit()
-        except Exception: pass
+        except Exception:
+            pass
         conn.execute(
             "INSERT INTO app_config (id, notification_channel) VALUES (1,?) "
             "ON CONFLICT(id) DO UPDATE SET notification_channel=excluded.notification_channel",
@@ -206,6 +215,7 @@ def _set_notification_channel(channel: str) -> None:
 def _set_notification_pref(pref: str) -> None:
     _set_notification_channel(_PREF_TO_CHANNEL.get(pref, pref))
 
+
 def _get_ledgers(user_id: Optional[str] = None) -> list[dict]:
     """Query ledgers + line_items from the DB and return a list of dicts."""
     conn = get_db(_db_path())
@@ -217,23 +227,23 @@ def _get_ledgers(user_id: Optional[str] = None) -> list[dict]:
                 (user_id,),
             ).fetchall()
         else:
-            ledger_rows = conn.execute(
-                "SELECT id, name FROM ledgers ORDER BY name"
-            ).fetchall()
+            ledger_rows = conn.execute("SELECT id, name FROM ledgers ORDER BY name").fetchall()
         ledgers = []
         for lr in ledger_rows:
             items = conn.execute(
                 "SELECT id, name, item_type FROM line_items WHERE ledger_id = ? ORDER BY name",
                 (lr["id"],),
             ).fetchall()
-            ledgers.append({
-                "id": lr["id"],
-                "name": lr["name"],
-                "line_items": [
-                    {"id": i["id"], "name": i["name"], "item_type": i["item_type"]}
-                    for i in items
-                ],
-            })
+            ledgers.append(
+                {
+                    "id": lr["id"],
+                    "name": lr["name"],
+                    "line_items": [
+                        {"id": i["id"], "name": i["name"], "item_type": i["item_type"]}
+                        for i in items
+                    ],
+                }
+            )
         return ledgers
     finally:
         conn.close()
@@ -284,6 +294,7 @@ def _clear_wizard(response: Response, token: Optional[str]) -> None:
 
 # ── /healthz ─────────────────────────────────────────────────────────────────
 
+
 @app.get("/healthz")
 def healthz() -> dict[str, str]:
     """Liveness probe — returns 200 OK when the daemon is running."""
@@ -291,6 +302,7 @@ def healthz() -> dict[str, str]:
 
 
 # ── / ────────────────────────────────────────────────────────────────────────
+
 
 @app.get("/")
 def index(request: Request):
@@ -320,8 +332,9 @@ def setup_get(request: Request):
         return HTMLResponse(status_code=404, content="Setup already complete.")
     tok = _get_wizard_token(request) or secrets.token_hex(16)
     dch = "openclaw_chat" if _openclaw_home_exists() else "macos"
-    resp = templates.TemplateResponse(request, "setup.html",
-        {"step": 1, "error": None, "default_channel": dch})
+    resp = templates.TemplateResponse(
+        request, "setup.html", {"step": 1, "error": None, "default_channel": dch}
+    )
     _update_wizard(resp, tok, {"step": 1, "wizard_active": False})
     return resp
 
@@ -341,14 +354,16 @@ async def setup_post(request: Request, step: int):
         dch = "openclaw_chat" if _openclaw_home_exists() else "macos"
         if len(pw) < 8:
             err = "Password must be at least 8 characters."
-            resp = templates.TemplateResponse(request, "setup.html",
-                {"step": 1, "error": err, "default_channel": dch})
+            resp = templates.TemplateResponse(
+                request, "setup.html", {"step": 1, "error": err, "default_channel": dch}
+            )
             _update_wizard(resp, tok, {"step": 1, "wizard_active": False, "error": err})
             return resp
         if pw != cf:
             err = "Passwords do not match."
-            resp = templates.TemplateResponse(request, "setup.html",
-                {"step": 1, "error": err, "default_channel": dch})
+            resp = templates.TemplateResponse(
+                request, "setup.html", {"step": 1, "error": err, "default_channel": dch}
+            )
             _update_wizard(resp, tok, {"step": 1, "wizard_active": False, "error": err})
             return resp
 
@@ -358,6 +373,7 @@ async def setup_post(request: Request, step: int):
         if existing_user:
             # Update existing user's password
             from ui.auth import update_user_password
+
             update_user_password(_db_path(), existing_user["id"], pw)
             new_user_id = existing_user["id"]
         else:
@@ -388,22 +404,31 @@ async def setup_post(request: Request, step: int):
         set_password_hash(_db_path(), password_hash)
         _conn3 = get_db(_db_path())
         try:
-            try: _conn3.execute("ALTER TABLE app_config ADD COLUMN username TEXT")
-            except: pass
+            try:
+                _conn3.execute("ALTER TABLE app_config ADD COLUMN username TEXT")
+            except:
+                pass
             _conn3.execute(
                 "INSERT INTO app_config (id, username) VALUES (1, ?) "
                 "ON CONFLICT(id) DO UPDATE SET username=excluded.username",
                 (username,),
             )
             _conn3.commit()
-        finally: _conn3.close()
+        finally:
+            _conn3.close()
 
         ua = request.headers.get("user-agent")
         stoken = create_session(_db_path(), user_agent=ua, user_id=new_user_id)
-        ns = {"step": 2, "wizard_active": True, "session_token": stoken,
-              "user_id": new_user_id, "error": None}
-        resp = templates.TemplateResponse(request, "setup.html",
-            {"step": 2, "error": None, "default_channel": dch})
+        ns = {
+            "step": 2,
+            "wizard_active": True,
+            "session_token": stoken,
+            "user_id": new_user_id,
+            "error": None,
+        }
+        resp = templates.TemplateResponse(
+            request, "setup.html", {"step": 2, "error": None, "default_channel": dch}
+        )
         _update_wizard(resp, tok, ns)
         # Set the real session cookie at step 1 so the user is logged in for the
         # rest of the wizard and lands authenticated on /profile at the end.
@@ -423,29 +448,35 @@ async def setup_post(request: Request, step: int):
         bl = (form.get("action") or "").strip() == "done"
         ch = state.get("notification_channel", _get_notification_channel())
         ns = {**state, "step": 4, "bank_linked": bl, "error": None}
-        resp = templates.TemplateResponse(request, "setup.html",
-            {"step": 4, "error": None, "notification_channel": ch, "bank_linked": bl})
+        resp = templates.TemplateResponse(
+            request,
+            "setup.html",
+            {"step": 4, "error": None, "notification_channel": ch, "bank_linked": bl},
+        )
         _update_wizard(resp, tok, ns)
         return resp
     elif step == 4:
         import server.main as _sm
+
         _sm.apply_initial_setup(banks_to_link=[], extra_ledgers=[], hints=[])
         redir = _redirect("/profile")
         st = state.get("session_token")
         if st:
-            redir.set_cookie(_SETUP_COMPLETE_COOKIE, st, httponly=True, samesite="strict", max_age=300)
+            redir.set_cookie(
+                _SETUP_COMPLETE_COOKIE, st, httponly=True, samesite="strict", max_age=300
+            )
         _clear_wizard(redir, tok)
         return redir
     return HTMLResponse(status_code=404, content="Unknown step.")
 
+
 def _ensure_ledger(name: str, user_id: Optional[str] = None) -> None:
     """Create a ledger row if one with this name doesn't already exist."""
     import uuid as _uuid
+
     conn = get_db(_db_path())
     try:
-        existing = conn.execute(
-            "SELECT id FROM ledgers WHERE name = ?", (name,)
-        ).fetchone()
+        existing = conn.execute("SELECT id FROM ledgers WHERE name = ?", (name,)).fetchone()
         if existing is None:
             conn.execute(
                 "INSERT INTO ledgers (id, name, user_id) VALUES (?, ?, ?)",
@@ -458,6 +489,7 @@ def _ensure_ledger(name: str, user_id: Optional[str] = None) -> None:
 
 # ── /login ───────────────────────────────────────────────────────────────────
 
+
 @app.get("/login", response_class=HTMLResponse)
 def login_get(request: Request):
     """Render login form.  If no users exist, redirect to /setup."""
@@ -466,7 +498,8 @@ def login_get(request: Request):
     profiles = list_users(_db_path())
     prefill_username = request.query_params.get("username", "")
     return templates.TemplateResponse(
-        request, "login.html",
+        request,
+        "login.html",
         {"error": None, "profiles": profiles, "prefill_username": prefill_username},
     )
 
@@ -484,7 +517,7 @@ async def login_post(request: Request):
 
     form = await request.form()
     username = (form.get("username") or "").strip()
-    password = (form.get("password") or "")
+    password = form.get("password") or ""
 
     profiles = list_users(_db_path())
 
@@ -500,17 +533,17 @@ async def login_post(request: Request):
         return _redirect("/setup")
     # else: multiple users, username required — user stays None → error below
 
-    success = (
-        user is not None
-        and verify_password(password, user["password_hash"])
-    )
+    success = user is not None and verify_password(password, user["password_hash"])
 
     if not success:
         return templates.TemplateResponse(
             request,
             "login.html",
-            {"error": "Incorrect username or password.",
-             "profiles": profiles, "prefill_username": username},
+            {
+                "error": "Incorrect username or password.",
+                "profiles": profiles,
+                "prefill_username": username,
+            },
             status_code=200,
         )
     # Clear any pending setup session.
@@ -530,6 +563,7 @@ async def login_post(request: Request):
 
 # ── /logout ──────────────────────────────────────────────────────────────────
 
+
 @app.post("/logout")
 def logout(request: Request):
     """Delete session row(s) and clear cookies."""
@@ -547,72 +581,148 @@ def logout(request: Request):
 
 # ── /forgot ──────────────────────────────────────────────────────────────────
 
+
 @app.get("/forgot", response_class=HTMLResponse)
 def forgot_get(request: Request):
-    """Placeholder recovery page (full flow in #60)."""
+    """Render the forgot-password form (username input)."""
     return templates.TemplateResponse(
         request,
         "forgot.html",
-        {"sent": False},
+        {"sent": False, "error": None},
     )
 
 
 @app.post("/forgot", response_class=HTMLResponse)
-def forgot_post(request: Request):
-    """Write a recovery token file placeholder (#60).
+async def forgot_post(request: Request):
+    """Generate a recovery token and write it to ~/.friday-bp/recovery.txt.
 
-    Writes ~/.friday-bp/recovery.txt with a random token.  The full recovery
-    flow (token validation, new password entry) lands with issue #60.
+    Accepts: username (form field)
+    Behaviour:
+      - Looks up user by username in the users table
+      - Generates a 32-byte random hex token with 10-minute TTL
+      - Stores token in the in-memory _recovery_tokens dict
+      - Writes token to ~/.friday-bp/recovery.txt with mode 0600
+      - Returns the same success page whether or not the username exists
+        (prevents username enumeration)
     """
-    token = secrets.token_hex(32)
-    recovery_path = _paths.APP_DIR / "recovery.txt"
-    try:
-        _paths.APP_DIR.mkdir(mode=0o700, parents=True, exist_ok=True)
-        recovery_path.write_text(
-            f"Friday Budgeting Pro — password recovery token\n"
-            f"Token: {token}\n"
-            f"Generated: {time.strftime('%Y-%m-%d %H:%M:%S')}\n\n"
-            f"Visit http://127.0.0.1:6789/reset and enter this token.\n"
-            f"(Full recovery flow ships with issue #60.)\n"
-        )
-        os.chmod(recovery_path, 0o600)
-    except Exception:
-        pass  # Non-fatal in this PR; #60 adds proper error handling.
+    form = await request.form()
+    username = (form.get("username") or "").strip()
 
+    user = get_user_by_username(_db_path(), username) if username else None
+
+    if user:
+        token = secrets.token_hex(32)
+        expiry = time.time() + _RECOVERY_TOKEN_TTL
+        _recovery_tokens[token] = (user["id"], expiry)
+
+        recovery_path = _paths.APP_DIR / "recovery.txt"
+        try:
+            _paths.APP_DIR.mkdir(mode=0o700, parents=True, exist_ok=True)
+            # Write with O_CREAT|O_WRONLY|O_TRUNC so mode is applied atomically
+            fd = os.open(
+                str(recovery_path),
+                os.O_CREAT | os.O_WRONLY | os.O_TRUNC,
+                0o600,
+            )
+            try:
+                os.write(fd, token.encode())
+            finally:
+                os.close(fd)
+            # Ensure mode is correct even if the file already existed
+            os.chmod(recovery_path, 0o600)
+        except Exception:
+            pass
+
+    # Always return success page to avoid leaking which usernames exist.
     return templates.TemplateResponse(
         request,
         "forgot.html",
-        {"sent": True},
+        {"sent": True, "error": None},
     )
 
 
 # ── /reset ───────────────────────────────────────────────────────────────────
 
+
 @app.get("/reset", response_class=HTMLResponse)
 def reset_get(request: Request):
-    """Placeholder reset page (#60)."""
+    """Render the password-reset form (token + new password)."""
     return templates.TemplateResponse(
         request,
         "reset.html",
-        {"error": None},
+        {"error": None, "success": False},
     )
 
 
 @app.post("/reset", response_class=HTMLResponse)
 async def reset_post(request: Request):
-    """Placeholder reset handler (#60).
+    """Validate recovery token and update the user's password.
 
-    TODO (#60): Validate token from recovery.txt, update password hash,
-    delete recovery.txt, redirect to /login.
+    Accepts: token, new_password (form fields)
+    On success:
+      - Hashes new_password with argon2id via update_user_password
+      - Deletes recovery.txt
+      - Invalidates all sessions for that user (forces re-login)
+      - Redirects to /login?reset=1
+    On failure:
+      - Re-renders reset.html with an error message
     """
-    return templates.TemplateResponse(
-        request,
-        "reset.html",
-        {"error": "Password reset is not yet implemented. See issue #60."},
-    )
+    form = await request.form()
+    token = (form.get("token") or "").strip()
+    new_password = form.get("new_password") or ""
+
+    if len(new_password) < 8:
+        return templates.TemplateResponse(
+            request,
+            "reset.html",
+            {"error": "Password must be at least 8 characters.", "success": False},
+        )
+
+    entry = _recovery_tokens.get(token)
+    if entry is None:
+        return templates.TemplateResponse(
+            request,
+            "reset.html",
+            {"error": "Invalid or expired recovery token.", "success": False},
+        )
+
+    user_id, expiry = entry
+    if time.time() > expiry:
+        # Clean up the expired token
+        _recovery_tokens.pop(token, None)
+        return templates.TemplateResponse(
+            request,
+            "reset.html",
+            {"error": "Recovery token has expired. Please request a new one.", "success": False},
+        )
+
+    # Update the password
+    update_user_password(_db_path(), user_id, new_password)
+
+    # Delete recovery.txt
+    recovery_path = _paths.APP_DIR / "recovery.txt"
+    try:
+        recovery_path.unlink(missing_ok=True)
+    except Exception:
+        pass
+
+    # Invalidate all sessions for this user (force re-login after reset)
+    conn_db = get_db(_db_path())
+    try:
+        conn_db.execute("DELETE FROM sessions WHERE user_id = ?", (user_id,))
+        conn_db.commit()
+    finally:
+        conn_db.close()
+
+    # Remove token from in-memory store
+    _recovery_tokens.pop(token, None)
+
+    # Redirect to login with a success flash
+    return _redirect("/login?reset=1")
 
 
 # ── /profile ─────────────────────────────────────────────────────────────────
+
 
 def _get_connections(user_id: Optional[str] = None) -> list[dict]:
     """Query bank_connections for *user_id* and return a list of dicts."""
@@ -673,11 +783,19 @@ def profile_get(request: Request):
         accounts = _get_accounts(uid)
         profiles = list_users(_db_path())
         current_user = get_user_by_id(_db_path(), uid) if uid else None
-        return templates.TemplateResponse(request, "profile.html",
-            {"notification_pref": pref, "saved": False,
-             "connections": connections, "accounts": accounts,
-             "action_result": None, "profiles": profiles,
-             "current_user": current_user})
+        return templates.TemplateResponse(
+            request,
+            "profile.html",
+            {
+                "notification_pref": pref,
+                "saved": False,
+                "connections": connections,
+                "accounts": accounts,
+                "action_result": None,
+                "profiles": profiles,
+                "current_user": current_user,
+            },
+        )
     st = request.cookies.get(_SETUP_COMPLETE_COOKIE)
     if st and _check_raw_session(_db_path(), st):
         pref = _get_notification_pref()
@@ -695,11 +813,19 @@ def profile_get(request: Request):
         accounts = _get_accounts(uid)
         profiles = list_users(_db_path())
         current_user = get_user_by_id(_db_path(), uid) if uid else None
-        resp = templates.TemplateResponse(request, "profile.html",
-            {"notification_pref": pref, "saved": False,
-             "connections": connections, "accounts": accounts,
-             "action_result": None, "profiles": profiles,
-             "current_user": current_user})
+        resp = templates.TemplateResponse(
+            request,
+            "profile.html",
+            {
+                "notification_pref": pref,
+                "saved": False,
+                "connections": connections,
+                "accounts": accounts,
+                "action_result": None,
+                "profiles": profiles,
+                "current_user": current_user,
+            },
+        )
         resp.set_cookie(SESSION_COOKIE, st, httponly=True, samesite="strict")
         resp.delete_cookie(_SETUP_COMPLETE_COOKIE)
         return resp
@@ -736,6 +862,7 @@ async def profile_post(request: Request):
 
     if action == "sync_now":
         import server.main as _sm
+
         try:
             result = _sm.sync()
             action_result = {"ok": True, "message": "Sync complete.", "detail": result}
@@ -744,6 +871,7 @@ async def profile_post(request: Request):
 
     elif action == "export_now":
         import server.main as _sm
+
         try:
             result = _sm.export_excel()
             path = result.get("path", "")
@@ -757,6 +885,7 @@ async def profile_post(request: Request):
             action_result = {"ok": False, "message": "No bank_id provided."}
         else:
             import server.main as _sm
+
             try:
                 _sm.disconnect(id=bank_id)
                 connections = _get_connections()  # refresh after delete
@@ -770,6 +899,7 @@ async def profile_post(request: Request):
             action_result = {"ok": False, "message": "No bank_id provided."}
         else:
             import server.main as _sm
+
             try:
                 result = _sm.refresh_connection(id=bank_id)
                 url = result.get("url", "")
@@ -797,7 +927,10 @@ async def profile_post(request: Request):
         if not del_user_id:
             action_result = {"ok": False, "message": "No profile specified."}
         elif del_user_id == uid:
-            action_result = {"ok": False, "message": "Cannot delete the currently active profile. Log in as another profile first."}
+            action_result = {
+                "ok": False,
+                "message": "Cannot delete the currently active profile. Log in as another profile first.",
+            }
         elif len(list_users(_db_path())) <= 1:
             action_result = {"ok": False, "message": "Cannot delete the only profile."}
         else:
@@ -815,19 +948,29 @@ async def profile_post(request: Request):
         return templates.TemplateResponse(
             request,
             "profile.html",
-            {"notification_pref": pref, "saved": True,
-             "connections": connections, "accounts": accounts,
-             "action_result": None, "profiles": profiles,
-             "current_user": current_user},
+            {
+                "notification_pref": pref,
+                "saved": True,
+                "connections": connections,
+                "accounts": accounts,
+                "action_result": None,
+                "profiles": profiles,
+                "current_user": current_user,
+            },
         )
 
     return templates.TemplateResponse(
         request,
         "profile.html",
-        {"notification_pref": pref, "saved": False,
-         "connections": connections, "accounts": accounts,
-         "action_result": action_result, "profiles": profiles,
-         "current_user": current_user},
+        {
+            "notification_pref": pref,
+            "saved": False,
+            "connections": connections,
+            "accounts": accounts,
+            "action_result": action_result,
+            "profiles": profiles,
+            "current_user": current_user,
+        },
     )
 
 
@@ -842,6 +985,7 @@ async def account_description_patch(request: Request, account_id: str):
     Returns {"status": "ok", "account_id": ...} or 404 if not found.
     """
     from fastapi.responses import JSONResponse
+
     if not _is_authenticated(request):
         return JSONResponse({"error": "not authenticated"}, status_code=401)
 
@@ -856,9 +1000,7 @@ async def account_description_patch(request: Request, account_id: str):
         )
         conn.commit()
         if result.rowcount == 0:
-            return JSONResponse(
-                {"error": f"account_id {account_id!r} not found"}, status_code=404
-            )
+            return JSONResponse({"error": f"account_id {account_id!r} not found"}, status_code=404)
     finally:
         conn.close()
 
@@ -866,6 +1008,7 @@ async def account_description_patch(request: Request, account_id: str):
 
 
 # ── /ledgers ─────────────────────────────────────────────────────────────────
+
 
 @app.get("/ledgers", response_class=HTMLResponse)
 def ledgers_get(request: Request):
@@ -922,9 +1065,7 @@ def ledgers_delete(request: Request, ledger_id: str):
     try:
         count = conn.execute("SELECT COUNT(*) FROM ledgers").fetchone()[0]
         if count <= 1:
-            return JSONResponse(
-                {"error": "Cannot delete the only ledger"}, status_code=409
-            )
+            return JSONResponse({"error": "Cannot delete the only ledger"}, status_code=409)
         conn.execute("DELETE FROM line_items WHERE ledger_id = ?", (ledger_id,))
         conn.execute("DELETE FROM ledgers WHERE id = ?", (ledger_id,))
         conn.commit()
@@ -1039,9 +1180,7 @@ def ledger_items_delete(request: Request, ledger_id: str, item_id: str):
                 status_code=409,
             )
         if entry_count > 0 and confirm:
-            conn.execute(
-                "DELETE FROM transaction_entries WHERE line_item_id = ?", (item_id,)
-            )
+            conn.execute("DELETE FROM transaction_entries WHERE line_item_id = ?", (item_id,))
         conn.execute("DELETE FROM line_items WHERE id = ?", (item_id,))
         conn.commit()
     finally:
@@ -1050,6 +1189,7 @@ def ledger_items_delete(request: Request, ledger_id: str, item_id: str):
 
 
 # ── /link ─────────────────────────────────────────────────────────────────────
+
 
 @app.get("/link", response_class=HTMLResponse)
 def link_get(request: Request, token: Optional[str] = None):

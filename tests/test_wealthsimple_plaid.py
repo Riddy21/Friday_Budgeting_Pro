@@ -48,6 +48,7 @@ class TestNoInstitutionFiltering(unittest.TestCase):
 
         with patch.dict(os.environ, _env(), clear=False):
             from server.providers.plaid import PlaidProvider
+
             PlaidProvider().create_link_token()
 
         call_args = api.link_token_create.call_args
@@ -74,6 +75,7 @@ class TestNoInstitutionFiltering(unittest.TestCase):
 
         with patch.dict(os.environ, _env(), clear=False):
             from server.providers.plaid import PlaidProvider
+
             PlaidProvider().create_link_token()
 
         call_args = api.link_token_create.call_args
@@ -92,12 +94,11 @@ class TestNoInstitutionFiltering(unittest.TestCase):
     def test_link_token_creation_succeeds(self, mock_api_cls):
         """Smoke test: create_link_token() returns a non-empty token string."""
         api = _mock_plaid_api(mock_api_cls)
-        api.link_token_create.return_value = {
-            "link_token": "link-sandbox-wealthsimple-test-token"
-        }
+        api.link_token_create.return_value = {"link_token": "link-sandbox-wealthsimple-test-token"}
 
         with patch.dict(os.environ, _env(), clear=False):
             from server.providers.plaid import PlaidProvider
+
             token = PlaidProvider().create_link_token(user_id="wealthsimple-test-user")
 
         self.assertIsInstance(token, str)
@@ -116,6 +117,7 @@ class TestNoInstitutionFiltering(unittest.TestCase):
 
         with patch.dict(os.environ, _env(), clear=False):
             from server.providers.plaid import PlaidProvider
+
             token = PlaidProvider().create_link_token(user_id="ridvan-wealthsimple-cash")
 
         call_args = api.link_token_create.call_args

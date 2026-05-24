@@ -26,10 +26,10 @@ import keyring
 import pytest
 from keyring.backend import KeyringBackend
 
-
 # ---------------------------------------------------------------------------
 # Helpers: decide at collection time whether to skip
 # ---------------------------------------------------------------------------
+
 
 def _sandbox_creds_available() -> bool:
     return (
@@ -42,6 +42,7 @@ def _sandbox_creds_available() -> bool:
 # ---------------------------------------------------------------------------
 # In-memory keyring (same pattern as tests/test_crypto.py)
 # ---------------------------------------------------------------------------
+
 
 class _InMemoryKeyring(KeyringBackend):
     """Simple dict-backed keyring — avoids touching the real macOS Keychain."""
@@ -72,6 +73,7 @@ def in_memory_keyring():
     keyring.set_keyring(mem)
 
     import server.crypto as crypto_mod
+
     crypto_mod._fernet = None
 
     yield mem
@@ -83,6 +85,7 @@ def in_memory_keyring():
 # ---------------------------------------------------------------------------
 # E2E test
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.e2e
 @pytest.mark.slow
@@ -104,13 +107,13 @@ def test_plaid_full_sandbox_flow(in_memory_keyring):
     5. get_item_status          → returns a dict (may have None error fields)
     6. crypto round-trip        → encrypt(access_token) → decrypt → original
     """
+    from plaid.model.products import Products
     from plaid.model.sandbox_public_token_create_request import (
         SandboxPublicTokenCreateRequest,
     )
-    from plaid.model.products import Products
 
+    from server.crypto import decrypt, encrypt
     from server.providers.plaid import PlaidProvider
-    from server.crypto import encrypt, decrypt
 
     provider = PlaidProvider()
 
@@ -118,9 +121,9 @@ def test_plaid_full_sandbox_flow(in_memory_keyring):
     # Step 1: create_link_token
     # ------------------------------------------------------------------
     link_token = provider.create_link_token()
-    assert isinstance(link_token, str) and link_token, (
-        "create_link_token() must return a non-empty string"
-    )
+    assert (
+        isinstance(link_token, str) and link_token
+    ), "create_link_token() must return a non-empty string"
 
     # ------------------------------------------------------------------
     # Step 2: create a sandbox public token (bypasses the Link UI)
@@ -133,20 +136,20 @@ def test_plaid_full_sandbox_flow(in_memory_keyring):
     )
     sandbox_response = api_client.sandbox_public_token_create(sandbox_request)
     public_token = sandbox_response["public_token"]
-    assert isinstance(public_token, str) and public_token, (
-        "sandbox_public_token_create() must return a non-empty public_token"
-    )
+    assert (
+        isinstance(public_token, str) and public_token
+    ), "sandbox_public_token_create() must return a non-empty public_token"
 
     # ------------------------------------------------------------------
     # Step 3: exchange_public_token
     # ------------------------------------------------------------------
     exchange_result = provider.exchange_public_token(public_token)
-    assert "access_token" in exchange_result and exchange_result["access_token"], (
-        "exchange_public_token() must include a non-empty access_token"
-    )
-    assert "item_id" in exchange_result and exchange_result["item_id"], (
-        "exchange_public_token() must include a non-empty item_id"
-    )
+    assert (
+        "access_token" in exchange_result and exchange_result["access_token"]
+    ), "exchange_public_token() must include a non-empty access_token"
+    assert (
+        "item_id" in exchange_result and exchange_result["item_id"]
+    ), "exchange_public_token() must include a non-empty item_id"
     access_token = exchange_result["access_token"]
 
     # ------------------------------------------------------------------
@@ -170,10 +173,8 @@ def test_plaid_full_sandbox_flow(in_memory_keyring):
     # Step 6: crypto round-trip (in-memory keyring, no macOS Keychain I/O)
     # ------------------------------------------------------------------
     ciphertext = encrypt(access_token)
-    assert isinstance(ciphertext, str) and ciphertext, (
-        "encrypt() must return a non-empty string"
-    )
+    assert isinstance(ciphertext, str) and ciphertext, "encrypt() must return a non-empty string"
     decrypted = decrypt(ciphertext)
-    assert decrypted == access_token, (
-        "decrypt(encrypt(access_token)) must equal the original access_token"
-    )
+    assert (
+        decrypted == access_token
+    ), "decrypt(encrypt(access_token)) must equal the original access_token"

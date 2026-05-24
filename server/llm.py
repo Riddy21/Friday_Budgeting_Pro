@@ -115,9 +115,7 @@ def chat(messages: list[dict], temperature: float = 0.0) -> str:
         ConnectionError,
         OSError,
     ) as exc:
-        logger.warning(
-            "OpenClaw local API unreachable (%s); falling back to direct SDK.", exc
-        )
+        logger.warning("OpenClaw local API unreachable (%s); falling back to direct SDK.", exc)
     except _UnparseableResponseError as exc:
         logger.warning(
             "OpenClaw response could not be parsed (%s); falling back to direct SDK.",
@@ -167,9 +165,7 @@ def _chat_openclaw(messages: list[dict], temperature: float) -> str:
     # Try known response shapes in order of likelihood
     text = _extract_content(data)
     if text is None:
-        raise _UnparseableResponseError(
-            f"Unrecognised response shape: {list(data.keys())!r}"
-        )
+        raise _UnparseableResponseError(f"Unrecognised response shape: {list(data.keys())!r}")
     return text
 
 
@@ -226,6 +222,7 @@ def _chat_sdk_fallback(messages: list[dict], temperature: float) -> str:
     if not provider:
         try:
             import anthropic as _  # noqa: F401
+
             provider = "anthropic"
         except ImportError:
             pass
@@ -233,6 +230,7 @@ def _chat_sdk_fallback(messages: list[dict], temperature: float) -> str:
     if not provider:
         try:
             import openai as _  # noqa: F401
+
             provider = "openai"
         except ImportError:
             pass

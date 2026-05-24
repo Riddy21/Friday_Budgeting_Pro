@@ -6,6 +6,7 @@ location per the OpenClaw skill spec). package.json now only carries the
 high-level package identity (name, version, description, keywords, repo,
 slug, homepage) plus a pointer to SKILL.md via `openclaw.skillFile`.
 """
+
 import json
 import os
 

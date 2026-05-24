@@ -121,9 +121,7 @@ def classify_with_llm(
     # ------------------------------------------------------------------
     # 1. Build context: full ledger tree
     # ------------------------------------------------------------------
-    ledgers_rows = conn.execute(
-        "SELECT id, name FROM ledgers ORDER BY name"
-    ).fetchall()
+    ledgers_rows = conn.execute("SELECT id, name FROM ledgers ORDER BY name").fetchall()
 
     line_items_rows = conn.execute(
         "SELECT li.id, li.name, li.ledger_id, l.name AS ledger_name"
@@ -145,9 +143,7 @@ def classify_with_llm(
     # ------------------------------------------------------------------
     # 2. Build context: classification hints
     # ------------------------------------------------------------------
-    hints_rows = conn.execute(
-        "SELECT text FROM classification_hints ORDER BY id"
-    ).fetchall()
+    hints_rows = conn.execute("SELECT text FROM classification_hints ORDER BY id").fetchall()
     hints_text = "\n".join(f"  - {r['text']}" for r in hints_rows)
     if not hints_text:
         hints_text = "  (none)"
@@ -159,7 +155,9 @@ def classify_with_llm(
     if isinstance(transaction, dict):
         bank_account_id = transaction.get("bank_account_id")
     else:
-        cols = [d[0] for d in transaction.description] if hasattr(transaction, "description") else []
+        cols = (
+            [d[0] for d in transaction.description] if hasattr(transaction, "description") else []
+        )
         bank_account_id = transaction["bank_account_id"] if "bank_account_id" in cols else None
     if bank_account_id:
         acct_row = conn.execute(
@@ -211,9 +209,7 @@ def classify_with_llm(
     )
 
     account_context_section = (
-        f"## Account Context\n  {account_description}\n\n"
-        if account_description
-        else ""
+        f"## Account Context\n  {account_description}\n\n" if account_description else ""
     )
 
     user_msg = (
@@ -230,7 +226,7 @@ def classify_with_llm(
 
     messages = [
         {"role": "system", "content": system_msg},
-        {"role": "user",   "content": user_msg},
+        {"role": "user", "content": user_msg},
     ]
 
     # ------------------------------------------------------------------
@@ -241,14 +237,10 @@ def classify_with_llm(
     try:
         parsed = json.loads(raw)
     except json.JSONDecodeError as exc:
-        raise ValueError(
-            f"LLM returned non-JSON response: {raw!r}"
-        ) from exc
+        raise ValueError(f"LLM returned non-JSON response: {raw!r}") from exc
 
     if "line_item_id" not in parsed:
-        raise ValueError(
-            f"LLM JSON missing 'line_item_id' key: {parsed!r}"
-        )
+        raise ValueError(f"LLM JSON missing 'line_item_id' key: {parsed!r}")
 
     line_item_id: str = parsed["line_item_id"]
     confidence: float = float(parsed.get("confidence", 0.0))
@@ -281,12 +273,12 @@ def classify_with_llm(
 
     return {
         "transaction_id": transaction["id"],
-        "ledger_id":      ledger_id,
-        "line_item_id":   line_item_id,
-        "amount":         transaction["amount"],
-        "source":         "llm",
-        "confidence":     confidence,
-        "reviewed":       0,
+        "ledger_id": ledger_id,
+        "line_item_id": line_item_id,
+        "amount": transaction["amount"],
+        "source": "llm",
+        "confidence": confidence,
+        "reviewed": 0,
     }
 
 
@@ -340,6 +332,7 @@ def safe_classify(
             fails validation.
     """
     import logging
+
     logger = logging.getLogger(__name__)
 
     try:
@@ -354,13 +347,13 @@ def safe_classify(
         if not fallback_to_review:
             raise
         return {
-            "transaction_id":   transaction["id"],
-            "ledger_id":        None,
-            "line_item_id":     None,
-            "amount":           transaction["amount"],
-            "source":           "llm-rejected",
-            "confidence":       0.0,
-            "reviewed":         0,
+            "transaction_id": transaction["id"],
+            "ledger_id": None,
+            "line_item_id": None,
+            "amount": transaction["amount"],
+            "source": "llm-rejected",
+            "confidence": 0.0,
+            "reviewed": 0,
             "rejection_reason": reason,
         }
 
@@ -471,9 +464,9 @@ def maybe_promote_to_rule(
     if existing is not None:
         # Do NOT insert another log row for an already-existing rule.
         return {
-            "id":               existing[0],
+            "id": existing[0],
             "merchant_pattern": existing[1],
-            "line_item_id":     existing[2],
+            "line_item_id": existing[2],
         }
 
     # ------------------------------------------------------------------
@@ -529,7 +522,7 @@ def maybe_promote_to_rule(
     conn.commit()
 
     return {
-        "id":               new_id,
+        "id": new_id,
         "merchant_pattern": merchant,
-        "line_item_id":     target_line_item_id,
+        "line_item_id": target_line_item_id,
     }

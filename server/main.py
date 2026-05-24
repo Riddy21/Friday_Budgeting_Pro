@@ -8,28 +8,27 @@ Real implementations land in later tickets.
 from __future__ import annotations
 
 import json as _json
+import logging
+import os
 import subprocess as _subprocess
+import tempfile
 import time as _time
 import uuid
 from datetime import datetime as _datetime
-from typing import List, Optional
-
-import logging
-import os
-import tempfile
 from pathlib import Path
+from typing import List, Optional
 
 import fastmcp
 
-import server.excel_export as excel_export
-
-from server.db import get_db, transaction as db_txn
-from server.sync_lock import sync_lock, LockBusy
-from server.classifier import apply_rules
-import server.paths
 import server.crypto
-from server.providers.plaid import PlaidProvider
+import server.excel_export as excel_export
 import server.health_monitor
+import server.paths
+from server.classifier import apply_rules
+from server.db import get_db
+from server.db import transaction as db_txn
+from server.providers.plaid import PlaidProvider
+from server.sync_lock import LockBusy, sync_lock
 from ui.auth import get_active_user_id
 
 _plaid = PlaidProvider()
@@ -264,7 +263,7 @@ def apply_initial_setup(
 
     # Build the full ledger spec: Personal first, then any extras.
     ledger_specs = [{"name": "Personal", "line_items": PERSONAL_LINE_ITEMS}]
-    for el in (extra_ledgers or []):
+    for el in extra_ledgers or []:
         items = [(li["name"], li["type"]) for li in el.get("line_items", [])]
         ledger_specs.append({"name": el["name"], "line_items": items})
 
@@ -317,7 +316,7 @@ def apply_initial_setup(
                     line_items_created += 1
 
             # Upsert hints — de-dupe on exact text.
-            for hint_text in (hints or []):
+            for hint_text in hints or []:
                 if uid:
                     existing_hint = conn.execute(
                         "SELECT id FROM classification_hints WHERE text = ? AND user_id = ?",
@@ -356,18 +355,25 @@ def apply_initial_setup(
 
 
 @mcp.tool
-def start_link() -> dict:
+def start_link(plaid_env: str = "sandbox") -> dict:
     """Return a URL to open Plaid Link.
 
     Calls PlaidProvider.create_link_token() and returns a URL pointing at
     the (future) UI link page (served by #14).
+
+    Parameters
+    ----------
+    plaid_env : str
+        Plaid environment for this link session: ``'sandbox'``,
+        ``'development'``, or ``'production'``.  Defaults to ``'sandbox'``.
     """
-    link_token = _plaid.create_link_token()
-    return {"url": f"http://127.0.0.1:6789/link?token={link_token}"}
+    provider = PlaidProvider(env=plaid_env)
+    link_token = provider.create_link_token()
+    return {"url": f"http://127.0.0.1:6789/link?token={link_token}", "plaid_env": provider.env}
 
 
 @mcp.tool
-def complete_link(public_token: str) -> dict:
+def complete_link(public_token: str, plaid_env: str = "sandbox") -> dict:
     """Exchange a Plaid public token and store the access token.
 
     Exchanges the public_token for a Plaid access_token + item_id, encrypts
@@ -376,8 +382,16 @@ def complete_link(public_token: str) -> dict:
 
     institution_name is left NULL for now — fetching it requires
     Plaid /institutions/get_by_id which is out of scope; see issue #34.
+
+    Parameters
+    ----------
+    plaid_env : str
+        Plaid environment that was used for the Link session.  Must match the
+        env of the link token issued by start_link.  Stored on the connection
+        row so every subsequent sync uses the correct environment.
     """
-    result = _plaid.exchange_public_token(public_token)
+    provider = PlaidProvider(env=plaid_env)
+    result = provider.exchange_public_token(public_token)
     access_token = result["access_token"]
     item_id = result["item_id"]
 
@@ -390,10 +404,10 @@ def complete_link(public_token: str) -> dict:
         conn.execute(
             """
             INSERT INTO bank_connections
-                (id, plaid_item_id, plaid_access_token_encrypted, status, user_id)
-            VALUES (?, ?, ?, 'active', ?)
+                (id, plaid_item_id, plaid_access_token_encrypted, status, user_id, plaid_env)
+            VALUES (?, ?, ?, 'active', ?, ?)
             """,
-            (connection_id, item_id, encrypted_token, uid),
+            (connection_id, item_id, encrypted_token, uid, provider.env),
         )
         conn.commit()
     finally:
@@ -583,7 +597,7 @@ def sync() -> dict:
                 )
 
                 active_conns = db_conn.execute(
-                    "SELECT id, plaid_access_token_encrypted "
+                    "SELECT id, plaid_access_token_encrypted, plaid_env "
                     "FROM bank_connections WHERE status = 'active'"
                 ).fetchall()
 
@@ -591,6 +605,16 @@ def sync() -> dict:
                     connection_id = bc["id"]
                     encrypted_token = bc["plaid_access_token_encrypted"]
                     access_token = server.crypto.decrypt(encrypted_token)
+                    conn_plaid_env = bc["plaid_env"] or "sandbox"
+
+                    # Create a per-connection provider locked to the stored env.
+                    conn_provider = PlaidProvider(env=conn_plaid_env)
+                    if conn_provider.env != conn_plaid_env:
+                        raise ValueError(
+                            f"Environment mismatch: connection {connection_id!r} "
+                            f"was linked in env '{conn_plaid_env}' but resolved "
+                            f"provider env is '{conn_provider.env}'"
+                        )
 
                     cursor_row = db_conn.execute(
                         "SELECT cursor FROM sync_cursors WHERE connection_id = ?",
@@ -599,7 +623,7 @@ def sync() -> dict:
                     cursor = cursor_row["cursor"] if cursor_row else None
 
                     try:
-                        result = _plaid.sync_transactions(access_token, cursor)
+                        result = conn_provider.sync_transactions(access_token, cursor)
                     except Exception as e:
                         if _is_reauth_error(e):
                             with db_txn(db_conn):
@@ -982,14 +1006,14 @@ def summary(period: str) -> dict:
     import re as _re
 
     today = _datetime.now().date()
-    today_str = today.isoformat()          # "YYYY-MM-DD"
-    year_str = today_str[:4]               # "YYYY"
-    month_prefix = today_str[:7]           # "YYYY-MM"
+    today_str = today.isoformat()  # "YYYY-MM-DD"
+    year_str = today_str[:4]  # "YYYY"
+    month_prefix = today_str[:7]  # "YYYY-MM"
 
     # Build a WHERE clause fragment and params for ``transactions.date``.
     # We use LIKE patterns wherever possible (index-friendly for TEXT dates).
-    _MONTH_RE = _re.compile(r'^\d{4}-(?:0[1-9]|1[0-2])$')
-    _YEAR_RE  = _re.compile(r'^\d{4}$')
+    _MONTH_RE = _re.compile(r"^\d{4}-(?:0[1-9]|1[0-2])$")
+    _YEAR_RE = _re.compile(r"^\d{4}$")
 
     if period == "month":
         date_filter = "t.date LIKE ?"
@@ -1044,9 +1068,9 @@ def summary(period: str) -> dict:
         by_line_item.append(
             {
                 "line_item": row["line_item_name"],
-                "ledger":    row["ledger_name"],
-                "type":      row["item_type"],
-                "total":     total,
+                "ledger": row["ledger_name"],
+                "type": row["item_type"],
+                "total": total,
             }
         )
         if row["item_type"] == "income":
@@ -1055,10 +1079,10 @@ def summary(period: str) -> dict:
             expenses += total
 
     return {
-        "period":       period,
-        "income":       round(income, 2),
-        "expenses":     round(expenses, 2),
-        "net":          round(income - expenses, 2),
+        "period": period,
+        "income": round(income, 2),
+        "expenses": round(expenses, 2),
+        "net": round(income - expenses, 2),
         "by_line_item": by_line_item,
     }
 
@@ -1068,6 +1092,7 @@ def export_excel(years: Optional[List] = None) -> dict:
     """Generate and return an Excel export of transactions."""
     server.paths.ensure_app_dir()
     import datetime
+
     timestamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
     filename = f"friday-bp-{timestamp}.xlsx"
     path = server.paths.EXPORTS_DIR / filename
@@ -1093,8 +1118,7 @@ def list_auto_promoted_rules() -> dict:
     """
     conn = get_db(server.paths.DB_PATH)
     try:
-        rows = conn.execute(
-            """
+        rows = conn.execute("""
             SELECT apl.id,
                    apl.rule_id,
                    apl.merchant,
@@ -1105,18 +1129,17 @@ def list_auto_promoted_rules() -> dict:
               FROM auto_promoted_rules_log apl
               LEFT JOIN routing_rules rr ON rr.id = apl.rule_id
              ORDER BY apl.created_at DESC
-            """
-        ).fetchall()
+            """).fetchall()
         return {
             "rules": [
                 {
-                    "id":                     row["id"],
-                    "rule_id":                row["rule_id"],
-                    "merchant":               row["merchant"],
-                    "line_item_id":           row["line_item_id"],
+                    "id": row["id"],
+                    "rule_id": row["rule_id"],
+                    "merchant": row["merchant"],
+                    "line_item_id": row["line_item_id"],
                     "source_transaction_ids": _json.loads(row["source_transaction_ids"]),
-                    "created_at":             row["created_at"],
-                    "rule_still_active":      bool(row["rule_still_active"]),
+                    "created_at": row["created_at"],
+                    "rule_still_active": bool(row["rule_still_active"]),
                 }
                 for row in rows
             ]
@@ -1218,16 +1241,10 @@ def configure_plaid(
     if not secret:
         raise ValueError("secret must be non-empty")
     if env not in _VALID_ENVS:
-        raise ValueError(
-            f"env must be one of {sorted(_VALID_ENVS)!r}, got {env!r}"
-        )
+        raise ValueError(f"env must be one of {sorted(_VALID_ENVS)!r}, got {env!r}")
 
     env_path = project_root / ".env"
-    content = (
-        f"PLAID_CLIENT_ID={client_id}\n"
-        f"PLAID_SECRET={secret}\n"
-        f"PLAID_ENV={env}\n"
-    )
+    content = f"PLAID_CLIENT_ID={client_id}\n" f"PLAID_SECRET={secret}\n" f"PLAID_ENV={env}\n"
 
     # Atomic write: write to a sibling temp file, then os.replace into place.
     env_path.parent.mkdir(parents=True, exist_ok=True)
@@ -1291,9 +1308,7 @@ def get_ui_url(page: str = None) -> dict:
         return {"url": base}
 
     if page not in _VALID_PAGES:
-        raise ValueError(
-            f"page must be one of {sorted(_VALID_PAGES)!r}, got {page!r}"
-        )
+        raise ValueError(f"page must be one of {sorted(_VALID_PAGES)!r}, got {page!r}")
 
     return {"url": f"{base}/{page}"}
 

@@ -16,7 +16,7 @@ import uuid
 from typing import Optional
 
 from argon2 import PasswordHasher
-from argon2.exceptions import VerifyMismatchError, VerificationError, InvalidHashError
+from argon2.exceptions import InvalidHashError, VerificationError, VerifyMismatchError
 from fastapi import Request
 
 from server.db import get_db
@@ -30,12 +30,14 @@ _ph = PasswordHasher()
 
 # ── Time helper ──────────────────────────────────────────────────────────
 
+
 def _now() -> int:
     """Return the current Unix timestamp as an integer."""
     return int(time.time())
 
 
 # ── Password helpers ──────────────────────────────────────────────────────
+
 
 def hash_password(plaintext: str) -> str:
     """Hash *plaintext* with argon2id and return the encoded hash string."""
@@ -52,6 +54,7 @@ def verify_password(plaintext: str, stored_hash: str) -> bool:
 
 # ── User helpers ──────────────────────────────────────────────────────────
 
+
 def create_user(db_path, username: str, password_plaintext: str) -> str:
     """Create a new user and return the new user_id.
 
@@ -62,9 +65,7 @@ def create_user(db_path, username: str, password_plaintext: str) -> str:
     now = _now()
     conn = get_db(db_path)
     try:
-        existing = conn.execute(
-            "SELECT id FROM users WHERE username = ?", (username,)
-        ).fetchone()
+        existing = conn.execute("SELECT id FROM users WHERE username = ?", (username,)).fetchone()
         if existing:
             raise ValueError(f"Username {username!r} is already taken")
         conn.execute(
@@ -174,9 +175,7 @@ def delete_user(db_path, user_id: str) -> None:
         # Delete user's ledgers and line items
         ledger_ids = [
             r["id"]
-            for r in conn.execute(
-                "SELECT id FROM ledgers WHERE user_id = ?", (user_id,)
-            ).fetchall()
+            for r in conn.execute("SELECT id FROM ledgers WHERE user_id = ?", (user_id,)).fetchall()
         ]
         if ledger_ids:
             l_placeholders = ",".join("?" * len(ledger_ids))
@@ -229,6 +228,7 @@ def has_any_user(db_path) -> bool:
 
 # ── Session helpers ───────────────────────────────────────────────────────
 
+
 def create_session(db_path, user_agent: Optional[str] = None, user_id: Optional[str] = None) -> str:
     """Insert a new session row and return the session token.
 
@@ -271,9 +271,7 @@ def check_session(request: Request, db_path) -> bool:
         return False
     conn = get_db(db_path)
     try:
-        row = conn.execute(
-            "SELECT id FROM sessions WHERE id = ?", (token,)
-        ).fetchone()
+        row = conn.execute("SELECT id FROM sessions WHERE id = ?", (token,)).fetchone()
         if row is None:
             return False
         now = _now()
@@ -296,9 +294,7 @@ def get_session_user_id(request: Request, db_path) -> Optional[str]:
         return None
     conn = get_db(db_path)
     try:
-        row = conn.execute(
-            "SELECT user_id FROM sessions WHERE id = ?", (token,)
-        ).fetchone()
+        row = conn.execute("SELECT user_id FROM sessions WHERE id = ?", (token,)).fetchone()
         return row["user_id"] if row else None
     except Exception:
         return None
@@ -320,9 +316,7 @@ def get_active_user_id(db_path) -> Optional[str]:
         if row and row["user_id"]:
             return row["user_id"]
         # Fallback: first user
-        row2 = conn.execute(
-            "SELECT id FROM users ORDER BY created_at LIMIT 1"
-        ).fetchone()
+        row2 = conn.execute("SELECT id FROM users ORDER BY created_at LIMIT 1").fetchone()
         return row2["id"] if row2 else None
     finally:
         conn.close()
@@ -333,6 +327,7 @@ def get_active_user_id(db_path) -> Optional[str]:
 # to the app_config table.  New code should use the user-centric helpers
 # above.
 
+
 def get_password_hash(db_path) -> Optional[str]:
     """Return the stored UI password hash, or None if not yet set.
 
@@ -341,16 +336,12 @@ def get_password_hash(db_path) -> Optional[str]:
     conn = get_db(db_path)
     try:
         # Prefer users table
-        row = conn.execute(
-            "SELECT password_hash FROM users ORDER BY created_at LIMIT 1"
-        ).fetchone()
+        row = conn.execute("SELECT password_hash FROM users ORDER BY created_at LIMIT 1").fetchone()
         if row and row[0]:
             return row[0]
         # Legacy fallback
         try:
-            row2 = conn.execute(
-                "SELECT ui_password_hash FROM app_config WHERE id = 1"
-            ).fetchone()
+            row2 = conn.execute("SELECT ui_password_hash FROM app_config WHERE id = 1").fetchone()
             if row2 and row2[0]:
                 return row2[0]
         except Exception:
@@ -369,9 +360,7 @@ def set_password_hash(db_path, hashed: str) -> None:
     now = _now()
     conn = get_db(db_path)
     try:
-        row = conn.execute(
-            "SELECT id FROM users ORDER BY created_at LIMIT 1"
-        ).fetchone()
+        row = conn.execute("SELECT id FROM users ORDER BY created_at LIMIT 1").fetchone()
         if row:
             conn.execute(
                 "UPDATE users SET password_hash = ? WHERE id = ?",

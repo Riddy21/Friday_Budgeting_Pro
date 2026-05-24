@@ -12,14 +12,14 @@ from pathlib import Path
 
 import pytest
 
+import server.main as main_module
 import server.paths
 from server.db import get_db, init_db
-import server.main as main_module
-
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _uid() -> str:
     return str(uuid.uuid4())
@@ -121,6 +121,7 @@ def seeded_db(tmp_path: Path, monkeypatch):
 # Tests: list() with no filters
 # ---------------------------------------------------------------------------
 
+
 def test_list_no_filters_returns_all(seeded_db):
     result = main_module.list()
     assert "entries" in result
@@ -130,6 +131,7 @@ def test_list_no_filters_returns_all(seeded_db):
 # ---------------------------------------------------------------------------
 # Tests: list() with individual filters
 # ---------------------------------------------------------------------------
+
 
 def test_list_filter_date_from(seeded_db):
     result = main_module.list(filters={"date_from": "2024-02-01"})
@@ -211,6 +213,7 @@ def test_list_filter_source_manual(seeded_db):
 # Tests: get_needs_review()
 # ---------------------------------------------------------------------------
 
+
 def test_get_needs_review_returns_only_unreviewed(seeded_db):
     result = main_module.get_needs_review()
     entries = result["entries"]
@@ -225,10 +228,15 @@ def test_get_needs_review_shape(seeded_db):
     entries = result["entries"]
     assert len(entries) > 0
     required_fields = {
-        "id", "transaction_id", "ledger_id", "line_item_id",
-        "amount", "source", "reviewed", "date", "merchant",
+        "id",
+        "transaction_id",
+        "ledger_id",
+        "line_item_id",
+        "amount",
+        "source",
+        "reviewed",
+        "date",
+        "merchant",
     }
     for e in entries:
-        assert required_fields.issubset(e.keys()), (
-            f"Missing fields: {required_fields - e.keys()}"
-        )
+        assert required_fields.issubset(e.keys()), f"Missing fields: {required_fields - e.keys()}"
