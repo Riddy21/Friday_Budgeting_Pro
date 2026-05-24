@@ -42,9 +42,11 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Resp
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
+from dotenv import load_dotenv as _load_dotenv; _load_dotenv()
 import server.paths as _paths
-from server.plaid_client import create_link_token, exchange_public_token
+from server.providers.plaid import PlaidProvider as _PlaidProvider
 from server.crypto import encrypt
+_plaid = _PlaidProvider()
 from server.db import get_db, init_db
 from ui.auth import (
     SESSION_COOKIE,
@@ -573,7 +575,7 @@ def link_start(request: Request):
     if not _is_authenticated(request):
         return _redirect("/login")
     try:
-        token = create_link_token()
+        token = _plaid.create_link_token()
         return _redirect(f"/link?token={token}")
     except Exception as exc:
         return HTMLResponse(f"<h2>Could not start Plaid Link</h2><pre>{exc}</pre><p><a href='/profile'>Back</a></p>", status_code=500)
@@ -589,7 +591,7 @@ async def link_complete(request: Request):
         return HTMLResponse("<h2>Missing token</h2>", status_code=400)
     try:
         import uuid as _uuid
-        result = exchange_public_token(public_token)
+        result = _plaid.exchange_public_token(public_token)
         conn = get_db(_db_path())
         try:
             conn.execute(
