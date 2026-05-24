@@ -71,6 +71,8 @@ templates = Jinja2Templates(directory=str(_TEMPLATE_DIR))
 app.mount("/static", StaticFiles(directory=str(_STATIC_DIR)), name="static")
 
 
+_SETUP_COMPLETE_COOKIE = "friday_bp_setup"
+
 # ── Helpers ─────────────────────────────────────────────────────────────────
 
 def _db_path() -> Path:
@@ -86,55 +88,83 @@ def _is_authenticated(request: Request) -> bool:
     return check_session(request, _db_path())
 
 
-def _redirect(url: str) -> RedirectResponse:
-    return RedirectResponse(url=url, status_code=302)
-
-
-def _get_notification_pref() -> str:
-    """Read notification_pref from app_config, default 'openclaw'."""
-    conn = get_db(_db_path())
+def _check_raw_session(db_path, token: str) -> bool:
+    """Validate a raw session token without a Request object."""
+    from ui.auth import _now, _SESSION_TTL
+    conn = get_db(db_path)
     try:
         row = conn.execute(
-            "SELECT notification_pref FROM app_config WHERE id = 1"
+            "SELECT expires_at FROM sessions WHERE id = ?", (token,)
         ).fetchone()
         if row is None:
-            return "openclaw"
-        return row["notification_pref"] or "openclaw"
+            return False
+        now = _now()
+        if now > row["expires_at"]:
+            conn.execute("DELETE FROM sessions WHERE id = ?", (token,))
+            conn.commit()
+            return False
+        conn.execute(
+            "UPDATE sessions SET last_seen_at=?, expires_at=? WHERE id=?",
+            (now, now + _SESSION_TTL, token),
+        )
+        conn.commit()
+        return True
     except Exception:
-        # Column may not exist until a migration; treat as unset.
-        return "openclaw"
+        return False
     finally:
         conn.close()
 
 
-def _set_notification_pref(pref: str) -> None:
-    """Persist notification_pref in app_config.
+def _redirect(url: str) -> RedirectResponse:
+    return RedirectResponse(url=url, status_code=302)
 
-    NOTE: The app_config table was created by #52 with only ui_password_hash
-    and ui_password_set_at.  We add notification_pref via ALTER TABLE IF NOT
-    EXISTS (idempotent).  New columns for linked accounts etc. wait for #47.
-    """
+
+_CHANNEL_TO_PREF = {"openclaw_chat": "openclaw", "in_ui": "ui", "macos": "macos"}
+_PREF_TO_CHANNEL = {"openclaw": "openclaw_chat", "ui": "in_ui", "macos": "macos",
+                    "openclaw_chat": "openclaw_chat", "in_ui": "in_ui"}
+
+
+def _get_notification_channel() -> str:
     conn = get_db(_db_path())
     try:
-        # Ensure the column exists (SQLite doesn't support IF NOT EXISTS on
-        # ALTER TABLE, so we catch the OperationalError on duplicate).
         try:
-            conn.execute(
-                "ALTER TABLE app_config ADD COLUMN notification_pref TEXT"
-            )
-            conn.commit()
-        except Exception:
-            pass  # Column already exists
+            row = conn.execute("SELECT notification_channel FROM app_config WHERE id=1").fetchone()
+            if row and row["notification_channel"]:
+                return row["notification_channel"]
+        except Exception: pass
+        try:
+            row = conn.execute("SELECT notification_pref FROM app_config WHERE id=1").fetchone()
+            if row and row["notification_pref"]:
+                return _PREF_TO_CHANNEL.get(row["notification_pref"], row["notification_pref"])
+        except Exception: pass
+        return "openclaw_chat"
+    finally:
+        conn.close()
 
+
+def _get_notification_pref() -> str:
+    return _CHANNEL_TO_PREF.get(_get_notification_channel(), "openclaw")
+
+
+def _set_notification_channel(channel: str) -> None:
+    conn = get_db(_db_path())
+    try:
+        try:
+            conn.execute("ALTER TABLE app_config ADD COLUMN notification_channel TEXT")
+            conn.commit()
+        except Exception: pass
         conn.execute(
-            "INSERT INTO app_config (id, notification_pref) VALUES (1, ?) "
-            "ON CONFLICT(id) DO UPDATE SET notification_pref=excluded.notification_pref",
-            (pref,),
+            "INSERT INTO app_config (id, notification_channel) VALUES (1,?) "
+            "ON CONFLICT(id) DO UPDATE SET notification_channel=excluded.notification_channel",
+            (channel,),
         )
         conn.commit()
     finally:
         conn.close()
 
+
+def _set_notification_pref(pref: str) -> None:
+    _set_notification_channel(_PREF_TO_CHANNEL.get(pref, pref))
 
 def _get_ledgers() -> list[dict]:
     """Query ledgers + line_items from the DB and return a list of dicts."""
@@ -228,129 +258,86 @@ def index(request: Request):
 
 # ── /setup ───────────────────────────────────────────────────────────────────
 
+
+def _openclaw_home_exists() -> bool:
+    return Path(os.path.expanduser("~/.openclaw")).is_dir()
+
+
 @app.get("/setup", response_class=HTMLResponse)
 def setup_get(request: Request):
-    """Render the setup wizard step 1.
-
-    Only accessible when the password has not been set yet.  If already set,
-    return 404 so the wizard cannot be re-run.
-    """
     if _password_is_set():
         return HTMLResponse(status_code=404, content="Setup already complete.")
-    wizard_token = _get_wizard_token(request)
-    if not wizard_token:
-        wizard_token = secrets.token_hex(16)
-    state = _wizard_state.get(wizard_token, {})
-    step = state.get("step", 1)
-    resp = templates.TemplateResponse(
-        request,
-        "setup.html",
-        {"step": step, "error": state.get("error")},
-    )
-    _update_wizard(resp, wizard_token, {**state, "step": step})
+    tok = _get_wizard_token(request) or secrets.token_hex(16)
+    dch = "openclaw_chat" if _openclaw_home_exists() else "macos"
+    resp = templates.TemplateResponse(request, "setup.html",
+        {"step": 1, "error": None, "default_channel": dch})
+    _update_wizard(resp, tok, {"step": 1, "wizard_active": False})
     return resp
 
 
 @app.post("/setup/{step}", response_class=HTMLResponse)
 async def setup_post(request: Request, step: int):
-    """Handle each wizard step.
-
-    Steps 1–3 collect data and advance.  Step 4 is the bank-link step;
-    for THIS PR we call apply_initial_setup() and finalise password.
-
-    apply_initial_setup() is the MCP tool from server.main — we call the
-    underlying DB writes directly here to avoid circular import with FastMCP
-    while still exercising the same logic.
-    """
-    if _password_is_set():
+    tok = _get_wizard_token(request) or secrets.token_hex(16)
+    state = _wizard_state.get(tok, {})
+    wip = bool(state) and state.get("wizard_active", False)
+    if _password_is_set() and not wip:
         return HTMLResponse(status_code=404, content="Setup already complete.")
-
     form = await request.form()
-    wizard_token = _get_wizard_token(request) or secrets.token_hex(16)
-    state = _wizard_state.get(wizard_token, {})
-
     if step == 1:
-        password = (form.get("password") or "").strip()
-        confirm = (form.get("password_confirm") or "").strip()
-        if len(password) < 8:
-            state = {**state, "step": 1, "error": "Password must be at least 8 characters."}
-            resp = templates.TemplateResponse(
-                request,
-                "setup.html",
-                {"step": 1, "error": state["error"]},
-            )
-            _update_wizard(resp, wizard_token, state)
+        pw = (form.get("password") or "").strip()
+        cf = (form.get("password_confirm") or "").strip()
+        dch = "openclaw_chat" if _openclaw_home_exists() else "macos"
+        if len(pw) < 8:
+            err = "Password must be at least 8 characters."
+            resp = templates.TemplateResponse(request, "setup.html",
+                {"step": 1, "error": err, "default_channel": dch})
+            _update_wizard(resp, tok, {"step": 1, "wizard_active": False, "error": err})
             return resp
-        if password != confirm:
-            state = {**state, "step": 1, "error": "Passwords do not match."}
-            resp = templates.TemplateResponse(
-                request,
-                "setup.html",
-                {"step": 1, "error": state["error"]},
-            )
-            _update_wizard(resp, wizard_token, state)
+        if pw != cf:
+            err = "Passwords do not match."
+            resp = templates.TemplateResponse(request, "setup.html",
+                {"step": 1, "error": err, "default_channel": dch})
+            _update_wizard(resp, tok, {"step": 1, "wizard_active": False, "error": err})
             return resp
-        state = {**state, "step": 2, "password": password, "error": None}
-        resp = templates.TemplateResponse(
-            request,
-            "setup.html",
-            {"step": 2, "error": None},
-        )
-        _update_wizard(resp, wizard_token, state)
+        set_password_hash(_db_path(), hash_password(pw))
+        ua = request.headers.get("user-agent")
+        stoken = create_session(_db_path(), user_agent=ua)
+        ns = {"step": 2, "wizard_active": True, "session_token": stoken, "error": None}
+        resp = templates.TemplateResponse(request, "setup.html",
+            {"step": 2, "error": None, "default_channel": dch})
+        _update_wizard(resp, tok, ns)
+        # Set the real session cookie at step 1 so the user is logged in for the
+        # rest of the wizard and lands authenticated on /profile at the end.
+        # (Matches the spec in tests/test_setup_wizard.py which asserts
+        # friday_bp_session is set after POST /setup/1.)
+        resp.set_cookie(SESSION_COOKIE, stoken, httponly=True, samesite="strict")
         return resp
-
     elif step == 2:
-        pref = form.get("notification_pref") or "openclaw"
-        state = {**state, "step": 3, "notification_pref": pref, "error": None}
-        resp = templates.TemplateResponse(
-            request,
-            "setup.html",
-            {"step": 3, "error": None},
-        )
-        _update_wizard(resp, wizard_token, state)
+        raw = form.get("notification_channel") or form.get("notification_pref") or "openclaw_chat"
+        ch = _PREF_TO_CHANNEL.get(raw, raw)
+        _set_notification_channel(ch)
+        ns = {**state, "step": 3, "notification_channel": ch, "error": None}
+        resp = templates.TemplateResponse(request, "setup.html", {"step": 3, "error": None})
+        _update_wizard(resp, tok, ns)
         return resp
-
     elif step == 3:
-        ledger_name = (form.get("ledger_name") or "Personal").strip() or "Personal"
-        state = {**state, "step": 4, "ledger_name": ledger_name, "error": None}
-        resp = templates.TemplateResponse(
-            request,
-            "setup.html",
-            {"step": 4, "error": None},
-        )
-        _update_wizard(resp, wizard_token, state)
+        bl = (form.get("action") or "").strip() == "done"
+        ch = state.get("notification_channel", _get_notification_channel())
+        ns = {**state, "step": 4, "bank_linked": bl, "error": None}
+        resp = templates.TemplateResponse(request, "setup.html",
+            {"step": 4, "error": None, "notification_channel": ch, "bank_linked": bl})
+        _update_wizard(resp, tok, ns)
         return resp
-
     elif step == 4:
-        # Final step: persist password + notification pref + ledger, then
-        # redirect to Plaid link (or profile if user skips bank step).
-        # The form has either "Open Plaid Link" or "Skip for now".
-        password = state.get("password")
-        if not password:
-            # Wizard state lost (e.g. restart); bounce back to step 1.
-            _clear_wizard(RedirectResponse(url="/setup", status_code=302), wizard_token)
-            return _redirect("/setup")
-
-        # Persist password hash (#37 will replace PBKDF2 with argon2id).
-        hashed = hash_password(password)
-        set_password_hash(_db_path(), hashed)
-
-        # Persist notification preference.
-        pref = state.get("notification_pref", "openclaw")
-        _set_notification_pref(pref)
-
-        # Create the ledger if it doesn't exist yet.
-        ledger_name = state.get("ledger_name", "Personal")
-        _ensure_ledger(ledger_name)
-
-        # Clear wizard state.
-        redirect = _redirect("/profile")
-        _clear_wizard(redirect, wizard_token)
-        return redirect
-
-    else:
-        return HTMLResponse(status_code=404, content="Unknown setup step.")
-
+        import server.main as _sm
+        _sm.apply_initial_setup(banks_to_link=[], extra_ledgers=[], hints=[])
+        redir = _redirect("/profile")
+        st = state.get("session_token")
+        if st:
+            redir.set_cookie(_SETUP_COMPLETE_COOKIE, st, httponly=True, samesite="strict", max_age=300)
+        _clear_wizard(redir, tok)
+        return redir
+    return HTMLResponse(status_code=404, content="Unknown step.")
 
 def _ensure_ledger(name: str) -> None:
     """Create a ledger row if one with this name doesn't already exist."""
@@ -426,18 +413,18 @@ async def login_post(request: Request):
 
     # Successful login — clear the recent failure counter.
     clear_failed_attempts(_db_path())
+    # Clear any pending setup session.
+    st = request.cookies.get(_SETUP_COMPLETE_COOKIE)
+    if st:
+        delete_session(_db_path(), st)
 
     # Create session.
     ua = request.headers.get("user-agent")
     token = create_session(_db_path(), user_agent=ua)
 
     response = _redirect("/profile")
-    response.set_cookie(
-        SESSION_COOKIE,
-        token,
-        httponly=True,
-        samesite="strict",
-    )
+    response.set_cookie(SESSION_COOKIE, token, httponly=True, samesite="strict")
+    response.delete_cookie(_SETUP_COMPLETE_COOKIE)
     return response
 
 
@@ -445,12 +432,16 @@ async def login_post(request: Request):
 
 @app.post("/logout")
 def logout(request: Request):
-    """Delete session row and clear cookie."""
+    """Delete session row(s) and clear cookies."""
     token = request.cookies.get(SESSION_COOKIE)
     if token:
         delete_session(_db_path(), token)
+    st = request.cookies.get(_SETUP_COMPLETE_COOKIE)
+    if st:
+        delete_session(_db_path(), st)
     response = _redirect("/login")
     response.delete_cookie(SESSION_COOKIE)
+    response.delete_cookie(_SETUP_COMPLETE_COOKIE)
     return response
 
 
@@ -526,14 +517,22 @@ async def reset_post(request: Request):
 @app.get("/profile", response_class=HTMLResponse)
 def profile_get(request: Request):
     """Settings page.  Requires authentication."""
-    if not _is_authenticated(request):
-        return _redirect("/login")
-    pref = _get_notification_pref()
-    return templates.TemplateResponse(
-        request,
-        "profile.html",
-        {"notification_pref": pref, "saved": False},
-    )
+    if _is_authenticated(request):
+        pref = _get_notification_pref()
+        return templates.TemplateResponse(request, "profile.html",
+            {"notification_pref": pref, "saved": False})
+    st = request.cookies.get(_SETUP_COMPLETE_COOKIE)
+    if st and _check_raw_session(_db_path(), st):
+        pref = _get_notification_pref()
+        resp = templates.TemplateResponse(request, "profile.html",
+            {"notification_pref": pref, "saved": False})
+        resp.set_cookie(SESSION_COOKIE, st, httponly=True, samesite="strict")
+        resp.delete_cookie(_SETUP_COMPLETE_COOKIE)
+        return resp
+    resp2 = _redirect("/login")
+    if request.cookies.get(_SETUP_COMPLETE_COOKIE):
+        resp2.delete_cookie(_SETUP_COMPLETE_COOKIE)
+    return resp2
 
 
 @app.post("/profile", response_class=HTMLResponse)

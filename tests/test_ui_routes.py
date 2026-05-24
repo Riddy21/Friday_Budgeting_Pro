@@ -140,6 +140,9 @@ class TestAfterSetup:
         assert r.status_code == 404
 
     def test_root_redirects_to_login_when_not_authed(self, client):
+        # The wizard sets a session cookie at step 1 (per the wizard spec).
+        # Clear cookies to test the not-authed path explicitly.
+        client.cookies.clear()
         r = client.get("/")
         assert r.status_code == 302
         assert r.headers["location"] == "/login"
