@@ -50,6 +50,10 @@ This doc is the operating manual for agent contributors.
   open an issue. Don't sneak it in.
 - **Tests live in `tests/`.** Mirror the source layout
   (`server/db.py` → `tests/test_db.py`).
+- **Integration tests live in `tests/integration/`.** These run each MCP tool
+  against a real (in-memory / temp) SQLite DB to verify tool wiring, DB
+  queries, and response shapes end-to-end.  Run them with
+  `python3 -m pytest tests/integration/ -v`.
 
 ## Anti-Patterns (Don't Do These)
 
