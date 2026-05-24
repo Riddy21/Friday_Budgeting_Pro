@@ -75,12 +75,6 @@ def test_main_respects_friday_bp_ui_port(monkeypatch, tmp_path):
     # but we stub it to keep the test hermetic.
     monkeypatch.setattr("server.crypto.init_crypto", lambda: None)
 
-    # Stub Scheduler.run so it doesn't actually schedule anything.
-    async def fake_scheduler_run(self):  # noqa: ANN001
-        pass
-
-    monkeypatch.setattr("server.scheduler.Scheduler.run", fake_scheduler_run)
-
     # Stub uvicorn.Server.serve: record host/port then return immediately.
     async def fake_serve(self):  # noqa: ANN001
         captured["host"] = self.config.host
@@ -114,11 +108,6 @@ def test_daemon_binds_localhost_only(monkeypatch):
     monkeypatch.setattr("server.paths.audit_permissions", lambda: None)
     monkeypatch.setattr("server.db.init_db", lambda path: None)
     monkeypatch.setattr("server.crypto.init_crypto", lambda: None)
-
-    async def fake_scheduler_run(self):  # noqa: ANN001
-        pass
-
-    monkeypatch.setattr("server.scheduler.Scheduler.run", fake_scheduler_run)
 
     async def fake_serve(self):  # noqa: ANN001
         captured["host"] = self.config.host

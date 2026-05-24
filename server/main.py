@@ -8,8 +8,10 @@ Real implementations land in later tickets.
 from __future__ import annotations
 
 import json as _json
+import subprocess as _subprocess
 import time as _time
 import uuid
+from datetime import datetime as _datetime
 from typing import List, Optional
 
 import logging
@@ -37,6 +39,113 @@ _logger = logging.getLogger(__name__)
 
 # Project root — tests monkeypatch this to a tmp dir so .env writes stay isolated.
 project_root: Path = Path(__file__).resolve().parent.parent
+
+# OpenClaw home directory override — monkeypatched in tests to avoid writing
+# to the real ~/.openclaw/ during unit tests.  None means use the default
+# (Path.home() / ".openclaw").
+_OPENCLAW_HOME: Path | None = None
+
+# ---------------------------------------------------------------------------
+# OpenClaw cron registration
+# ---------------------------------------------------------------------------
+
+
+def _get_local_tz() -> str:
+    """Return the best-effort IANA timezone name for the local system.
+
+    Tries to resolve the /etc/localtime symlink which on macOS and most Linux
+    distros points into the zoneinfo directory tree.  Falls back to the
+    abbreviated timezone name (e.g. ``'EDT'``) when the symlink is absent.
+    """
+    try:
+        result = _subprocess.run(
+            ["readlink", "/etc/localtime"],
+            capture_output=True,
+            text=True,
+            timeout=2,
+        )
+        if result.returncode == 0:
+            tz_str = result.stdout.strip()
+            if "/zoneinfo/" in tz_str:
+                return tz_str.split("/zoneinfo/")[-1]
+    except Exception:  # noqa: BLE001
+        pass
+    # Fallback: abbreviated timezone name (e.g. 'EDT', 'UTC')
+    return _datetime.now().astimezone().tzname() or "UTC"
+
+
+def _register_openclaw_cron() -> bool:
+    """Write the Friday Budgeting Pro sync cron spec to ~/.openclaw/cron/.
+
+    Cron file: ``~/.openclaw/cron/friday-budgeting-pro-sync.json``
+
+    The schedule runs a daily agent turn at 06:00 local time that calls the
+    ``sync`` MCP tool and then notifies the user of any transactions needing
+    review via ``get_needs_review``.
+
+    Detection
+    ---------
+    If ``~/.openclaw/`` does not exist the user is running without OpenClaw.
+    We log a warning and return ``False`` — the app continues to work, it
+    just won't have scheduled syncs.
+
+    Idempotent
+    ----------
+    Overwriting the same file on a repeated call is safe and intentional.
+
+    Returns
+    -------
+    bool
+        ``True`` if the cron file was written; ``False`` if OpenClaw is not
+        installed (``~/.openclaw/`` absent).
+    """
+    oc_dir = _OPENCLAW_HOME if _OPENCLAW_HOME is not None else Path.home() / ".openclaw"
+
+    if not oc_dir.exists():
+        _logger.warning(
+            "OpenClaw directory %s not found — skipping cron registration. "
+            "The app will work without scheduled syncs; run apply_initial_setup "
+            "again after installing OpenClaw to register the cron job.",
+            oc_dir,
+        )
+        return False
+
+    cron_dir = oc_dir / "cron"
+    cron_dir.mkdir(parents=True, exist_ok=True)
+
+    tz = _get_local_tz()
+    spec = {
+        "name": "friday-budgeting-pro-sync",
+        "schedule": {"kind": "cron", "expr": "0 6 * * *", "tz": tz},
+        "sessionTarget": "isolated",
+        "payload": {
+            "kind": "agentTurn",
+            "message": (
+                "Run friday-budgeting-pro sync: call the sync MCP tool, "
+                "then call get_needs_review and notify the user about any "
+                "transactions needing classification."
+            ),
+            "timeoutSeconds": 900,
+        },
+        "delivery": {"mode": "none"},
+    }
+
+    cron_file = cron_dir / "friday-budgeting-pro-sync.json"
+    # Atomic-ish write: write to a sibling temp file then replace.
+    tmp_file = cron_file.with_suffix(".json.tmp")
+    try:
+        tmp_file.write_text(_json.dumps(spec, indent=2))
+        tmp_file.replace(cron_file)
+    except Exception:  # noqa: BLE001
+        try:
+            tmp_file.unlink(missing_ok=True)
+        except OSError:
+            pass
+        raise
+
+    _logger.info("OpenClaw cron registered: %s", cron_file)
+    return True
+
 
 # ---------------------------------------------------------------------------
 # Setup tools
@@ -184,12 +293,15 @@ def apply_initial_setup(
     finally:
         conn.close()
 
+    cron_registered = _register_openclaw_cron()
+
     return {
         "status": "ok",
         "ledgers_created": ledgers_created,
         "line_items_created": line_items_created,
         "hints_created": hints_created,
         "banks_to_link": [*banks_to_link] if banks_to_link else [],
+        "cron_registered": cron_registered,
     }
 
 
@@ -699,8 +811,120 @@ def remove_hint(id: str) -> dict:
 
 @mcp.tool
 def summary(period: str) -> dict:
-    """Return spending totals for a given period."""
-    return {"status": "not_implemented"}
+    """Return spending totals for a given period.
+
+    Parameters
+    ----------
+    period : str
+        One of:
+          - ``"month"``  → current calendar month (YYYY-MM)
+          - ``"year"``   → current calendar year (YYYY)
+          - ``"ytd"``    → year-to-date (Jan 1 to today)
+          - ``"YYYY-MM"`` → a specific month, e.g. ``"2026-05"``
+          - ``"YYYY"``   → a specific year, e.g. ``"2026"``
+
+    Returns
+    -------
+    dict
+        ::
+
+            {
+              "period": str,
+              "income": float,
+              "expenses": float,
+              "net": float,      # income - expenses
+              "by_line_item": [
+                {"line_item": str, "ledger": str, "type": str, "total": float},
+                ...
+              ]
+            }
+
+        ``by_line_item`` is sorted by ``total`` descending (most positive
+        income first, then expenses sorted least-negative last — i.e. simple
+        descending numeric sort on the raw total value).
+    """
+    import re as _re
+
+    today = _datetime.now().date()
+    today_str = today.isoformat()          # "YYYY-MM-DD"
+    year_str = today_str[:4]               # "YYYY"
+    month_prefix = today_str[:7]           # "YYYY-MM"
+
+    # Build a WHERE clause fragment and params for ``transactions.date``.
+    # We use LIKE patterns wherever possible (index-friendly for TEXT dates).
+    _MONTH_RE = _re.compile(r'^\d{4}-(?:0[1-9]|1[0-2])$')
+    _YEAR_RE  = _re.compile(r'^\d{4}$')
+
+    if period == "month":
+        date_filter = "t.date LIKE ?"
+        date_params: list = [f"{month_prefix}-%"]
+    elif period == "year":
+        date_filter = "t.date LIKE ?"
+        date_params = [f"{year_str}-%"]
+    elif period == "ytd":
+        ytd_start = f"{year_str}-01-01"
+        date_filter = "t.date >= ? AND t.date <= ?"
+        date_params = [ytd_start, today_str]
+    elif _MONTH_RE.match(period):
+        date_filter = "t.date LIKE ?"
+        date_params = [f"{period}-%"]
+    elif _YEAR_RE.match(period):
+        date_filter = "t.date LIKE ?"
+        date_params = [f"{period}-%"]
+    else:
+        raise ValueError(
+            f"Invalid period {period!r}. "
+            "Expected 'month', 'year', 'ytd', an ISO month like '2026-05', "
+            "or an ISO year like '2026'."
+        )
+
+    sql = f"""
+        SELECT
+            li.name        AS line_item_name,
+            l.name         AS ledger_name,
+            li.item_type   AS item_type,
+            SUM(te.amount) AS total
+        FROM transaction_entries te
+        JOIN transactions   t  ON t.id  = te.transaction_id
+        JOIN line_items     li ON li.id = te.line_item_id
+        JOIN ledgers        l  ON l.id  = li.ledger_id
+        WHERE {date_filter}
+        GROUP BY te.line_item_id
+        ORDER BY total DESC
+    """
+
+    conn = get_db(server.paths.DB_PATH)
+    try:
+        rows = conn.execute(sql, date_params).fetchall()
+    finally:
+        conn.close()
+
+    income: float = 0.0
+    expenses: float = 0.0
+    by_line_item: list[dict] = []
+
+    for row in rows:
+        total = float(row["total"] or 0.0)
+        by_line_item.append(
+            {
+                "line_item": row["line_item_name"],
+                "ledger":    row["ledger_name"],
+                "type":      row["item_type"],
+                "total":     total,
+            }
+        )
+        if row["item_type"] == "income":
+            income += total
+        else:
+            expenses += total
+
+    return {
+        "period":       period,
+        "income":       round(income, 2),
+        "expenses":     round(expenses, 2),
+        "net":          round(income - expenses, 2),
+        "by_line_item": by_line_item,
+    }
 
 
 @mcp.tool

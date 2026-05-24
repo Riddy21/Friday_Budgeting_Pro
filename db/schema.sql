@@ -82,6 +82,7 @@ CREATE TABLE IF NOT EXISTS sync_cursors (
 --       a migration (ALTER TABLE app_config ADD COLUMN ...) is needed for them.
 CREATE TABLE IF NOT EXISTS app_config (
   id INTEGER PRIMARY KEY CHECK (id = 1),
+  username TEXT,               -- display name
   ui_password_hash TEXT,       -- argon2id hash
   ui_password_set_at INTEGER,
   notification_channel TEXT DEFAULT 'in_ui'  -- openclaw_chat | macos | in_ui
