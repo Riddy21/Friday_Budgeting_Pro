@@ -5,7 +5,7 @@
 A local budgeting tool that uses AI to do the boring work for you: connecting
 to your banks, classifying every transaction, and keeping a spreadsheet
 up to date. It runs as a small daemon on your Mac with **multiple equal
-ways to interact with it** — no single one is the "main" way.
+ways to interact with it** - no single one is the "main" way.
 
 **Single user. Local-only. AI does the heavy lifting; you stay in control.**
 
@@ -16,7 +16,7 @@ ways to interact with it** — no single one is the "main" way.
 ## How You Use It
 
 The product runs as a small daemon. Three equal-peer ways to interact with
-it — pick whichever fits the moment, mix and match freely:
+it - pick whichever fits the moment, mix and match freely:
 
 | Adapter | What it covers in v0.1 |
 |---|---|
@@ -24,7 +24,7 @@ it — pick whichever fits the moment, mix and match freely:
 | **💬 MCP** (OpenClaw, Claude Desktop, any MCP client) | Full feature surface: connect/disconnect banks, edit ledgers, review classifications, query spending, trigger exports. Conversational when paired with an LLM. |
 | **⏰ Scheduler** (background) | Daily auto-sync, drift detection, proactive re-auth alerts via your chosen notification channel. |
 
-None of these is "primary." The UI is intentionally small — it handles
+None of these is "primary." The UI is intentionally small - it handles
 setup, the things you tweak occasionally, and bank management. Reviewing
 transactions, running queries, and anything fancy still lives in MCP or
 the background.
@@ -48,9 +48,27 @@ finish setup.
 1. Create a free account at https://dashboard.plaid.com
 2. Team Settings → Keys → copy your **Client ID** and **Production Secret**
 3. Ask your OpenClaw agent: `Set up my Plaid credentials — client ID is <your_id>, secret is <your_secret>`
-4. Agent writes the config and you’re ready to connect banks via the setup wizard.
+4. Agent writes the config and you're ready to connect banks via the setup wizard.
 
 For sandbox testing, use `env=sandbox` and your sandbox secret instead.
+
+### Supported Banks
+
+The Plaid Link modal supports **any institution Plaid supports in Canada** — there
+is no hardcoded allow-list limited to RBC or BMO. You can connect any Canadian bank
+or credit union Plaid supports. The integration uses `country_codes=["CA"]` and no
+institution filtering.
+
+**Wealthsimple** specifically:
+
+| Product | Plaid support | Notes |
+|---|---|---|
+| **Wealthsimple Cash** (spending account) | ✅ Supported | Connects through the standard Plaid Link flow, same as any other bank |
+| **Wealthsimple Trade / Invest** | ❌ Not via Plaid | Plaid's standard API does not cover Wealthsimple Trade/Invest brokerage accounts. An unofficial API route exists but is not implemented; tracked in issue [#31](https://github.com/Riddy21/Friday_Budgeting_Pro/issues/31) via `server/providers/wealthsimple.py` |
+
+To connect Wealthsimple Cash: use the **+ Connect a bank** button in the UI or
+ask your OpenClaw agent to `connect a bank`. Select Wealthsimple in the Plaid
+Link modal and authenticate normally.
 
 ---
 
@@ -59,12 +77,12 @@ For sandbox testing, use `env=sandbox` and your sandbox secret instead.
 When you visit `http://127.0.0.1:6789` for the first time, you see a
 small setup wizard (4 short screens):
 
-1. **Set a password** — protects your local dashboard.
+1. **Set a password** - protects your local dashboard.
 2. **Pick how you want to be notified** about ambiguous transactions:
    - "Through OpenClaw chat" (if you use it)
    - "macOS notifications"
    - "Just show me a banner in the UI"
-3. **Connect your first bank** — click **+ Connect a bank** and follow
+3. **Connect your first bank** - click **+ Connect a bank** and follow
    the Plaid login.
 4. **Done.** Lands on your Profile page.
 
@@ -78,24 +96,24 @@ Adjust any of it later from the Profile page or via MCP.
 
 Three things, kept minimal:
 
-**Setup wizard** — once, on first launch.
+**Setup wizard** - once, on first launch.
 
-**Profile page** — the main ongoing page. Has:
+**Profile page** - the main ongoing page. Has:
 - Display name + notification preference + LLM confidence slider
 - Change password
 - Log out
 - Read-only system info (Plaid env, last sync time, daemon uptime)
 - **Sync now** button
 - **Export to Excel** button
-- **Linked Accounts** — compact list of connected banks with status pills
+- **Linked Accounts** - compact list of connected banks with status pills
   and **Reconnect / Disconnect / + Connect a bank** buttons. No fancy
   cards, just a list.
 
-**Ledgers page** — minimal structure editor. List your ledgers (default:
+**Ledgers page** - minimal structure editor. List your ledgers (default:
 Personal), click into one to add/rename/remove line items, add new
 ledgers when you need them (e.g. for a rental property).
 
-Reviewing classifications, running queries, anything beyond the basics —
+Reviewing classifications, running queries, anything beyond the basics -
 those still happen through the MCP adapter (your OpenClaw agent or any
 other MCP client).
 
@@ -105,11 +123,11 @@ other MCP client).
 
 Every transaction goes through a three-tier classifier:
 
-1. **Rules** — exact merchant matches you've already confirmed. Free, instant.
-2. **LLM** — for new merchants, the LLM reasons about the transaction
+1. **Rules** - exact merchant matches you've already confirmed. Free, instant.
+2. **LLM** - for new merchants, the LLM reasons about the transaction
    using your hints and recent similar transactions, and auto-routes if
    confident enough.
-3. **Review queue** — if it's unsure, the transaction lands in a review
+3. **Review queue** - if it's unsure, the transaction lands in a review
    queue. You'll get a notification through your chosen channel.
 
 After 3 successful classifications of the same merchant, it becomes a
@@ -132,19 +150,19 @@ Agent:  May 2026 so far:
 
 You:    Connect another bank
 Agent:  Opening Plaid Link at http://127.0.0.1:6789/link?t=...
-        — let me know when you're done.
+        - let me know when you're done.
 
 You:    Export this year to Excel
 Agent:  ✓ Wrote Personal Finances.xlsx to your Documents folder.
 
-Agent:  Heads up — got a $312 Costco charge from yesterday that I'm
+Agent:  Heads up - got a $312 Costco charge from yesterday that I'm
         not sure about. Personal groceries, or something else?
 You:    Half personal groceries, half supplies for work
 Agent:  ✓ Split 50/50, saved as a hint for similar charges.
 ```
 
 Same engine, just a different way in. Other MCP clients (Claude Desktop,
-Cursor, mcporter on the CLI) work too — anywhere you can call MCP tools.
+Cursor, mcporter on the CLI) work too - anywhere you can call MCP tools.
 
 ---
 
@@ -157,8 +175,8 @@ Cursor, mcporter on the CLI) work too — anywhere you can call MCP tools.
 - 📁 **Your data lives in `~/.friday-bp/data.db`** (SQLite, yours)
 - 🚫 **No telemetry**, no cloud sync, no third parties except Plaid + your
   chosen LLM
-- ⏱️ **Sessions persist until you log out** — no idle timeout
-- 🔄 **Bank sync runs in the background regardless** of whether you’re logged into the UI
+- ⏱️ **Sessions persist until you log out** - no idle timeout
+- 🔄 **Bank sync runs in the background regardless** of whether you're logged into the UI
 
 See [ARCHITECTURE.md § Security](./ARCHITECTURE.md#security) for the full
 threat model.
