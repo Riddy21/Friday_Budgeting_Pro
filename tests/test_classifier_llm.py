@@ -12,17 +12,16 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from server.db import get_db, init_db
 from server.classifier import classify_with_llm
-
+from server.db import get_db, init_db
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
-LEDGER_ID   = "ledger-test"
+LEDGER_ID = "ledger-test"
 LINE_ITEM_ID = "li-groceries"
-TXN_ID      = "txn-42"
+TXN_ID = "txn-42"
 
 
 def seed(conn) -> None:
@@ -73,8 +72,14 @@ def seed(conn) -> None:
             " (id, transaction_id, ledger_id, line_item_id, amount, source, confidence, reviewed)"
             " VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
             (
-                f"te-hist-{i}", txn_id, LEDGER_ID, LINE_ITEM_ID,
-                55.00 + i, "manual", 1.0, 1,
+                f"te-hist-{i}",
+                txn_id,
+                LEDGER_ID,
+                LINE_ITEM_ID,
+                55.00 + i,
+                "manual",
+                1.0,
+                1,
             ),
         )
 
@@ -84,20 +89,22 @@ def seed(conn) -> None:
 
 def make_txn(merchant: str = "Whole Foods Market", amount: float = 42.50) -> dict:
     return {
-        "id":     TXN_ID,
+        "id": TXN_ID,
         "merchant": merchant,
-        "amount":   amount,
-        "date":     "2025-03-15",
+        "amount": amount,
+        "date": "2025-03-15",
         "bank_account_id": "acct-x",
     }
 
 
 def valid_llm_response(line_item_id: str = LINE_ITEM_ID) -> str:
-    return json.dumps({
-        "line_item_id": line_item_id,
-        "confidence":   0.87,
-        "reasoning":    "Whole Foods is a supermarket.",
-    })
+    return json.dumps(
+        {
+            "line_item_id": line_item_id,
+            "confidence": 0.87,
+            "reasoning": "Whole Foods is a supermarket.",
+        }
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -128,12 +135,12 @@ def test_classify_with_llm_returns_correct_entry(db):
         result = classify_with_llm(db, make_txn())
 
     assert result["transaction_id"] == TXN_ID
-    assert result["line_item_id"]   == LINE_ITEM_ID
-    assert result["ledger_id"]      == LEDGER_ID
-    assert result["amount"]         == 42.50
-    assert result["source"]         == "llm"
-    assert result["confidence"]     == pytest.approx(0.87)
-    assert result["reviewed"]       == 0
+    assert result["line_item_id"] == LINE_ITEM_ID
+    assert result["ledger_id"] == LEDGER_ID
+    assert result["amount"] == 42.50
+    assert result["source"] == "llm"
+    assert result["confidence"] == pytest.approx(0.87)
+    assert result["reviewed"] == 0
 
 
 def test_prompt_contains_ledger_tree(db):
@@ -147,8 +154,8 @@ def test_prompt_contains_ledger_tree(db):
     messages = mock_chat.call_args[0][0]
     full_prompt = " ".join(m["content"] for m in messages)
 
-    assert "Household"  in full_prompt, "Ledger name should appear in prompt"
-    assert "Groceries"  in full_prompt, "Line item name should appear in prompt"
+    assert "Household" in full_prompt, "Ledger name should appear in prompt"
+    assert "Groceries" in full_prompt, "Line item name should appear in prompt"
     assert LINE_ITEM_ID in full_prompt, "Line item id should appear in prompt"
 
 
@@ -163,7 +170,7 @@ def test_prompt_contains_hints(db):
     full_prompt = " ".join(m["content"] for m in messages)
 
     assert "Supermarkets and grocery stores" in full_prompt
-    assert "Restaurants and cafes"           in full_prompt
+    assert "Restaurants and cafes" in full_prompt
 
 
 def test_prompt_contains_recent_similar_transactions(db):
@@ -192,11 +199,13 @@ def test_malformed_json_raises(db):
 
 def test_unknown_line_item_id_raises(db):
     """classify_with_llm raises ValueError when LLM returns unknown line_item_id."""
-    bad_response = json.dumps({
-        "line_item_id": "li-does-not-exist",
-        "confidence":   0.5,
-        "reasoning":    "I guessed.",
-    })
+    bad_response = json.dumps(
+        {
+            "line_item_id": "li-does-not-exist",
+            "confidence": 0.5,
+            "reasoning": "I guessed.",
+        }
+    )
     mock_chat = MagicMock(return_value=bad_response)
 
     with patch("server.llm.chat", mock_chat):

@@ -1,6 +1,6 @@
 """Tests for SKILL.md — validate YAML frontmatter structure."""
-import pathlib
 
+import pathlib
 
 SKILL_MD = pathlib.Path(__file__).parent.parent / "SKILL.md"
 
@@ -65,6 +65,6 @@ def test_required_field_description():
 def test_name_value():
     content = SKILL_MD.read_text()
     fm = _parse_frontmatter(content)
-    assert fm.get("name") == "friday-budgeting-pro", (
-        f"Expected name 'friday-budgeting-pro', got '{fm.get('name')}'"
-    )
+    assert (
+        fm.get("name") == "friday-budgeting-pro"
+    ), f"Expected name 'friday-budgeting-pro', got '{fm.get('name')}'"

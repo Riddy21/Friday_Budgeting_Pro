@@ -23,12 +23,12 @@ import os
 
 import plaid
 from plaid.api import plaid_api
+from plaid.model.country_code import CountryCode
+from plaid.model.item_get_request import ItemGetRequest
+from plaid.model.item_public_token_exchange_request import ItemPublicTokenExchangeRequest
 from plaid.model.link_token_create_request import LinkTokenCreateRequest
 from plaid.model.link_token_create_request_user import LinkTokenCreateRequestUser
-from plaid.model.country_code import CountryCode
 from plaid.model.products import Products
-from plaid.model.item_public_token_exchange_request import ItemPublicTokenExchangeRequest
-from plaid.model.item_get_request import ItemGetRequest
 from plaid.model.transactions_sync_request import TransactionsSyncRequest
 
 from server.providers.base import BankProvider
@@ -45,22 +45,33 @@ _APP_NAME = "Friday Budgeting Pro"
 
 
 class PlaidProvider(BankProvider):
-    """Concrete Plaid implementation of the BankProvider interface."""
+    """Concrete Plaid implementation of the BankProvider interface.
+
+    Parameters
+    ----------
+    env : str or None
+        Plaid environment to use: ``'sandbox'``, ``'development'``, or
+        ``'production'``.  When *None* (the default), falls back to the
+        ``PLAID_ENV`` environment variable (default: ``'sandbox'``).
+    """
 
     name = "plaid"
+
+    def __init__(self, env: str | None = None) -> None:
+        resolved = (env or os.environ.get("PLAID_ENV", "sandbox")).lower()
+        if resolved not in _ENV_MAP:
+            raise ValueError(
+                f"Invalid Plaid env '{resolved}'. Must be one of: " + ", ".join(_ENV_MAP)
+            )
+        self.env: str = resolved
 
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
 
     def _build_client(self) -> plaid_api.PlaidApi:
-        """Instantiate a PlaidApi client from environment variables."""
-        raw_env = os.environ.get("PLAID_ENV", "sandbox").lower()
-        if raw_env not in _ENV_MAP:
-            raise ValueError(
-                f"Invalid PLAID_ENV '{raw_env}'. Must be one of: "
-                + ", ".join(_ENV_MAP)
-            )
+        """Instantiate a PlaidApi client using ``self.env``."""
+        raw_env = self.env
 
         client_id = os.environ.get("PLAID_CLIENT_ID")
         if not client_id:
@@ -100,6 +111,7 @@ class PlaidProvider(BankProvider):
         """
         client = self._build_client()
         import os as _os
+
         # CA only — matches old working test app; US+CA causes OAuth issues with Canadian banks
         _redirect_uri = _os.environ.get("PLAID_REDIRECT_URI")
         _kwargs = dict(
@@ -182,18 +194,34 @@ class PlaidProvider(BankProvider):
         request = ItemGetRequest(access_token=access_token)
         response = client.item_get(request)
 
-        error = response.get("error") if isinstance(response, dict) else getattr(response, "error", None)
-        item = response.get("item") if isinstance(response, dict) else getattr(response, "item", None)
+        error = (
+            response.get("error")
+            if isinstance(response, dict)
+            else getattr(response, "error", None)
+        )
+        item = (
+            response.get("item") if isinstance(response, dict) else getattr(response, "item", None)
+        )
 
         error_code = None
         error_message = None
         if error is not None:
-            error_code = error.get("error_code") if isinstance(error, dict) else getattr(error, "error_code", None)
-            error_message = error.get("error_message") if isinstance(error, dict) else getattr(error, "error_message", None)
+            error_code = (
+                error.get("error_code")
+                if isinstance(error, dict)
+                else getattr(error, "error_code", None)
+            )
+            error_message = (
+                error.get("error_message")
+                if isinstance(error, dict)
+                else getattr(error, "error_message", None)
+            )
 
         item_id = None
         if item is not None:
-            item_id = item.get("item_id") if isinstance(item, dict) else getattr(item, "item_id", None)
+            item_id = (
+                item.get("item_id") if isinstance(item, dict) else getattr(item, "item_id", None)
+            )
 
         return {
             "error_code": error_code,
@@ -203,15 +231,17 @@ class PlaidProvider(BankProvider):
 
     def get_institution_name(self, access_token: str) -> str:
         """Return institution name for an access token."""
-        from plaid.model.item_get_request import ItemGetRequest
-        from plaid.model.institutions_get_by_id_request import InstitutionsGetByIdRequest
         from plaid.model.country_code import CountryCode
+        from plaid.model.institutions_get_by_id_request import InstitutionsGetByIdRequest
+        from plaid.model.item_get_request import ItemGetRequest
+
         client = self._build_client()
         item = client.item_get(ItemGetRequest(access_token=access_token))
         inst_id = item["item"]["institution_id"]
-        inst = client.institutions_get_by_id(InstitutionsGetByIdRequest(
-            institution_id=inst_id,
-            country_codes=[CountryCode("US"), CountryCode("CA")],
-        ))
+        inst = client.institutions_get_by_id(
+            InstitutionsGetByIdRequest(
+                institution_id=inst_id,
+                country_codes=[CountryCode("US"), CountryCode("CA")],
+            )
+        )
         return inst["institution"]["name"]
-

@@ -10,9 +10,8 @@ import sqlite3
 
 import pytest
 
-from server.db import get_db, init_db
 from server.classifier import flag_for_review, maybe_promote_to_rule
-
+from server.db import get_db, init_db
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -37,7 +36,9 @@ def seed(conn: sqlite3.Connection) -> dict:
     return {"ledger_id": "ledger-1", "li_food": "li-food", "li_retail": "li-retail"}
 
 
-def insert_transaction(conn: sqlite3.Connection, txn_id: str, merchant: str, amount: float = 10.0) -> None:
+def insert_transaction(
+    conn: sqlite3.Connection, txn_id: str, merchant: str, amount: float = 10.0
+) -> None:
     conn.execute(
         "INSERT INTO transactions (id, plaid_transaction_id, date, merchant, amount) "
         "VALUES (?, ?, ?, ?, ?)",

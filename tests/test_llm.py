@@ -7,13 +7,11 @@ urllib.request.urlopen and the SDK helpers are patched at the module level.
 
 from __future__ import annotations
 
-import io
 import json
 import os
 import unittest
 import urllib.error
 from unittest.mock import MagicMock, patch
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -41,13 +39,12 @@ class TestChatOpenClawPrimary(unittest.TestCase):
 
     def test_openai_shape_returns_content(self):
         """chat() extracts content from an OpenAI-shape response."""
-        body = json.dumps(
-            {"choices": [{"message": {"content": "hello world"}}]}
-        ).encode()
+        body = json.dumps({"choices": [{"message": {"content": "hello world"}}]}).encode()
         cm = _make_urlopen_response(body)
 
         with patch("urllib.request.urlopen", return_value=cm) as mock_urlopen:
             from server.llm import chat
+
             result = chat([{"role": "user", "content": "hi"}])
 
         self.assertEqual(result, "hello world")
@@ -66,6 +63,7 @@ class TestChatFallbackOnURLError(unittest.TestCase):
                 "server.llm._chat_sdk_fallback", return_value="sdk-response"
             ) as mock_fallback:
                 from server.llm import chat
+
                 result = chat([{"role": "user", "content": "hi"}])
 
         self.assertEqual(result, "sdk-response")
@@ -80,6 +78,7 @@ class TestChatFallbackOnURLError(unittest.TestCase):
                 "server.llm._chat_sdk_fallback", return_value="fallback-ok"
             ) as mock_fallback:
                 from server.llm import chat
+
                 result = chat([{"role": "user", "content": "hi"}])
 
         self.assertEqual(result, "fallback-ok")
@@ -90,9 +89,7 @@ class TestChatCustomURL(unittest.TestCase):
     """When OPENCLAW_API_URL is set, urlopen receives that URL."""
 
     def test_custom_url_used(self):
-        body = json.dumps(
-            {"choices": [{"message": {"content": "custom"}}]}
-        ).encode()
+        body = json.dumps({"choices": [{"message": {"content": "custom"}}]}).encode()
         cm = _make_urlopen_response(body)
 
         custom_url = "http://localhost:9999/v1/completions"
@@ -101,6 +98,7 @@ class TestChatCustomURL(unittest.TestCase):
         with patch.dict(os.environ, env_patch):
             with patch("urllib.request.urlopen", return_value=cm) as mock_urlopen:
                 from server.llm import chat
+
                 result = chat([{"role": "user", "content": "hi"}])
 
         self.assertEqual(result, "custom")
@@ -119,6 +117,7 @@ class TestChatFlatResponseShape(unittest.TestCase):
 
         with patch("urllib.request.urlopen", return_value=cm):
             from server.llm import chat
+
             result = chat([{"role": "user", "content": "hello"}])
 
         self.assertEqual(result, "hi")
@@ -129,6 +128,7 @@ class TestChatFlatResponseShape(unittest.TestCase):
 
         with patch("urllib.request.urlopen", return_value=cm):
             from server.llm import chat
+
             result = chat([{"role": "user", "content": "hello"}])
 
         self.assertEqual(result, "flat-content")
@@ -142,10 +142,9 @@ class TestChatMalformedJSON(unittest.TestCase):
         cm = _make_urlopen_response(body)
 
         with patch("urllib.request.urlopen", return_value=cm):
-            with patch(
-                "server.llm._chat_sdk_fallback", return_value="sdk-ok"
-            ) as mock_fallback:
+            with patch("server.llm._chat_sdk_fallback", return_value="sdk-ok") as mock_fallback:
                 from server.llm import chat
+
                 result = chat([{"role": "user", "content": "hi"}])
 
         self.assertEqual(result, "sdk-ok")
@@ -164,6 +163,7 @@ class TestChatUnrecognisedShape(unittest.TestCase):
                 "server.llm._chat_sdk_fallback", return_value="sdk-shape-fallback"
             ) as mock_fallback:
                 from server.llm import chat
+
                 result = chat([{"role": "user", "content": "hi"}])
 
         self.assertEqual(result, "sdk-shape-fallback")
@@ -174,13 +174,12 @@ class TestChatOpenAIDeltaShape(unittest.TestCase):
     """OpenAI delta (streaming residue) shape is also supported."""
 
     def test_delta_shape(self):
-        body = json.dumps(
-            {"choices": [{"delta": {"content": "delta-reply"}}]}
-        ).encode()
+        body = json.dumps({"choices": [{"delta": {"content": "delta-reply"}}]}).encode()
         cm = _make_urlopen_response(body)
 
         with patch("urllib.request.urlopen", return_value=cm):
             from server.llm import chat
+
             result = chat([{"role": "user", "content": "hi"}])
 
         self.assertEqual(result, "delta-reply")
@@ -192,6 +191,7 @@ class TestChatInterface(unittest.TestCase):
     def test_patchable(self):
         with patch("server.llm.chat", return_value="mocked") as mock_chat:
             from server import llm
+
             result = llm.chat([{"role": "user", "content": "test"}])
 
         self.assertEqual(result, "mocked")

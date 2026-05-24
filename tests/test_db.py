@@ -52,16 +52,13 @@ def conn(db_path: Path):
 # init_db: all expected tables exist
 # ---------------------------------------------------------------------------
 
+
 def test_init_db_creates_all_tables(db_path: Path) -> None:
     conn = get_db(db_path)
-    rows = conn.execute(
-        "SELECT name FROM sqlite_master WHERE type='table'"
-    ).fetchall()
+    rows = conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()
     conn.close()
     actual = {r["name"] for r in rows}
-    assert EXPECTED_TABLES.issubset(actual), (
-        f"Missing tables: {EXPECTED_TABLES - actual}"
-    )
+    assert EXPECTED_TABLES.issubset(actual), f"Missing tables: {EXPECTED_TABLES - actual}"
 
 
 def test_init_db_is_idempotent(db_path: Path) -> None:
@@ -73,11 +70,10 @@ def test_init_db_is_idempotent(db_path: Path) -> None:
 # get_db: row_factory and foreign keys
 # ---------------------------------------------------------------------------
 
+
 def test_get_db_row_factory(conn: sqlite3.Connection) -> None:
     """Rows must be accessible by column name (sqlite3.Row factory)."""
-    conn.execute(
-        "INSERT INTO ledgers (id, name) VALUES (?, ?)", ("led-1", "Personal")
-    )
+    conn.execute("INSERT INTO ledgers (id, name) VALUES (?, ?)", ("led-1", "Personal"))
     row = conn.execute("SELECT id, name FROM ledgers WHERE id = 'led-1'").fetchone()
     assert row["id"] == "led-1"
     assert row["name"] == "Personal"
@@ -86,6 +82,7 @@ def test_get_db_row_factory(conn: sqlite3.Connection) -> None:
 # ---------------------------------------------------------------------------
 # Insert + select from multiple tables
 # ---------------------------------------------------------------------------
+
 
 def test_insert_select_ledger_and_line_item(conn: sqlite3.Connection) -> None:
     """Insert a ledger and a line_item; verify they round-trip correctly."""
@@ -111,15 +108,14 @@ def test_insert_select_classification_hint(conn: sqlite3.Connection) -> None:
         (hid, "Amazon charges are usually Shopping → Household"),
     )
     conn.commit()
-    row = conn.execute(
-        "SELECT text FROM classification_hints WHERE id = ?", (hid,)
-    ).fetchone()
+    row = conn.execute("SELECT text FROM classification_hints WHERE id = ?", (hid,)).fetchone()
     assert "Amazon" in row["text"]
 
 
 # ---------------------------------------------------------------------------
 # Foreign key enforcement
 # ---------------------------------------------------------------------------
+
 
 def test_foreign_key_enforced(conn: sqlite3.Connection) -> None:
     """Inserting a line_item with a non-existent ledger_id must raise IntegrityError."""
@@ -133,6 +129,7 @@ def test_foreign_key_enforced(conn: sqlite3.Connection) -> None:
 # ---------------------------------------------------------------------------
 # transaction() context manager
 # ---------------------------------------------------------------------------
+
 
 def test_transaction_commits_on_success(db_path: Path) -> None:
     c = get_db(db_path)

@@ -18,10 +18,10 @@ import pytest
 from server.db import get_db, init_db
 from server.main import sync
 
-
 # ---------------------------------------------------------------------------
 # Helpers / shared fixtures
 # ---------------------------------------------------------------------------
+
 
 class _FakePlaidError(Exception):
     """Minimal stand-in for plaid.ApiException with a JSON body."""
@@ -127,7 +127,9 @@ _HEALTH_NOOP = {"checked": 0, "active": 0, "needs_reauth": 0, "pending_expiratio
 def test_sync_normal(env, monkeypatch):
     monkeypatch.setattr("server.main._plaid.sync_transactions", _mock_sync_ok)
     monkeypatch.setattr("server.crypto.decrypt", lambda x: x)
-    monkeypatch.setattr("server.health_monitor.check_all_connections", lambda db, plaid_provider=None: _HEALTH_NOOP)
+    monkeypatch.setattr(
+        "server.health_monitor.check_all_connections", lambda db, plaid_provider=None: _HEALTH_NOOP
+    )
 
     result = sync()
 
@@ -167,13 +169,16 @@ def test_sync_normal(env, monkeypatch):
 # Test 2: ITEM_LOGIN_REQUIRED → connection status = needs_reauth
 # ---------------------------------------------------------------------------
 
+
 def test_sync_item_login_required(env, monkeypatch):
     def _raise_reauth(access_token, cursor=None):
         raise _FakePlaidError("ITEM_LOGIN_REQUIRED")
 
     monkeypatch.setattr("server.main._plaid.sync_transactions", _raise_reauth)
     monkeypatch.setattr("server.crypto.decrypt", lambda x: x)
-    monkeypatch.setattr("server.health_monitor.check_all_connections", lambda db, plaid_provider=None: _HEALTH_NOOP)
+    monkeypatch.setattr(
+        "server.health_monitor.check_all_connections", lambda db, plaid_provider=None: _HEALTH_NOOP
+    )
 
     result = sync()
 
@@ -194,10 +199,13 @@ def test_sync_item_login_required(env, monkeypatch):
 # Test 3: idempotent re-sync — no duplicate transactions
 # ---------------------------------------------------------------------------
 
+
 def test_sync_idempotent(env, monkeypatch):
     monkeypatch.setattr("server.main._plaid.sync_transactions", _mock_sync_ok)
     monkeypatch.setattr("server.crypto.decrypt", lambda x: x)
-    monkeypatch.setattr("server.health_monitor.check_all_connections", lambda db, plaid_provider=None: _HEALTH_NOOP)
+    monkeypatch.setattr(
+        "server.health_monitor.check_all_connections", lambda db, plaid_provider=None: _HEALTH_NOOP
+    )
 
     sync()
     sync()  # second call with identical batch — INSERT OR IGNORE absorbs it
@@ -212,12 +220,15 @@ def test_sync_idempotent(env, monkeypatch):
 # Test 4: sync_lock contention → {"status": "already_running"}
 # ---------------------------------------------------------------------------
 
+
 def test_sync_lock_contention(env, monkeypatch):
     from server.sync_lock import acquire_sync_lock
 
     monkeypatch.setattr("server.main._plaid.sync_transactions", _mock_sync_ok)
     monkeypatch.setattr("server.crypto.decrypt", lambda x: x)
-    monkeypatch.setattr("server.health_monitor.check_all_connections", lambda db, plaid_provider=None: _HEALTH_NOOP)
+    monkeypatch.setattr(
+        "server.health_monitor.check_all_connections", lambda db, plaid_provider=None: _HEALTH_NOOP
+    )
 
     # Hold the lock ourselves so sync() cannot acquire it
     held = acquire_sync_lock(timeout=0.0)
@@ -368,6 +379,7 @@ def test_sync_account_no_official_name_falls_back_to_name(env, monkeypatch):
 
 def test_sync_no_accounts_in_response_does_not_crash(env, monkeypatch):
     """Sync with no 'accounts' key in response still works (graceful degradation)."""
+
     def _mock_no_accounts(access_token, cursor=None):
         return {
             "added": _ADDED_TXNS,

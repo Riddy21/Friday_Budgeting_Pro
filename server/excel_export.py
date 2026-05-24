@@ -17,17 +17,16 @@ from __future__ import annotations
 import os
 import sqlite3
 from pathlib import Path
-from typing import Optional
 
-import openpyxl
 from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill
 
-from server.sync_lock import acquire_sync_lock, LockBusy
+from server.sync_lock import acquire_sync_lock
 
 
 class ExportBusy(Exception):
     """Raised when export_to_file cannot acquire the sync lock within the timeout."""
+
 
 # ---------------------------------------------------------------------------
 # Style constants
@@ -38,14 +37,25 @@ _EXPENSE_FILL = PatternFill(fill_type="solid", fgColor="FFC7CE")
 _BOLD_FONT = Font(bold=True)
 
 _MONTHS = [
-    "Jan", "Feb", "Mar", "Apr", "May", "Jun",
-    "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+    "Jan",
+    "Feb",
+    "Mar",
+    "Apr",
+    "May",
+    "Jun",
+    "Jul",
+    "Aug",
+    "Sep",
+    "Oct",
+    "Nov",
+    "Dec",
 ]
 
 
 # ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------
+
 
 def _fetch_ledgers(conn: sqlite3.Connection) -> list[dict]:
     """Return all ledgers as dicts with keys id, name."""
@@ -117,8 +127,7 @@ def _fetch_raw_transactions(
             year_strs,
         ).fetchall()
     else:
-        rows = conn.execute(
-            """
+        rows = conn.execute("""
             SELECT t.date, t.merchant, te.amount, l.name AS ledger,
                    li.name AS line_item
             FROM transaction_entries te
@@ -126,14 +135,14 @@ def _fetch_raw_transactions(
             JOIN line_items li ON li.id = te.line_item_id
             JOIN ledgers l ON l.id = te.ledger_id
             ORDER BY t.date, t.merchant
-            """
-        ).fetchall()
+            """).fetchall()
     return [dict(r) for r in rows]
 
 
 # ---------------------------------------------------------------------------
 # Sheet builders
 # ---------------------------------------------------------------------------
+
 
 def _write_ledger_sheet(
     ws,
@@ -164,7 +173,7 @@ def _write_ledger_sheet(
         row += 1
 
         # --- Income section ---
-        income_section_row = row
+        _income_section_row = row  # reserved for future section anchoring
         for li in income_items:
             totals = _fetch_monthly_totals(conn, li["id"], year)
             ws.cell(row=row, column=1, value=li["name"]).fill = _INCOME_FILL
@@ -275,6 +284,7 @@ def _write_raw_sheet(ws, conn: sqlite3.Connection, years: list[int] | None) -> N
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
+
 
 def build_workbook(
     conn: sqlite3.Connection,

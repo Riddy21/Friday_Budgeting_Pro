@@ -8,7 +8,6 @@ run `clawhub install` (too heavy for unit tests).
 from __future__ import annotations
 
 import json
-import os
 import pathlib
 import re
 
@@ -63,25 +62,23 @@ def test_skill_md_exists():
 def test_skill_md_has_pip_hook():
     """SKILL.md metadata must declare a pip install hook."""
     content = _read_skill_md()
-    assert "pip3 install" in content or "pip install" in content, (
-        "SKILL.md missing pip install hook"
-    )
+    assert (
+        "pip3 install" in content or "pip install" in content
+    ), "SKILL.md missing pip install hook"
 
 
 def test_skill_md_has_db_init_hook():
     """SKILL.md metadata must declare a db-init hook."""
     content = _read_skill_md()
-    assert "db-init" in content or "init_db" in content, (
-        "SKILL.md missing db-init hook"
-    )
+    assert "db-init" in content or "init_db" in content, "SKILL.md missing db-init hook"
 
 
 def test_skill_md_has_launchd_hook():
     """SKILL.md metadata must declare a launchd/installer hook."""
     content = _read_skill_md()
-    assert "server.installer" in content or "launchd" in content, (
-        "SKILL.md missing launchd/installer hook"
-    )
+    assert (
+        "server.installer" in content or "launchd" in content
+    ), "SKILL.md missing launchd/installer hook"
 
 
 def test_skill_md_install_hooks_count():
@@ -100,17 +97,13 @@ def test_skill_md_install_hooks_count():
 
 
 def test_installer_py_exists():
-    assert (REPO_ROOT / "server" / "installer.py").exists(), (
-        "server/installer.py must exist"
-    )
+    assert (REPO_ROOT / "server" / "installer.py").exists(), "server/installer.py must exist"
 
 
 def test_installer_py_referenced_in_skill_md():
     """SKILL.md launchd hook must call server.installer so clawhub runs it."""
     content = _read_skill_md()
-    assert "server.installer" in content, (
-        "SKILL.md launchd hook must reference 'server.installer'"
-    )
+    assert "server.installer" in content, "SKILL.md launchd hook must reference 'server.installer'"
 
 
 # ---------------------------------------------------------------------------
@@ -121,14 +114,14 @@ def test_installer_py_referenced_in_skill_md():
 def test_readme_documents_local_install():
     """README must document the local-clone install path."""
     readme = (REPO_ROOT / "README.md").read_text()
-    assert "clawhub install ./" in readme or "clawhub install /" in readme, (
-        "README must document `clawhub install ./` (local clone) flow"
-    )
+    assert (
+        "clawhub install ./" in readme or "clawhub install /" in readme
+    ), "README must document `clawhub install ./` (local clone) flow"
 
 
 def test_readme_documents_registry_install():
     """README must document the registry install path."""
     readme = (REPO_ROOT / "README.md").read_text()
-    assert "clawhub install friday-budgeting-pro" in readme, (
-        "README must document `clawhub install friday-budgeting-pro` (registry) flow"
-    )
+    assert (
+        "clawhub install friday-budgeting-pro" in readme
+    ), "README must document `clawhub install friday-budgeting-pro` (registry) flow"

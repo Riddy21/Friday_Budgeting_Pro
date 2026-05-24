@@ -19,10 +19,10 @@ import pytest
 from server.db import get_db, init_db
 from server.health_monitor import check_all_connections
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _insert_connection(conn, connection_id: str, status: str = "active") -> None:
     conn.execute(
@@ -37,6 +37,7 @@ def _insert_connection(conn, connection_id: str, status: str = "active") -> None
 # Fixtures
 # ---------------------------------------------------------------------------
 
+
 @pytest.fixture()
 def db_env(tmp_path, monkeypatch):
     """Patch paths and init a tmp DB with three bank_connections."""
@@ -44,9 +45,9 @@ def db_env(tmp_path, monkeypatch):
     monkeypatch.setattr("server.paths.DB_PATH", db)
     init_db(db)
 
-    conn_active_id = str(uuid.uuid4())       # should stay active (no error)
-    conn_reauth_id = str(uuid.uuid4())       # ITEM_LOGIN_REQUIRED → needs_reauth
-    conn_pending_id = str(uuid.uuid4())      # PENDING_EXPIRATION → pending_expiration
+    conn_active_id = str(uuid.uuid4())  # should stay active (no error)
+    conn_reauth_id = str(uuid.uuid4())  # ITEM_LOGIN_REQUIRED → needs_reauth
+    conn_pending_id = str(uuid.uuid4())  # PENDING_EXPIRATION → pending_expiration
 
     conn = get_db(db)
     _insert_connection(conn, conn_active_id, "active")
@@ -67,6 +68,7 @@ def db_env(tmp_path, monkeypatch):
 # Mock PlaidProvider
 # ---------------------------------------------------------------------------
 
+
 class _MockPlaid:
     """Returns different item statuses keyed by access_token prefix."""
 
@@ -84,6 +86,7 @@ class _MockPlaid:
 # ---------------------------------------------------------------------------
 # Tests
 # ---------------------------------------------------------------------------
+
 
 def test_no_error_sets_active(db_env, monkeypatch):
     """Connection with no Plaid error → status='active', last_synced_at updated."""
@@ -203,11 +206,13 @@ def test_all_three_connections_counts(db_env, monkeypatch):
     tok_reauth = f"tok-{env['conn_reauth_id'][:8]}"
     tok_pending = f"tok-{env['conn_pending_id'][:8]}"
 
-    plaid = _MockPlaid({
-        tok_active: {"error_code": None},
-        tok_reauth: {"error_code": "ITEM_LOGIN_REQUIRED"},
-        tok_pending: {"error_code": "PENDING_EXPIRATION"},
-    })
+    plaid = _MockPlaid(
+        {
+            tok_active: {"error_code": None},
+            tok_reauth: {"error_code": "ITEM_LOGIN_REQUIRED"},
+            tok_pending: {"error_code": "PENDING_EXPIRATION"},
+        }
+    )
 
     db = get_db(env["db"])
     try:

@@ -17,7 +17,6 @@ import pytest
 from server.db import init_db
 from server.main import add_hint, list_hints, remove_hint
 
-
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------

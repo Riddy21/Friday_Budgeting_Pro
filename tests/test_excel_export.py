@@ -12,7 +12,6 @@ Fixtures
 
 from __future__ import annotations
 
-import os
 import sqlite3
 import stat
 import uuid
@@ -25,10 +24,10 @@ import server.paths
 from server.db import get_db, init_db
 from server.excel_export import build_workbook, export_to_file
 
-
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
+
 
 @pytest.fixture()
 def patched_paths(tmp_path: Path, monkeypatch):
@@ -126,6 +125,7 @@ def seeded_db(patched_paths) -> sqlite3.Connection:
 # build_workbook tests
 # ---------------------------------------------------------------------------
 
+
 def test_build_workbook_sheets(seeded_db):
     """Workbook has Personal, Summary, and Raw Transactions sheets."""
     wb = build_workbook(seeded_db)
@@ -156,10 +156,7 @@ def test_personal_sheet_has_net_row(seeded_db):
     wb = build_workbook(seeded_db)
     ws = wb["Personal"]
 
-    net_values = [
-        ws.cell(row=r, column=1).value
-        for r in range(1, ws.max_row + 1)
-    ]
+    net_values = [ws.cell(row=r, column=1).value for r in range(1, ws.max_row + 1)]
     assert "Net" in net_values, "Personal sheet is missing a 'Net' row"
 
 
@@ -202,8 +199,7 @@ def test_raw_transactions_sheet_row_count(seeded_db):
 
     # Count non-empty rows (skip header)
     data_rows = [
-        r for r in ws.iter_rows(min_row=2, values_only=True)
-        if any(v is not None for v in r)
+        r for r in ws.iter_rows(min_row=2, values_only=True) if any(v is not None for v in r)
     ]
     assert len(data_rows) == 4
 
@@ -220,6 +216,7 @@ def test_summary_sheet_has_personal(seeded_db):
 # ---------------------------------------------------------------------------
 # export_to_file tests
 # ---------------------------------------------------------------------------
+
 
 def test_export_to_file_creates_file(seeded_db, tmp_path):
     """export_to_file writes a file at the given path."""
@@ -248,6 +245,7 @@ def test_export_to_file_valid_xlsx(seeded_db, tmp_path):
 # ---------------------------------------------------------------------------
 # export_excel MCP tool tests
 # ---------------------------------------------------------------------------
+
 
 def test_export_excel_tool(patched_paths, seeded_db):
     """export_excel() returns status=ok with a valid path and size > 0."""

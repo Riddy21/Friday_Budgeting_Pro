@@ -4,20 +4,19 @@ tests/test_configure_plaid.py — Tests for the configure_plaid MCP tool.
 
 from __future__ import annotations
 
+import logging
 import os
 import stat
-import logging
-from pathlib import Path
 
 import pytest
 
 import server.main as main_module
 from server.main import configure_plaid
 
-
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
+
 
 @pytest.fixture(autouse=True)
 def patch_project_root(tmp_path, monkeypatch):
@@ -42,6 +41,7 @@ def clean_environ():
 # ---------------------------------------------------------------------------
 # Tests
 # ---------------------------------------------------------------------------
+
 
 class TestConfigurePlaid:
     def test_writes_env_file_and_returns_ok(self, tmp_path):

@@ -11,10 +11,10 @@ from server.providers.base import BankProvider
 from server.providers.plaid import PlaidProvider
 from server.providers.wealthsimple import WealthsimpleProvider
 
-
 # ---------------------------------------------------------------------------
 # Interface contract
 # ---------------------------------------------------------------------------
+
 
 class TestPlaidProviderInterface:
 

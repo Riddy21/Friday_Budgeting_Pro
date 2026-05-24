@@ -16,18 +16,17 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from server.db import get_db, init_db
 from server.classifier import classify_with_llm, safe_classify
-
+from server.db import get_db, init_db
 
 # ---------------------------------------------------------------------------
 # Constants / helpers
 # ---------------------------------------------------------------------------
 
-LEDGER_ID    = "ledger-val"
-LEDGER_ID_2  = "ledger-other"
+LEDGER_ID = "ledger-val"
+LEDGER_ID_2 = "ledger-other"
 LINE_ITEM_ID = "li-food"
-TXN_ID       = "txn-val-1"
+TXN_ID = "txn-val-1"
 
 
 def seed(conn) -> None:
@@ -57,10 +56,10 @@ def seed(conn) -> None:
 
 def make_txn(amount: float = 30.00) -> dict:
     return {
-        "id":             TXN_ID,
-        "merchant":       "Loblaws",
-        "amount":         amount,
-        "date":           "2025-06-01",
+        "id": TXN_ID,
+        "merchant": "Loblaws",
+        "amount": amount,
+        "date": "2025-06-01",
         "bank_account_id": "acct-val",
     }
 
@@ -68,8 +67,8 @@ def make_txn(amount: float = 30.00) -> dict:
 def llm_json(**kwargs) -> str:
     payload = {
         "line_item_id": LINE_ITEM_ID,
-        "confidence":   0.85,
-        "reasoning":    "Loblaws is a grocery store.",
+        "confidence": 0.85,
+        "reasoning": "Loblaws is a grocery store.",
     }
     payload.update(kwargs)
     return json.dumps(payload)
@@ -104,11 +103,12 @@ def test_safe_classify_valid_output_passes_through(db):
 
     # Source is set by classify_with_llm; no rejection should occur
     assert result["transaction_id"] == TXN_ID
-    assert result["line_item_id"]   == LINE_ITEM_ID
-    assert result["ledger_id"]      == LEDGER_ID
-    assert result["source"] in ("llm", "llm-needs-review"), (
-        f"Expected 'llm' or 'llm-needs-review', got {result['source']!r}"
-    )
+    assert result["line_item_id"] == LINE_ITEM_ID
+    assert result["ledger_id"] == LEDGER_ID
+    assert result["source"] in (
+        "llm",
+        "llm-needs-review",
+    ), f"Expected 'llm' or 'llm-needs-review', got {result['source']!r}"
     assert "rejection_reason" not in result
 
 
@@ -125,17 +125,17 @@ def test_safe_classify_unknown_line_item_id_returns_rejected(db):
     with patch("server.llm.chat", mock_chat):
         result = safe_classify(db, make_txn(), fallback_to_review=True)
 
-    assert result["source"]         == "llm-rejected"
-    assert result["line_item_id"]   is None
-    assert result["ledger_id"]      is None
-    assert result["confidence"]     == 0.0
-    assert result["reviewed"]       == 0
+    assert result["source"] == "llm-rejected"
+    assert result["line_item_id"] is None
+    assert result["ledger_id"] is None
+    assert result["confidence"] == 0.0
+    assert result["reviewed"] == 0
     assert result["transaction_id"] == TXN_ID
-    assert result["amount"]         == 30.00
-    assert "unknown line_item_id" in result["rejection_reason"].lower() or \
-           "does not exist" in result["rejection_reason"].lower(), (
-        f"rejection_reason should mention unknown id, got: {result['rejection_reason']!r}"
-    )
+    assert result["amount"] == 30.00
+    assert (
+        "unknown line_item_id" in result["rejection_reason"].lower()
+        or "does not exist" in result["rejection_reason"].lower()
+    ), f"rejection_reason should mention unknown id, got: {result['rejection_reason']!r}"
 
 
 def test_safe_classify_malformed_json_returns_rejected(db):
@@ -145,9 +145,9 @@ def test_safe_classify_malformed_json_returns_rejected(db):
     with patch("server.llm.chat", mock_chat):
         result = safe_classify(db, make_txn(), fallback_to_review=True)
 
-    assert result["source"]       == "llm-rejected"
+    assert result["source"] == "llm-rejected"
     assert result["line_item_id"] is None
-    assert result["ledger_id"]    is None
+    assert result["ledger_id"] is None
     assert isinstance(result["rejection_reason"], str)
     assert len(result["rejection_reason"]) > 0
 
@@ -186,12 +186,12 @@ def test_classify_with_llm_correct_ledger_id_passes(db):
     """LLM returning the correct ledger_id alongside line_item_id → no error."""
     good_response = llm_json(
         line_item_id=LINE_ITEM_ID,
-        ledger_id=LEDGER_ID,      # matches what's in the DB
+        ledger_id=LEDGER_ID,  # matches what's in the DB
     )
     mock_chat = MagicMock(return_value=good_response)
 
     with patch("server.llm.chat", mock_chat):
         result = classify_with_llm(db, make_txn())
 
-    assert result["ledger_id"]    == LEDGER_ID
+    assert result["ledger_id"] == LEDGER_ID
     assert result["line_item_id"] == LINE_ITEM_ID

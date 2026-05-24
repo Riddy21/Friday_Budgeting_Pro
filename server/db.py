@@ -35,7 +35,6 @@ def init_db(path: str | Path) -> None:
     columns added after the initial schema are run here.  Each migration is
     guarded so it is a no-op if the column already exists.
     """
-    import uuid as _uuid
     import time as _time
 
     path = Path(path)
@@ -93,7 +92,9 @@ def init_db(path: str | Path) -> None:
                 if legacy_hash is None:
                     # Has data but no password hash — use a non-verifiable placeholder.
                     import secrets as _secrets
+
                     from argon2 import PasswordHasher as _PH
+
                     legacy_hash = _PH().hash(_secrets.token_hex(32))
 
                 conn.execute(

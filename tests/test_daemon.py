@@ -13,14 +13,9 @@ Coverage:
 
 from __future__ import annotations
 
-import asyncio
-import os
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock, patch
 
-import pytest
 from fastapi.testclient import TestClient
-
 
 # ---------------------------------------------------------------------------
 # Import sanity checks
@@ -89,9 +84,9 @@ def test_main_respects_friday_bp_ui_port(monkeypatch, tmp_path):
 
     daemon.main()
 
-    assert captured.get("port") == test_port, (
-        f"Expected uvicorn to bind on port {test_port}, got {captured.get('port')}"
-    )
+    assert (
+        captured.get("port") == test_port
+    ), f"Expected uvicorn to bind on port {test_port}, got {captured.get('port')}"
 
 
 # ---------------------------------------------------------------------------
@@ -121,6 +116,6 @@ def test_daemon_binds_localhost_only(monkeypatch):
 
     daemon.main()
 
-    assert captured.get("host") == "127.0.0.1", (
-        f"Daemon must bind to 127.0.0.1 only, got {captured.get('host')!r}"
-    )
+    assert (
+        captured.get("host") == "127.0.0.1"
+    ), f"Daemon must bind to 127.0.0.1 only, got {captured.get('host')!r}"

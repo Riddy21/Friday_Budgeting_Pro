@@ -12,9 +12,8 @@ import sqlite3
 import pytest
 
 import server.paths
-from server.db import get_db, init_db
 from server.classifier import maybe_promote_to_rule
-
+from server.db import get_db, init_db
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -117,6 +116,7 @@ def call_list(monkeypatch, db_path):
     """Call the list_auto_promoted_rules MCP tool with the test DB."""
     monkeypatch.setattr(server.paths, "DB_PATH", db_path)
     from server.main import list_auto_promoted_rules
+
     return list_auto_promoted_rules()
 
 
@@ -124,6 +124,7 @@ def call_undo(monkeypatch, db_path, rule_id: str):
     """Call the undo_auto_promoted_rule MCP tool with the test DB."""
     monkeypatch.setattr(server.paths, "DB_PATH", db_path)
     from server.main import undo_auto_promoted_rule
+
     return undo_auto_promoted_rule(rule_id)
 
 
@@ -264,9 +265,7 @@ class TestUndoAutoPromotedRule:
         assert response["rule_deleted"] is True
 
         # routing_rule should be gone
-        rr_row = db.execute(
-            "SELECT id FROM routing_rules WHERE id = ?", (rule_id,)
-        ).fetchone()
+        rr_row = db.execute("SELECT id FROM routing_rules WHERE id = ?", (rule_id,)).fetchone()
         assert rr_row is None
 
         # auto_promoted_rules_log row should be CASCADE-deleted

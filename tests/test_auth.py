@@ -16,16 +16,16 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
 
+
 @pytest.fixture()
 def db_path(tmp_path: Path, monkeypatch) -> Path:
     """Initialise a fresh SQLite DB and monkeypatch server.paths.DB_PATH."""
-    from server.db import init_db
     import server.paths as paths
+    from server.db import init_db
 
     db = tmp_path / "test_auth.db"
     init_db(db)
@@ -38,6 +38,7 @@ def db_path(tmp_path: Path, monkeypatch) -> Path:
 @pytest.fixture()
 def client(db_path: Path) -> TestClient:
     from ui.server import app
+
     return TestClient(app, follow_redirects=False)
 
 
@@ -63,20 +64,24 @@ def _complete_setup(client: TestClient, password: str = "correcthorsebattery") -
 # Unit tests -- password hashing
 # ---------------------------------------------------------------------------
 
+
 class TestPasswordHashing:
     def test_hash_verify_roundtrip(self):
         from ui.auth import hash_password, verify_password
+
         h = hash_password("mysecretpassword")
         assert verify_password("mysecretpassword", h) is True
 
     def test_wrong_password_returns_false(self):
         from ui.auth import hash_password, verify_password
+
         h = hash_password("correct")
         result = verify_password("wrong", h)
         assert result is False
 
     def test_wrong_password_no_exception(self):
         from ui.auth import hash_password, verify_password
+
         h = hash_password("correct")
         try:
             result = verify_password("definitely wrong", h)
@@ -86,17 +91,20 @@ class TestPasswordHashing:
 
     def test_empty_password_returns_false(self):
         from ui.auth import hash_password, verify_password
+
         h = hash_password("nonempty")
         assert verify_password("", h) is False
 
     def test_hash_uses_argon2id_format(self):
         from ui.auth import hash_password
+
         h = hash_password("test")
         assert h.startswith("$argon2id$"), f"Unexpected hash prefix: {h[:20]}"
 
     def test_two_hashes_differ(self):
         """argon2 uses a random salt -- two hashes of the same password differ."""
         from ui.auth import hash_password
+
         h1 = hash_password("same")
         h2 = hash_password("same")
         assert h1 != h2
@@ -105,6 +113,7 @@ class TestPasswordHashing:
 # ---------------------------------------------------------------------------
 # Unit tests -- session round-trip and logout
 # ---------------------------------------------------------------------------
+
 
 class TestSessionRoundTrip:
     def test_create_then_check_session(self, setup_client, db_path):
@@ -131,14 +140,13 @@ class TestSessionRoundTrip:
         assert r.status_code == 302
 
         from ui.auth import SESSION_COOKIE
+
         token = setup_client.cookies.get(SESSION_COOKIE)
         assert token is not None
 
         conn = get_db(db_path)
         try:
-            row = conn.execute(
-                "SELECT id FROM sessions WHERE id = ?", (token,)
-            ).fetchone()
+            row = conn.execute("SELECT id FROM sessions WHERE id = ?", (token,)).fetchone()
             assert row is not None, "Session row should exist after login"
         finally:
             conn.close()
@@ -148,9 +156,7 @@ class TestSessionRoundTrip:
 
         conn = get_db(db_path)
         try:
-            row = conn.execute(
-                "SELECT id FROM sessions WHERE id = ?", (token,)
-            ).fetchone()
+            row = conn.execute("SELECT id FROM sessions WHERE id = ?", (token,)).fetchone()
             assert row is None, "Session row should be deleted after logout"
         finally:
             conn.close()
@@ -159,6 +165,7 @@ class TestSessionRoundTrip:
 # ---------------------------------------------------------------------------
 # Unit tests -- session persistence across DB close/reopen
 # ---------------------------------------------------------------------------
+
 
 class TestSessionPersistence:
     def test_session_persists_across_db_close(self, db_path):
@@ -171,9 +178,7 @@ class TestSessionPersistence:
 
         conn = get_db(db_path)
         try:
-            row = conn.execute(
-                "SELECT id FROM sessions WHERE id = ?", (token,)
-            ).fetchone()
+            row = conn.execute("SELECT id FROM sessions WHERE id = ?", (token,)).fetchone()
             assert row is not None, "Session not found after DB close/reopen"
             assert row["id"] == token
         finally:

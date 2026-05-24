@@ -12,7 +12,6 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-
 # ---------------------------------------------------------------------------
 # Fixtures (mirrors test_ui_routes.py)
 # ---------------------------------------------------------------------------
@@ -20,8 +19,8 @@ from fastapi.testclient import TestClient
 
 @pytest.fixture()
 def db_path(tmp_path: Path, monkeypatch) -> Path:
-    from server.db import init_db
     import server.paths as paths
+    from server.db import init_db
 
     db = tmp_path / "test.db"
     init_db(db)
@@ -34,12 +33,14 @@ def db_path(tmp_path: Path, monkeypatch) -> Path:
 @pytest.fixture()
 def client(db_path: Path) -> TestClient:
     from ui.server import app
+
     return TestClient(app, follow_redirects=False)
 
 
 @pytest.fixture()
 def authed_client(db_path: Path) -> TestClient:
     from ui.server import app
+
     c = TestClient(app, follow_redirects=False)
     _complete_setup(c)
     return _login(c)
@@ -70,6 +71,7 @@ def _login(client: TestClient, password: str = "testpass123") -> TestClient:
 def _insert_ledger(db_path: Path, name: str = "Personal") -> str:
     """Directly insert a ledger into the DB and return its id."""
     from server.db import get_db
+
     lid = str(uuid.uuid4())
     conn = get_db(db_path)
     try:
@@ -82,6 +84,7 @@ def _insert_ledger(db_path: Path, name: str = "Personal") -> str:
 
 def _insert_item(db_path: Path, ledger_id: str, name: str, item_type: str = "expense") -> str:
     from server.db import get_db
+
     iid = str(uuid.uuid4())
     conn = get_db(db_path)
     try:
@@ -173,6 +176,7 @@ class TestCreateLedger:
     def test_create_ledger_persists(self, authed_client, db_path):
         authed_client.post("/ledgers", json={"name": "Rental"})
         from server.db import get_db
+
         conn = get_db(db_path)
         try:
             row = conn.execute("SELECT name FROM ledgers WHERE name='Rental'").fetchone()
@@ -196,6 +200,7 @@ class TestDeleteLedger:
     def test_delete_only_ledger_returns_409(self, authed_client, db_path):
         # setup creates Personal ledger; use that one (it's the only ledger)
         from server.db import get_db
+
         conn = get_db(db_path)
         try:
             row = conn.execute("SELECT id FROM ledgers WHERE name='Personal'").fetchone()
@@ -211,6 +216,7 @@ class TestDeleteLedger:
         iid = _insert_item(db_path, lid2, "Office", "expense")
         authed_client.delete(f"/ledgers/{lid2}")
         from server.db import get_db
+
         conn = get_db(db_path)
         try:
             row = conn.execute("SELECT id FROM line_items WHERE id=?", (iid,)).fetchone()
@@ -237,7 +243,7 @@ class TestRenameLedger:
         assert r.status_code == 400
 
     def test_rename_ledger_not_found_returns_404(self, authed_client):
-        r = authed_client.patch(f"/ledgers/nonexistent-id", json={"name": "X"})
+        r = authed_client.patch("/ledgers/nonexistent-id", json={"name": "X"})
         assert r.status_code == 404
 
 
@@ -249,7 +255,9 @@ class TestRenameLedger:
 class TestCreateItem:
     def test_add_income_item(self, authed_client, db_path):
         lid = _insert_ledger(db_path, "Personal")
-        r = authed_client.post(f"/ledgers/{lid}/items", json={"name": "Salary", "section": "income"})
+        r = authed_client.post(
+            f"/ledgers/{lid}/items", json={"name": "Salary", "section": "income"}
+        )
         assert r.status_code == 201
         data = r.json()
         assert data["name"] == "Salary"
@@ -257,7 +265,9 @@ class TestCreateItem:
 
     def test_add_expense_item(self, authed_client, db_path):
         lid = _insert_ledger(db_path, "Personal")
-        r = authed_client.post(f"/ledgers/{lid}/items", json={"name": "Groceries", "section": "expenses"})
+        r = authed_client.post(
+            f"/ledgers/{lid}/items", json={"name": "Groceries", "section": "expenses"}
+        )
         assert r.status_code == 201
         data = r.json()
         assert data["item_type"] == "expense"
@@ -268,7 +278,9 @@ class TestCreateItem:
         assert r.status_code == 400
 
     def test_add_item_ledger_not_found_returns_404(self, authed_client):
-        r = authed_client.post("/ledgers/nonexistent/items", json={"name": "X", "section": "expenses"})
+        r = authed_client.post(
+            "/ledgers/nonexistent/items", json={"name": "X", "section": "expenses"}
+        )
         assert r.status_code == 404
 
 
@@ -316,6 +328,7 @@ class TestDeleteItem:
 
     def test_delete_item_with_entries_returns_409(self, authed_client, db_path):
         from server.db import get_db
+
         lid = _insert_ledger(db_path, "Personal")
         iid = _insert_item(db_path, lid, "Groceries", "expense")
         # Insert a dummy transaction_entry referencing this item
@@ -336,6 +349,7 @@ class TestDeleteItem:
 
     def test_delete_item_with_entries_confirm_true_succeeds(self, authed_client, db_path):
         from server.db import get_db
+
         lid = _insert_ledger(db_path, "Personal")
         iid = _insert_item(db_path, lid, "Groceries", "expense")
         conn = get_db(db_path)

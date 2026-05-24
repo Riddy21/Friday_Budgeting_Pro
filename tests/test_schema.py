@@ -2,9 +2,9 @@
 Tests for db/schema.sql — creates an in-memory SQLite DB from the schema
 and asserts all tables and key columns exist.
 """
-import sqlite3
-import pathlib
 
+import pathlib
+import sqlite3
 
 SCHEMA_PATH = pathlib.Path(__file__).parent.parent / "db" / "schema.sql"
 
@@ -17,9 +17,7 @@ def get_connection() -> sqlite3.Connection:
 
 
 def tables(conn: sqlite3.Connection) -> set[str]:
-    rows = conn.execute(
-        "SELECT name FROM sqlite_master WHERE type='table'"
-    ).fetchall()
+    rows = conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()
     return {r[0] for r in rows}
 
 
@@ -43,23 +41,26 @@ def test_all_tables_exist():
         "app_config",
         "sessions",
     }
-    assert expected <= tables(conn), (
-        f"Missing tables: {expected - tables(conn)}"
-    )
+    assert expected <= tables(conn), f"Missing tables: {expected - tables(conn)}"
 
 
 def test_bank_connections_columns():
     conn = get_connection()
     cols = columns(conn, "bank_connections")
-    assert {"id", "plaid_item_id", "plaid_access_token_encrypted",
-            "institution_name", "status", "last_synced_at"} <= cols
+    assert {
+        "id",
+        "plaid_item_id",
+        "plaid_access_token_encrypted",
+        "institution_name",
+        "status",
+        "last_synced_at",
+    } <= cols
 
 
 def test_bank_accounts_columns():
     conn = get_connection()
     cols = columns(conn, "bank_accounts")
-    assert {"id", "connection_id", "plaid_account_id",
-            "name", "mask", "type", "subtype"} <= cols
+    assert {"id", "connection_id", "plaid_account_id", "name", "mask", "type", "subtype"} <= cols
 
 
 def test_ledgers_columns():
@@ -77,15 +78,31 @@ def test_line_items_columns():
 def test_transactions_columns():
     conn = get_connection()
     cols = columns(conn, "transactions")
-    assert {"id", "bank_account_id", "plaid_transaction_id",
-            "date", "merchant", "amount", "plaid_category", "pending"} <= cols
+    assert {
+        "id",
+        "bank_account_id",
+        "plaid_transaction_id",
+        "date",
+        "merchant",
+        "amount",
+        "plaid_category",
+        "pending",
+    } <= cols
 
 
 def test_transaction_entries_columns():
     conn = get_connection()
     cols = columns(conn, "transaction_entries")
-    assert {"id", "transaction_id", "ledger_id", "line_item_id",
-            "amount", "source", "confidence", "reviewed"} <= cols
+    assert {
+        "id",
+        "transaction_id",
+        "ledger_id",
+        "line_item_id",
+        "amount",
+        "source",
+        "confidence",
+        "reviewed",
+    } <= cols
 
 
 def test_routing_rules_columns():
@@ -116,7 +133,6 @@ def test_sessions_columns():
     conn = get_connection()
     cols = columns(conn, "sessions")
     assert {"id", "created_at", "last_seen_at", "expires_at", "user_agent"} <= cols
-
 
 
 def test_schema_loads_twice_idempotent():

@@ -12,23 +12,22 @@ Covers:
 from __future__ import annotations
 
 import sqlite3
-import time
 import uuid
 from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
 
-
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
 
+
 @pytest.fixture()
 def db_path(tmp_path: Path, monkeypatch) -> Path:
     """Initialise a fresh SQLite DB and monkeypatch paths."""
-    from server.db import init_db
     import server.paths as paths
+    from server.db import init_db
 
     db = tmp_path / "test_multi_profile.db"
     init_db(db)
@@ -41,16 +40,20 @@ def db_path(tmp_path: Path, monkeypatch) -> Path:
 @pytest.fixture()
 def client(db_path: Path) -> TestClient:
     from ui.server import app
+
     return TestClient(app, follow_redirects=False)
 
 
 def _do_setup(client: TestClient, username: str = "alice", password: str = "alicepass123") -> None:
     """Drive the setup wizard to completion (creates first user)."""
-    r = client.post("/setup/1", data={
-        "username": username,
-        "password": password,
-        "password_confirm": password,
-    })
+    r = client.post(
+        "/setup/1",
+        data={
+            "username": username,
+            "password": password,
+            "password_confirm": password,
+        },
+    )
     assert r.status_code == 200
     r = client.post("/setup/2", data={"notification_pref": "openclaw"})
     assert r.status_code == 200
@@ -60,7 +63,9 @@ def _do_setup(client: TestClient, username: str = "alice", password: str = "alic
     assert r.status_code == 302
 
 
-def _login(client: TestClient, username: str = "alice", password: str = "alicepass123") -> TestClient:
+def _login(
+    client: TestClient, username: str = "alice", password: str = "alicepass123"
+) -> TestClient:
     """Log in and return the client with session cookie."""
     r = client.post("/login", data={"username": username, "password": password})
     assert r.status_code == 302, f"Login failed (status {r.status_code})"
@@ -71,9 +76,11 @@ def _login(client: TestClient, username: str = "alice", password: str = "alicepa
 # Profile creation
 # ---------------------------------------------------------------------------
 
+
 class TestProfileCreation:
     def test_create_user_helper(self, db_path):
         from ui.auth import create_user, get_user_by_username
+
         uid = create_user(db_path, "bob", "bobspassword1")
         assert uid is not None
         user = get_user_by_username(db_path, "bob")
@@ -83,6 +90,7 @@ class TestProfileCreation:
 
     def test_duplicate_username_raises(self, db_path):
         from ui.auth import create_user
+
         create_user(db_path, "dup", "password12")
         with pytest.raises(ValueError, match="already taken"):
             create_user(db_path, "dup", "password12")
@@ -90,10 +98,12 @@ class TestProfileCreation:
     def test_has_any_user_false_on_fresh_db(self, db_path):
         """Fresh DB (no data) has no users — setup wizard creates the first one."""
         from ui.auth import has_any_user
+
         assert has_any_user(db_path) is False
 
     def test_list_users_returns_created_users(self, db_path):
         from ui.auth import create_user, list_users
+
         create_user(db_path, "u1", "password11")
         create_user(db_path, "u2", "password22")
         users = list_users(db_path)
@@ -106,15 +116,19 @@ class TestProfileCreation:
         _do_setup(client, "alice", "alicepass123")
         _login(client, "alice", "alicepass123")
 
-        r = client.post("/profile", data={
-            "action": "create_profile",
-            "new_username": "bob",
-            "new_password": "bobpassword1",
-        })
+        r = client.post(
+            "/profile",
+            data={
+                "action": "create_profile",
+                "new_username": "bob",
+                "new_password": "bobpassword1",
+            },
+        )
         assert r.status_code == 200
         assert b"bob" in r.content
 
         from ui.auth import get_user_by_username
+
         bob = get_user_by_username(db_path, "bob")
         assert bob is not None
 
@@ -122,24 +136,31 @@ class TestProfileCreation:
         """Short passwords are rejected."""
         _do_setup(client, "alice", "alicepass123")
         _login(client, "alice", "alicepass123")
-        r = client.post("/profile", data={
-            "action": "create_profile",
-            "new_username": "bob",
-            "new_password": "short",
-        })
+        r = client.post(
+            "/profile",
+            data={
+                "action": "create_profile",
+                "new_username": "bob",
+                "new_password": "short",
+            },
+        )
         assert r.status_code == 200
-        assert b"8 characters" in r.content or b"short" in r.content.lower() or b"least" in r.content
+        assert (
+            b"8 characters" in r.content or b"short" in r.content.lower() or b"least" in r.content
+        )
 
 
 # ---------------------------------------------------------------------------
 # Login with username+password
 # ---------------------------------------------------------------------------
 
+
 class TestLoginWithUsernamePwd:
     def test_login_requires_username_when_multiple_users(self, client, db_path):
         """When multiple users exist, login without username fails."""
         _do_setup(client, "alice", "alicepass123")
         from ui.auth import create_user
+
         create_user(db_path, "bob", "bobpassword1")
 
         fresh = TestClient(client.app, follow_redirects=False)
@@ -194,9 +215,7 @@ class TestLoginWithUsernamePwd:
 
         conn = get_db(db_path)
         try:
-            row = conn.execute(
-                "SELECT user_id FROM sessions WHERE id = ?", (token,)
-            ).fetchone()
+            row = conn.execute("SELECT user_id FROM sessions WHERE id = ?", (token,)).fetchone()
         finally:
             conn.close()
 
@@ -209,6 +228,7 @@ class TestLoginWithUsernamePwd:
 # ---------------------------------------------------------------------------
 # Data isolation
 # ---------------------------------------------------------------------------
+
 
 class TestDataIsolation:
     def test_bank_connections_are_isolated(self, db_path):
@@ -299,8 +319,8 @@ class TestDataIsolation:
 
     def test_profile_page_shows_only_current_user_connections(self, client, db_path):
         """Profile page only shows bank connections for the logged-in user."""
-        from ui.auth import create_user
         from server.db import get_db
+        from ui.auth import create_user
 
         _do_setup(client, "alice", "alicepass123")
         uid_alice = client.app  # placeholder
@@ -329,13 +349,16 @@ class TestDataIsolation:
 # list_profiles() MCP tool
 # ---------------------------------------------------------------------------
 
+
 class TestListProfilesMCP:
     def test_list_profiles_returns_list(self, db_path, monkeypatch):
         """list_profiles() returns a list (not a stub or error)."""
         import server.paths as paths
+
         monkeypatch.setattr(paths, "DB_PATH", db_path)
 
         from server.main import list_profiles
+
         result = list_profiles()
         assert isinstance(result, dict)
         assert "profiles" in result
@@ -343,13 +366,16 @@ class TestListProfilesMCP:
 
     def test_list_profiles_includes_created_users(self, db_path, monkeypatch):
         import server.paths as paths
+
         monkeypatch.setattr(paths, "DB_PATH", db_path)
 
         from ui.auth import create_user
+
         create_user(db_path, "carol", "carolpass12")
         create_user(db_path, "dave", "davepass123")
 
         from server.main import list_profiles
+
         result = list_profiles()
         usernames = {p["username"] for p in result["profiles"]}
         assert "carol" in usernames
@@ -358,9 +384,11 @@ class TestListProfilesMCP:
     def test_list_profiles_no_password_hash_exposed(self, db_path, monkeypatch):
         """Password hashes must not appear in list_profiles output."""
         import server.paths as paths
+
         monkeypatch.setattr(paths, "DB_PATH", db_path)
 
         from server.main import list_profiles
+
         result = list_profiles()
         for profile in result["profiles"]:
             assert "password_hash" not in profile
@@ -370,6 +398,7 @@ class TestListProfilesMCP:
 # ---------------------------------------------------------------------------
 # Migration: existing single-user DB
 # ---------------------------------------------------------------------------
+
 
 class TestMigration:
     def test_existing_db_gets_default_user(self, tmp_path):
@@ -418,6 +447,7 @@ class TestMigration:
 
         # Run init_db — should create users table + default user + backfill user_id
         from server.db import init_db
+
         init_db(db_file)
 
         conn = sqlite3.connect(str(db_file))
@@ -438,7 +468,9 @@ class TestMigration:
             assert led is not None
             assert led["user_id"] == default_uid
 
-            hint = conn.execute("SELECT user_id FROM classification_hints WHERE id = 'hint-1'").fetchone()
+            hint = conn.execute(
+                "SELECT user_id FROM classification_hints WHERE id = 'hint-1'"
+            ).fetchone()
             assert hint is not None
             assert hint["user_id"] == default_uid
         finally:
@@ -447,6 +479,7 @@ class TestMigration:
     def test_migration_uses_legacy_password_hash(self, tmp_path):
         """If app_config has a password hash, it is copied to the default user."""
         from argon2 import PasswordHasher
+
         db_file = tmp_path / "legacy_pw.db"
 
         ph = PasswordHasher()
@@ -480,9 +513,11 @@ class TestMigration:
         conn.close()
 
         from server.db import init_db
+
         init_db(db_file)
 
-        from ui.auth import verify_password, get_password_hash
+        from ui.auth import get_password_hash, verify_password
+
         stored = get_password_hash(db_file)
         assert stored is not None
         assert verify_password("mysecretpassword", stored)
@@ -502,8 +537,8 @@ class TestMigration:
 
     def test_delete_profile_removes_data(self, db_path):
         """Deleting a profile removes all associated data."""
-        from ui.auth import create_user, delete_user, list_users, get_user_by_username
         from server.db import get_db
+        from ui.auth import create_user, delete_user, get_user_by_username
 
         uid = create_user(db_path, "tobedeleted", "password123")
 
@@ -531,9 +566,7 @@ class TestMigration:
             bc = conn.execute(
                 "SELECT id FROM bank_connections WHERE user_id = ?", (uid,)
             ).fetchall()
-            leds = conn.execute(
-                "SELECT id FROM ledgers WHERE user_id = ?", (uid,)
-            ).fetchall()
+            leds = conn.execute("SELECT id FROM ledgers WHERE user_id = ?", (uid,)).fetchall()
         finally:
             conn.close()
 

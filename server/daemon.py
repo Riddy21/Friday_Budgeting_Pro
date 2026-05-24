@@ -116,6 +116,7 @@ def main() -> None:
     """Entry point called by ``python3 -m server.daemon``."""
     # 0. Load .env from project root (no-op if file doesn't exist)
     from dotenv import load_dotenv
+
     load_dotenv(Path(__file__).parent.parent / ".env")
 
     # 1. Filesystem setup

@@ -6,11 +6,11 @@ from __future__ import annotations
 
 import json
 import uuid
+
 import pytest
 
 from server.db import get_db, init_db
-from server.main import setup_status, apply_initial_setup
-
+from server.main import apply_initial_setup, setup_status
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -26,8 +26,8 @@ def tmp_db(tmp_path, monkeypatch):
     explicitly need it.  Tests that want to verify cron registration should
     create the directory themselves.
     """
-    import server.paths
     import server.main
+    import server.paths
 
     db_file = tmp_path / "test.db"
     monkeypatch.setattr(server.paths, "DB_PATH", db_file)
@@ -137,9 +137,7 @@ def test_apply_with_hints_creates_classification_hints(tmp_db):
 
 def test_apply_banks_to_link_returned_not_stored(tmp_db):
     """banks_to_link are acknowledged but NOT stored — Plaid Link happens separately."""
-    result = apply_initial_setup(
-        banks_to_link=["TD Bank", "RBC"], extra_ledgers=[], hints=[]
-    )
+    result = apply_initial_setup(banks_to_link=["TD Bank", "RBC"], extra_ledgers=[], hints=[])
     assert set(result["banks_to_link"]) == {"TD Bank", "RBC"}
 
     # Nothing should be written to bank_connections
@@ -168,8 +166,8 @@ def test_apply_is_idempotent(tmp_db):
     hint_count = conn.execute("SELECT COUNT(*) FROM classification_hints").fetchone()[0]
     conn.close()
 
-    assert ledger_count == 2          # Personal + Business
-    assert line_item_count == 11      # 10 personal + 1 business
+    assert ledger_count == 2  # Personal + Business
+    assert line_item_count == 11  # 10 personal + 1 business
     assert hint_count == 1
 
 

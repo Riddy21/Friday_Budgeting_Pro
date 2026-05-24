@@ -12,11 +12,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-import pytest
-
 import server.main as _main
 from server.main import _register_openclaw_cron
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -132,9 +129,9 @@ def test_warning_logged_when_openclaw_absent(monkeypatch, tmp_path, caplog):
     with caplog.at_level(logging.WARNING, logger="server.main"):
         _register_openclaw_cron()
 
-    assert any("cron" in msg.lower() or "openclaw" in msg.lower() for msg in caplog.messages), (
-        "Expected a warning mentioning cron or openclaw"
-    )
+    assert any(
+        "cron" in msg.lower() or "openclaw" in msg.lower() for msg in caplog.messages
+    ), "Expected a warning mentioning cron or openclaw"
 
 
 # ---------------------------------------------------------------------------

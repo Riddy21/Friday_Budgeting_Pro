@@ -8,12 +8,13 @@ Per Design Constraint #6, all network binds must be restricted to 127.0.0.1.
 These tests are meant to fail fast in CI if a developer accidentally introduces
 a public bind, not to test runtime behaviour.
 """
+
 import re
 from pathlib import Path
 
 # Patterns that indicate a public or empty-host bind
 FORBIDDEN_PATTERNS = [
-    re.compile(r'0\.0\.0\.0'),
+    re.compile(r"0\.0\.0\.0"),
     re.compile(r'host\s*=\s*["\'](\s*|0\.0\.0\.0)["\']'),
     re.compile(r'bind\(\s*\(\s*["\'](\s*|0\.0\.0\.0)["\']'),
 ]

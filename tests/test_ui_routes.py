@@ -8,22 +8,21 @@ the temp database.
 
 from __future__ import annotations
 
-import importlib
 from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
 
-
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
 
+
 @pytest.fixture()
 def db_path(tmp_path: Path, monkeypatch) -> Path:
     """Initialise a fresh SQLite DB in tmp_path and monkeypatch DB_PATH."""
-    from server.db import init_db
     import server.paths as paths
+    from server.db import init_db
 
     db = tmp_path / "test.db"
     init_db(db)
@@ -43,6 +42,7 @@ def db_path(tmp_path: Path, monkeypatch) -> Path:
 def client(db_path: Path) -> TestClient:
     """TestClient backed by the patched app."""
     from ui.server import app
+
     return TestClient(app, follow_redirects=False)
 
 
@@ -53,6 +53,7 @@ def authed_client(db_path: Path) -> TestClient:
     Sets a password via the setup wizard, then logs in.
     """
     from ui.server import app
+
     client = TestClient(app, follow_redirects=False)
     _complete_setup(client)
     return _login(client)
@@ -62,13 +63,17 @@ def authed_client(db_path: Path) -> TestClient:
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _complete_setup(client: TestClient, password: str = "testpassword123") -> None:
     """Drive the setup wizard to completion."""
     # Step 1: password
-    r = client.post("/setup/1", data={
-        "password": password,
-        "password_confirm": password,
-    })
+    r = client.post(
+        "/setup/1",
+        data={
+            "password": password,
+            "password_confirm": password,
+        },
+    )
     assert r.status_code == 200, f"Setup step 1 failed: {r.status_code}"
 
     # Step 2: notification pref
@@ -98,6 +103,7 @@ def _login(client: TestClient, password: str = "testpassword123") -> TestClient:
 # Tests — without a password set (fresh DB)
 # ---------------------------------------------------------------------------
 
+
 class TestNoPasswordSet:
     def test_healthz(self, client):
         r = client.get("/healthz")
@@ -123,6 +129,7 @@ class TestNoPasswordSet:
 # ---------------------------------------------------------------------------
 # Tests — after setup (password set)
 # ---------------------------------------------------------------------------
+
 
 class TestAfterSetup:
     @pytest.fixture(autouse=True)
@@ -192,6 +199,7 @@ class TestAfterSetup:
 # Tests — authenticated misc routes
 # ---------------------------------------------------------------------------
 
+
 class TestAuthenticatedRoutes:
     @pytest.fixture(autouse=True)
     def _authed(self, authed_client):
@@ -215,11 +223,14 @@ class TestAuthenticatedRoutes:
         assert r.status_code == 200
 
     def test_reset_post_placeholder(self):
-        r = self.client.post("/reset", data={
-            "token": "abc",
-            "password": "newpassword1",
-            "password_confirm": "newpassword1",
-        })
+        r = self.client.post(
+            "/reset",
+            data={
+                "token": "abc",
+                "password": "newpassword1",
+                "password_confirm": "newpassword1",
+            },
+        )
         assert r.status_code == 200
 
     def test_link_get_200(self):

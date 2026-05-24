@@ -37,6 +37,7 @@ _DB_PATH = os.environ.get("DB_PATH", os.path.join(os.path.dirname(__file__), "..
 # Internal helpers
 # ---------------------------------------------------------------------------
 
+
 def _get_db() -> sqlite3.Connection:
     conn = sqlite3.connect(_DB_PATH)
     conn.row_factory = sqlite3.Row
@@ -45,9 +46,7 @@ def _get_db() -> sqlite3.Connection:
 
 def _get_preferred_channel(conn: sqlite3.Connection) -> str:
     """Return the user's preferred notification channel, defaulting to 'in_ui'."""
-    row = conn.execute(
-        "SELECT notification_channel FROM app_config WHERE id = 1"
-    ).fetchone()
+    row = conn.execute("SELECT notification_channel FROM app_config WHERE id = 1").fetchone()
     if row and row["notification_channel"]:
         return row["notification_channel"]
     return "in_ui"
@@ -80,10 +79,7 @@ def _try_macos_notification(message: str) -> bool:
     Send a macOS Notification Center alert via osascript.
     Returns True on success, False on any error.
     """
-    script = (
-        f'display notification {json_escape(message)} '
-        f'with title "Friday Budgeting Pro"'
-    )
+    script = f"display notification {json_escape(message)} " f'with title "Friday Budgeting Pro"'
     try:
         result = subprocess.run(
             ["osascript", "-e", script],
@@ -98,6 +94,7 @@ def _try_macos_notification(message: str) -> bool:
 def json_escape(s: str) -> str:
     """Minimal JSON string quoting so we can embed text safely in AppleScript."""
     import json
+
     return json.dumps(s)
 
 
@@ -122,6 +119,7 @@ def _write_notification_row(
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
+
 
 def send(message: str, urgency: str = "normal") -> dict:
     """

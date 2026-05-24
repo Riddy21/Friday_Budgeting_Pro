@@ -8,10 +8,10 @@ import os
 import unittest
 from unittest.mock import MagicMock, patch
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _env(extra: dict | None = None) -> dict:
     """Return a minimal valid env dict, optionally overriding keys."""
@@ -34,6 +34,7 @@ def _mock_plaid_api(mock_api_cls: MagicMock) -> MagicMock:
 # create_link_token
 # ---------------------------------------------------------------------------
 
+
 class TestCreateLinkToken(unittest.TestCase):
 
     @patch("server.providers.plaid.plaid_api.PlaidApi")
@@ -43,6 +44,7 @@ class TestCreateLinkToken(unittest.TestCase):
 
         with patch.dict(os.environ, _env(), clear=False):
             from server.providers.plaid import PlaidProvider
+
             result = PlaidProvider().create_link_token()
 
         self.assertEqual(result, "link-sandbox-abc123")
@@ -55,6 +57,7 @@ class TestCreateLinkToken(unittest.TestCase):
 
         with patch.dict(os.environ, _env(), clear=False):
             from server.providers.plaid import PlaidProvider
+
             result = PlaidProvider().create_link_token(user_id="user-42")
 
         self.assertEqual(result, "link-sandbox-xyz")
@@ -68,6 +71,7 @@ class TestCreateLinkToken(unittest.TestCase):
 # exchange_public_token
 # ---------------------------------------------------------------------------
 
+
 class TestExchangePublicToken(unittest.TestCase):
 
     @patch("server.providers.plaid.plaid_api.PlaidApi")
@@ -80,6 +84,7 @@ class TestExchangePublicToken(unittest.TestCase):
 
         with patch.dict(os.environ, _env(), clear=False):
             from server.providers.plaid import PlaidProvider
+
             result = PlaidProvider().exchange_public_token("public-sandbox-abc")
 
         self.assertEqual(result["access_token"], "access-sandbox-token-abc")
@@ -90,6 +95,7 @@ class TestExchangePublicToken(unittest.TestCase):
 # ---------------------------------------------------------------------------
 # sync_transactions
 # ---------------------------------------------------------------------------
+
 
 class TestSyncTransactions(unittest.TestCase):
 
@@ -105,6 +111,7 @@ class TestSyncTransactions(unittest.TestCase):
 
         with patch.dict(os.environ, _env(), clear=False):
             from server.providers.plaid import PlaidProvider
+
             result = PlaidProvider().sync_transactions("access-sandbox-token")
 
         self.assertEqual(len(result["added"]), 1)
@@ -135,6 +142,7 @@ class TestSyncTransactions(unittest.TestCase):
 
         with patch.dict(os.environ, _env(), clear=False):
             from server.providers.plaid import PlaidProvider
+
             result = PlaidProvider().sync_transactions("access-sandbox-token")
 
         self.assertIn("accounts", result)
@@ -153,9 +161,8 @@ class TestSyncTransactions(unittest.TestCase):
 
         with patch.dict(os.environ, _env(), clear=False):
             from server.providers.plaid import PlaidProvider
-            result = PlaidProvider().sync_transactions(
-                "access-sandbox-token", cursor="cursor-v2"
-            )
+
+            result = PlaidProvider().sync_transactions("access-sandbox-token", cursor="cursor-v2")
 
         self.assertEqual(result["next_cursor"], "cursor-v3")
         self.assertEqual(len(result["modified"]), 1)
@@ -170,13 +177,16 @@ class TestSyncTransactions(unittest.TestCase):
 # Environment-variable validation
 # ---------------------------------------------------------------------------
 
+
 class TestEnvValidation(unittest.TestCase):
 
     def test_bad_plaid_env_raises_value_error(self):
         bad_env = _env({"PLAID_ENV": "staging"})
         with patch.dict(os.environ, bad_env, clear=False):
             import importlib
+
             from server.providers import plaid as plaid_module
+
             importlib.reload(plaid_module)
             with self.assertRaises(ValueError):
                 plaid_module.PlaidProvider().create_link_token()
@@ -192,7 +202,9 @@ class TestEnvValidation(unittest.TestCase):
         patched.update(env)
         with patch.dict(os.environ, patched, clear=True):
             import importlib
+
             from server.providers import plaid as plaid_module
+
             importlib.reload(plaid_module)
             with self.assertRaises(EnvironmentError):
                 plaid_module.PlaidProvider().create_link_token()
@@ -207,7 +219,9 @@ class TestEnvValidation(unittest.TestCase):
         patched.update(env)
         with patch.dict(os.environ, patched, clear=True):
             import importlib
+
             from server.providers import plaid as plaid_module
+
             importlib.reload(plaid_module)
             with self.assertRaises(EnvironmentError):
                 plaid_module.PlaidProvider().create_link_token()
