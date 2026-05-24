@@ -22,6 +22,7 @@ from server.classifier import apply_rules
 import server.paths
 import server.crypto
 from server.providers.plaid import PlaidProvider
+import server.health_monitor
 
 _plaid = PlaidProvider()
 
@@ -360,10 +361,18 @@ def sync() -> dict:
     total_removed = 0
     total_classified = 0
 
+    health_check_result: dict = {}
+
     try:
         with sync_lock(timeout=0.0):
             db_conn = get_db(server.paths.DB_PATH)
             try:
+                # Run health check first so stale/expired connections are
+                # updated before we attempt to sync them.
+                health_check_result = server.health_monitor.check_all_connections(
+                    db_conn, plaid_provider=_plaid
+                )
+
                 active_conns = db_conn.execute(
                     "SELECT id, plaid_access_token_encrypted "
                     "FROM bank_connections WHERE status = 'active'"
@@ -538,6 +547,7 @@ def sync() -> dict:
         "modified": total_modified,
         "removed": total_removed,
         "classified_by_rule": total_classified,
+        "health_check": health_check_result,
     }
 
 
