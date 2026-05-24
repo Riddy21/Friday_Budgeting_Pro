@@ -811,8 +811,120 @@ def remove_hint(id: str) -> dict:
 
 @mcp.tool
 def summary(period: str) -> dict:
-    """Return spending totals for a given period."""
-    return {"status": "not_implemented"}
+    """Return spending totals for a given period.
+
+    Parameters
+    ----------
+    period : str
+        One of:
+          - ``"month"``  → current calendar month (YYYY-MM)
+          - ``"year"``   → current calendar year (YYYY)
+          - ``"ytd"``    → year-to-date (Jan 1 to today)
+          - ``"YYYY-MM"`` → a specific month, e.g. ``"2026-05"``
+          - ``"YYYY"``   → a specific year, e.g. ``"2026"``
+
+    Returns
+    -------
+    dict
+        ::
+
+            {
+              "period": str,
+              "income": float,
+              "expenses": float,
+              "net": float,      # income - expenses
+              "by_line_item": [
+                {"line_item": str, "ledger": str, "type": str, "total": float},
+                ...
+              ]
+            }
+
+        ``by_line_item`` is sorted by ``total`` descending (most positive
+        income first, then expenses sorted least-negative last — i.e. simple
+        descending numeric sort on the raw total value).
+    """
+    import re as _re
+
+    today = _datetime.now().date()
+    today_str = today.isoformat()          # "YYYY-MM-DD"
+    year_str = today_str[:4]               # "YYYY"
+    month_prefix = today_str[:7]           # "YYYY-MM"
+
+    # Build a WHERE clause fragment and params for ``transactions.date``.
+    # We use LIKE patterns wherever possible (index-friendly for TEXT dates).
+    _MONTH_RE = _re.compile(r'^\d{4}-(?:0[1-9]|1[0-2])$')
+    _YEAR_RE  = _re.compile(r'^\d{4}$')
+
+    if period == "month":
+        date_filter = "t.date LIKE ?"
+        date_params: list = [f"{month_prefix}-%"]
+    elif period == "year":
+        date_filter = "t.date LIKE ?"
+        date_params = [f"{year_str}-%"]
+    elif period == "ytd":
+        ytd_start = f"{year_str}-01-01"
+        date_filter = "t.date >= ? AND t.date <= ?"
+        date_params = [ytd_start, today_str]
+    elif _MONTH_RE.match(period):
+        date_filter = "t.date LIKE ?"
+        date_params = [f"{period}-%"]
+    elif _YEAR_RE.match(period):
+        date_filter = "t.date LIKE ?"
+        date_params = [f"{period}-%"]
+    else:
+        raise ValueError(
+            f"Invalid period {period!r}. "
+            "Expected 'month', 'year', 'ytd', an ISO month like '2026-05', "
+            "or an ISO year like '2026'."
+        )
+
+    sql = f"""
+        SELECT
+            li.name        AS line_item_name,
+            l.name         AS ledger_name,
+            li.item_type   AS item_type,
+            SUM(te.amount) AS total
+        FROM transaction_entries te
+        JOIN transactions   t  ON t.id  = te.transaction_id
+        JOIN line_items     li ON li.id = te.line_item_id
+        JOIN ledgers        l  ON l.id  = li.ledger_id
+        WHERE {date_filter}
+        GROUP BY te.line_item_id
+        ORDER BY total DESC
+    """
+
+    conn = get_db(server.paths.DB_PATH)
+    try:
+        rows = conn.execute(sql, date_params).fetchall()
+    finally:
+        conn.close()
+
+    income: float = 0.0
+    expenses: float = 0.0
+    by_line_item: list[dict] = []
+
+    for row in rows:
+        total = float(row["total"] or 0.0)
+        by_line_item.append(
+            {
+                "line_item": row["line_item_name"],
+                "ledger":    row["ledger_name"],
+                "type":      row["item_type"],
+                "total":     total,
+            }
+        )
+        if row["item_type"] == "income":
+            income += total
+        else:
+            expenses += total
+
+    return {
+        "period":       period,
+        "income":       round(income, 2),
+        "expenses":     round(expenses, 2),
+        "net":          round(income - expenses, 2),
+        "by_line_item": by_line_item,
+    }
 
 
 @mcp.tool
