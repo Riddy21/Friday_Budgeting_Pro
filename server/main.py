@@ -10,6 +10,7 @@ from __future__ import annotations
 import json as _json
 import logging
 import os
+import secrets
 import subprocess as _subprocess
 import tempfile
 import time as _time
@@ -29,7 +30,13 @@ from server.db import get_db
 from server.db import transaction as db_txn
 from server.providers.plaid import PlaidProvider
 from server.sync_lock import LockBusy, sync_lock
-from ui.auth import get_active_user_id
+from ui.auth import (
+    add_recovery_token,
+    get_active_user_id,
+    get_user_by_id,
+    update_user_password,
+    verify_password,
+)
 
 _plaid = PlaidProvider()
 
@@ -1269,6 +1276,99 @@ def configure_plaid(
     _logger.info("configure_plaid: wrote .env (env=%s)", env)
 
     return {"ok": True, "env": env}
+
+
+# ---------------------------------------------------------------------------
+# Password MCP tools
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool
+def set_ui_password(new_password: str, old_password: Optional[str] = None) -> dict:
+    """Change the UI password for the currently active user.
+
+    Parameters
+    ----------
+    new_password : str
+        The new password.  Must be at least 8 characters.
+    old_password : str, optional
+        The current password.  Required whenever the user already has a
+        password set (which is always true after first-run setup).
+
+    Returns
+    -------
+    dict
+        ``{"status": "ok"}`` on success, or
+        ``{"status": "error", "message": "..."}`` on failure.
+    """
+    if len(new_password) < 8:
+        return {"status": "error", "message": "Password too short"}
+
+    user_id = get_active_user_id(server.paths.DB_PATH)
+    if not user_id:
+        return {"status": "error", "message": "Not logged in"}
+
+    user = get_user_by_id(server.paths.DB_PATH, user_id)
+    if user is None:
+        return {"status": "error", "message": "Not logged in"}
+
+    if old_password is not None:
+        if not verify_password(old_password, user["password_hash"]):
+            return {"status": "error", "message": "Old password does not match"}
+    else:
+        # In the multi-profile world, every user always has a password set.
+        return {"status": "error", "message": "Old password required"}
+
+    update_user_password(server.paths.DB_PATH, user_id, new_password)
+    return {"status": "ok"}
+
+
+@mcp.tool
+def reset_ui_password() -> dict:
+    """Generate a password-reset recovery token for the active user.
+
+    Creates a 32-byte hex token, stores it in the shared in-memory recovery
+    token store (same store used by the UI POST /forgot handler), writes it
+    to ``~/.friday-bp/recovery.txt`` with mode 0600, and returns the reset
+    URL.
+
+    Returns
+    -------
+    dict
+        ``{"status": "ok", "recovery_url": "http://127.0.0.1:<port>/reset?t=<token>"}``
+        on success, or ``{"status": "error", "message": "..."}`` on failure.
+    """
+    user_id = get_active_user_id(server.paths.DB_PATH)
+    if not user_id:
+        return {"status": "error", "message": "Not logged in"}
+
+    token = secrets.token_hex(32)
+    add_recovery_token(token, user_id)
+
+    recovery_path = server.paths.APP_DIR / "recovery.txt"
+    try:
+        server.paths.APP_DIR.mkdir(mode=0o700, parents=True, exist_ok=True)
+        fd = os.open(
+            str(recovery_path),
+            os.O_CREAT | os.O_WRONLY | os.O_TRUNC,
+            0o600,
+        )
+        try:
+            os.write(fd, token.encode())
+        finally:
+            os.close(fd)
+        os.chmod(recovery_path, 0o600)
+    except Exception:
+        pass
+
+    raw = os.environ.get("FRIDAY_BP_UI_PORT")
+    try:
+        port = int(raw) if raw is not None else 6789
+    except ValueError:
+        port = 6789
+
+    recovery_url = f"http://127.0.0.1:{port}/reset?t={token}"
+    return {"status": "ok", "recovery_url": recovery_url}
 
 
 # ---------------------------------------------------------------------------

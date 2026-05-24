@@ -44,8 +44,14 @@ from fastapi.templating import Jinja2Templates
 
 import server.paths as _paths
 from server.db import get_db
+
+# ── Recovery token store (in-memory, 10-min TTL) ──────────────────────────
+# Shared with the MCP tools (reset_ui_password) via ui.auth so both operate
+# on the same in-memory map.  Tokens do not survive daemon restarts.
 from ui.auth import (
     SESSION_COOKIE,
+    _recovery_tokens,
+    add_recovery_token,
     check_session,
     create_session,
     create_user,
@@ -62,12 +68,6 @@ from ui.auth import (
     update_user_password,
     verify_password,
 )
-
-# ── Recovery token store (in-memory, 10-min TTL) ──────────────────────────
-# Maps token -> (user_id, expiry_float).  In-memory is fine for a local app;
-# tokens survive daemon restart only if users don't restart between steps.
-_recovery_tokens: dict[str, tuple[str, float]] = {}
-_RECOVERY_TOKEN_TTL = 600  # 10 minutes
 
 # ── App setup ───────────────────────────────────────────────────────────────
 
@@ -612,8 +612,7 @@ async def forgot_post(request: Request):
 
     if user:
         token = secrets.token_hex(32)
-        expiry = time.time() + _RECOVERY_TOKEN_TTL
-        _recovery_tokens[token] = (user["id"], expiry)
+        add_recovery_token(token, user["id"])
 
         recovery_path = _paths.APP_DIR / "recovery.txt"
         try:
