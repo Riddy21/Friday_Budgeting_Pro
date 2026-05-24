@@ -13,9 +13,9 @@
     <span class="sep">›</span>
     <span class="step {% if step == 2 %}active{% elif step > 2 %}done{% endif %}">2 · Notifications</span>
     <span class="sep">›</span>
-    <span class="step {% if step == 3 %}active{% elif step > 3 %}done{% endif %}">3 · Ledger</span>
+    <span class="step {% if step == 3 %}active{% elif step > 3 %}done{% endif %}">3 · Connect Bank</span>
     <span class="sep">›</span>
-    <span class="step {% if step == 4 %}active{% endif %}">4 · Connect Bank</span>
+    <span class="step {% if step == 4 %}active{% endif %}">4 · Done</span>
   </div>
 
   {% if error %}
@@ -42,41 +42,37 @@
     <h2>Notification preference</h2>
     <p>How should Friday alert you when action is needed?</p>
     <label>
-      <input type="radio" name="notification_pref" value="openclaw" checked />
+      <input type="radio" name="notification_channel" value="openclaw_chat" checked />
       OpenClaw chat (recommended)
     </label>
     <label>
-      <input type="radio" name="notification_pref" value="macos" />
+      <input type="radio" name="notification_channel" value="macos" />
       macOS Notification Center
     </label>
     <label>
-      <input type="radio" name="notification_pref" value="ui" />
+      <input type="radio" name="notification_channel" value="in_ui" />
       In-browser banner only
     </label>
     <button type="submit" class="btn-primary">Continue →</button>
   </form>
 
-  <!-- ── Step 3: Name your ledger ──────────────────────────────────── -->
+  <!-- ── Step 3: Connect first bank ────────────────────────────────── -->
   {% elif step == 3 %}
   <form method="post" action="/setup/3">
-    <h2>Name your ledger</h2>
-    <p>A ledger is a top-level budget container. Most people just need one called <em>Personal</em>.</p>
-    <label for="ledger_name">Ledger name</label>
-    <input id="ledger_name" name="ledger_name" type="text" value="Personal"
-           required placeholder="Personal" />
-    <button type="submit" class="btn-primary">Continue →</button>
+    <h2>Connect your first bank</h2>
+    <p>Link a bank account via Plaid so Friday can import transactions automatically.
+       You can add more banks from the Profile page later.</p>
+    <button type="submit" name="action" value="link" class="btn-primary">Open Plaid Link →</button>
+    <button type="submit" name="action" value="skip" class="btn-secondary">Skip for now</button>
   </form>
 
-  <!-- ── Step 4: Connect first bank ────────────────────────────────── -->
+  <!-- ── Step 4: All done ──────────────────────────────────────────── -->
   {% elif step == 4 %}
   <form method="post" action="/setup/4">
-    <h2>Connect your first bank</h2>
-    <p>Click <strong>Open Plaid Link</strong> to securely connect a bank account.
-       You can add more banks from the Profile page later.</p>
-    <p class="hint">A Plaid link token must be generated first. Friday will open the
-       secure Plaid popup when you click below.</p>
-    <button type="submit" class="btn-primary">Open Plaid Link →</button>
-    <a href="/profile" class="btn-secondary">Skip for now</a>
+    <h2>You&#39;re all set!</h2>
+    <p>Setup is complete. Head to your <strong>profile</strong> to manage linked banks,
+       notification settings, and more.</p>
+    <button type="submit" class="btn-primary">Go to Profile →</button>
   </form>
   {% endif %}
 </div>
