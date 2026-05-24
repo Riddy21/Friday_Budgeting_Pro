@@ -44,7 +44,7 @@ For each open PR (`gh pr list --state open`):
   - ⚠️ Borderline → comment with suggestions but approve if the spirit is right. Workers are AI — don't nitpick.
 
 ### 3. Spawn next worker(s) (if room)
-- Concurrency: **at most 3 active workers at a time**.
+- Concurrency: **at most 5 active workers at a time**.
 - Workers must work on **non-overlapping tickets** (different files where possible) to avoid merge conflicts. If only conflicting tickets are eligible, run them serially.
 - Find eligible tickets:
   - Open, labeled `task`, no assignee, no linked open PR
@@ -85,10 +85,14 @@ Workers receive their initial task and follow CONTRIBUTING.md's "The Loop":
 3. `git checkout -b agent/<issue-num>-<slug>` off latest `main`.
 4. Implement strictly within the ticket's scope.
 5. Run tests locally (`pytest -q`). Must be green.
-6. `git add . && git commit -m "..."` with a clear message.
-7. `git push -u origin <branch>`.
-8. `gh pr create --title "[Pn] <ticket title>" --body "Closes #<n>\n\n<short summary>"`.
-9. Exit. The PM picks it up from here.
+6. **Interactive sanity check (mandatory for UI and MCP tickets):**
+   - **UI tickets:** Start the UI server (`python3 -m uvicorn ui.server:app --host 0.0.0.0 --port 6789`) and use Peekaboo browser automation to verify the affected page loads, key elements are present, and the core flow works. Do not open a PR until this passes.
+   - **MCP tickets:** Start the server and call the new/changed MCP tools directly (`python3 -c "from server.main import <tool>; print(<tool>(...))"`) to verify they return expected output, not `{'status': 'not_implemented'}` or errors.
+   - **Other tickets (infra, docs, schema):** skip interactive check, pytest is sufficient.
+7. `git add . && git commit -m "..."` with a clear message.
+8. `git push -u origin <branch>`.
+9. `gh pr create --title "[Pn] <ticket title>" --body "Closes #<n>\n\n<short summary>\n\n**Interactive check:** <one line describing what was tested and that it passed>"`.
+10. Exit. The PM picks it up from here.
 
 ## Communication
 

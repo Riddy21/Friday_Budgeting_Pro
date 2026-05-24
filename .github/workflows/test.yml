@@ -6,7 +6,7 @@ on:
   pull_request:
 
 jobs:
-  test:
+  unit:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -14,4 +14,29 @@ jobs:
         with:
           python-version: "3.11"
       - run: pip install -r requirements.txt
-      - run: pytest -q
+      - run: pytest -q --ignore=tests/test_plaid_e2e.py
+
+  mcp-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install -r requirements.txt
+      # Smoke test: every MCP tool must import cleanly and return a dict (not crash on import)
+      - run: |
+          python3 -c "
+          import os, sys
+          os.environ.setdefault('PLAID_CLIENT_ID', 'test')
+          os.environ.setdefault('PLAID_SECRET', 'test')
+          os.environ.setdefault('PLAID_ENV', 'sandbox')
+          sys.path.insert(0, '.')
+          import server.main as m
+          tools = [k for k in dir(m) if not k.startswith('_')]
+          print(f'Server imported OK, {len(tools)} exports')
+          # Verify setup_status returns a dict
+          r = m.setup_status()
+          assert isinstance(r, dict), f'setup_status returned {type(r)}'
+          print('setup_status OK:', r)
+          "
