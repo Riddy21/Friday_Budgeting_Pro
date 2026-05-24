@@ -15,35 +15,95 @@
 <div class="card">
   <h1>Profile</h1>
 
-  {% if saved %}<div class="alert alert-success">Settings saved.</div>{% endif %}
+  {% if saved %}
+  <div class="alert alert-success">Settings saved.</div>
+  {% endif %}
 
-  <!-- Linked Accounts -->
+  <!-- Settings form -->
+  <section>
+    <h2>Settings</h2>
+    <form method="post" action="/profile">
+      <label for="notification_pref">Notification preference</label>
+      <select id="notification_pref" name="notification_pref">
+        <option value="openclaw"
+          {% if notification_pref == "openclaw" %}selected{% endif %}>
+          OpenClaw chat
+        </option>
+        <option value="macos"
+          {% if notification_pref == "macos" %}selected{% endif %}>
+          macOS Notification Center
+        </option>
+        <option value="ui"
+          {% if notification_pref == "ui" %}selected{% endif %}>
+          In-browser banner only
+        </option>
+      </select>
+      <button type="submit" class="btn-primary">Save settings</button>
+    </form>
+  </section>
+
+  <!-- Quick actions -->
+  <section>
+    <h2>Data</h2>
+    {% if action_result %}
+      {% if action_result.ok %}
+      <div class="alert alert-success">{{ action_result.message }}</div>
+      {% if action_result.url %}
+      <p><a href="{{ action_result.url }}" class="btn-primary" target="_blank">Open Reconnect Link</a></p>
+      {% endif %}
+      {% else %}
+      <div class="alert alert-error">{{ action_result.message }}</div>
+      {% endif %}
+    {% endif %}
+    <div class="action-row">
+      <a href="/ledgers" class="btn-secondary">View Ledgers</a>
+      <form method="post" action="/profile" style="display:inline">
+        <input type="hidden" name="action" value="sync_now">
+        <button type="submit" class="btn-secondary" id="btn-sync-now">Sync Now</button>
+      </form>
+      <form method="post" action="/profile" style="display:inline">
+        <input type="hidden" name="action" value="export_now">
+        <button type="submit" class="btn-secondary">Export Excel</button>
+      </form>
+    </div>
+  </section>
+
+  <!-- Linked Accounts (#47) -->
   <section id="linked-accounts">
     <h2>Linked Accounts</h2>
     {% if connections %}
-    <table style="width:100%;border-collapse:collapse;margin-bottom:16px">
+    <table class="connections-table">
       <thead>
-        <tr style="border-bottom:2px solid #eee">
-          <th style="text-align:left;padding:8px">Bank</th>
-          <th style="text-align:left;padding:8px">Status</th>
-          <th style="text-align:left;padding:8px">Last synced</th>
-          <th></th>
+        <tr>
+          <th>Institution</th>
+          <th>Status</th>
+          <th>Last Synced</th>
+          <th>Actions</th>
         </tr>
       </thead>
       <tbody>
-        {% for c in connections %}
-        <tr style="border-top:1px solid #eee">
-          <td style="padding:8px">{{ c.institution_name or "Bank" }}</td>
-          <td style="padding:8px">
-            {% if c.status == "active" %}🟢 Active
-            {% elif c.status == "needs_reauth" %}🔴 Needs reconnect
-            {% else %}🟡 {{ c.status }}{% endif %}
+        {% for conn in connections %}
+        <tr>
+          <td>{{ conn.institution_name if conn.institution_name else "—" }}</td>
+          <td>
+            <span class="status-pill status-{{ conn.status }}">
+              {{ conn.status }}
+            </span>
           </td>
-          <td style="padding:8px;color:#888;font-size:13px">{{ c.last_synced_at or "Never" }}</td>
-          <td style="padding:8px">
-            <form method="post" action="/link/disconnect/{{ c.id }}" style="display:inline"
-                  onsubmit="return confirm('Disconnect this bank? Synced transactions are kept.')">
-              <button type="submit" style="color:#c00;background:none;border:none;cursor:pointer">Disconnect</button>
+          <td>{{ conn.last_synced_at if conn.last_synced_at else "Never" }}</td>
+          <td class="action-cell">
+            {% if conn.status == "needs_reauth" %}
+            <form method="post" action="/profile" style="display:inline">
+              <input type="hidden" name="action" value="reconnect_bank">
+              <input type="hidden" name="bank_id" value="{{ conn.id }}">
+              <button type="submit" class="btn-warning">Reconnect</button>
+            </form>
+            {% endif %}
+            <form method="post" action="/profile" style="display:inline">
+              <input type="hidden" name="action" value="disconnect_bank">
+              <input type="hidden" name="bank_id" value="{{ conn.id }}">
+              <button type="submit" class="btn-danger"
+                onclick="return confirm('Disconnect this bank account?')">Disconnect</button>
             </form>
           </td>
         </tr>
@@ -51,28 +111,11 @@
       </tbody>
     </table>
     {% else %}
-    <p style="color:#888;font-size:14px;margin-bottom:12px">No banks connected yet.</p>
+    <p class="hint">No banks connected yet.</p>
     {% endif %}
-    <a href="/link/start" class="btn-primary">+ Connect a bank</a>
-  </section>
-
-  <!-- Settings -->
-  <section>
-    <h2>Settings</h2>
-    <form method="post" action="/profile">
-      <label for="notification_pref">Notifications</label>
-      <select id="notification_pref" name="notification_pref">
-        <option value="openclaw" {% if notification_pref == "openclaw" %}selected{% endif %}>OpenClaw chat</option>
-        <option value="macos" {% if notification_pref == "macos" %}selected{% endif %}>macOS notifications</option>
-        <option value="ui" {% if notification_pref == "ui" %}selected{% endif %}>In-browser only</option>
-      </select>
-      <button type="submit" class="btn-primary">Save</button>
-    </form>
-  </section>
-
-  <section>
-    <h2>Data</h2>
-    <a href="/ledgers" class="btn-secondary">View Ledgers</a>
+    <div style="margin-top:12px">
+      <a href="/link/start" class="btn-primary">+ Connect a bank</a>
+    </div>
   </section>
 </div>
 {% endblock %}
