@@ -327,6 +327,31 @@ def build_workbook(
     return wb
 
 
+def export_excel_bytes(
+    conn: sqlite3.Connection,
+    years: list[int] | None = None,
+) -> bytes:
+    """Generate an Excel export and return as bytes (for browser streaming).
+
+    Parameters
+    ----------
+    conn:
+        An open sqlite3 connection.
+    years:
+        Passed through to build_workbook.  If None, all years are included.
+
+    Returns
+    -------
+    Raw bytes of the .xlsx file (suitable for streaming to a browser).
+    """
+    import io
+
+    wb = build_workbook(conn, years)
+    buffer = io.BytesIO()
+    wb.save(buffer)
+    return buffer.getvalue()
+
+
 def export_to_file(
     conn: sqlite3.Connection,
     path: str | Path,

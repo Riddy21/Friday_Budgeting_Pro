@@ -1009,6 +1009,29 @@ async def account_description_patch(request: Request, account_id: str):
 # ── /ledgers ─────────────────────────────────────────────────────────────────
 
 
+@app.get("/export/excel")
+def export_excel_download(request: Request):
+    """Stream an Excel export as a browser download."""
+    if not _is_authenticated(request):
+        return _redirect("/login")
+
+    import datetime
+
+    from fastapi.responses import Response as _Response
+
+    from server.excel_export import export_excel_bytes
+
+    with get_db(_db_path()) as conn:
+        data = export_excel_bytes(conn)
+
+    filename = f"friday-budget-{datetime.date.today().strftime('%Y-%m')}.xlsx"
+    return _Response(
+        content=data,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f"attachment; filename={filename}"},
+    )
+
+
 @app.get("/ledgers", response_class=HTMLResponse)
 def ledgers_get(request: Request):
     """Read-only ledger tree.  Requires authentication.
