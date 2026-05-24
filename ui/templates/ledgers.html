@@ -1,0 +1,51 @@
+{% extends "base.html" %}
+
+{% block title %}Ledgers — Friday Budgeting Pro{% endblock %}
+
+{% block nav %}
+<nav>
+  <a href="/profile">Profile</a>
+  <form method="post" action="/logout" style="display:inline">
+    <button type="submit" class="btn-link">Sign out</button>
+  </form>
+</nav>
+{% endblock %}
+
+{% block content %}
+<div class="card">
+  <h1>Ledgers</h1>
+  <p class="hint">Read-only view. A minimal ledger editor is coming in issue
+     <strong>#48</strong>.</p>
+
+  {% if ledgers %}
+    {% for ledger in ledgers %}
+    <section class="ledger-block">
+      <h2>{{ ledger.name }}</h2>
+      {% if ledger.line_items %}
+      <table>
+        <thead>
+          <tr>
+            <th>Line item</th>
+            <th>Type</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for item in ledger.line_items %}
+          <tr>
+            <td>{{ item.name }}</td>
+            <td><span class="badge badge-{{ item.item_type }}">{{ item.item_type }}</span></td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      {% else %}
+      <p class="hint">No line items yet.</p>
+      {% endif %}
+    </section>
+    {% endfor %}
+  {% else %}
+  <p>No ledgers found. Set up a ledger via OpenClaw chat or complete the
+     <a href="/setup">setup wizard</a>.</p>
+  {% endif %}
+</div>
+{% endblock %}

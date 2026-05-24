@@ -1,27 +1,592 @@
 """
-ui/server.py — Minimal FastAPI application for Friday Budgeting Pro.
+ui/server.py — FastAPI application for Friday Budgeting Pro.
 
-This module defines the FastAPI ``app`` instance that is mounted and served
-by ``server.daemon`` via uvicorn on 127.0.0.1:6789.
+Implements all UI routes defined in issue #14.
 
-Current surface area (issue #52 scope):
-  - GET /healthz → {"status": "ok"}
+Auth is handled by ui.auth (PBKDF2 placeholder — argon2id lands in #37).
+Templates live in ui/templates/.  Static files in ui/static/.
 
-All real routes (login, setup, profile, transaction views, etc.) are
-tracked in issue #14 and will be added there.  This stub intentionally
-ships only the health-check endpoint so the daemon scaffold can be tested
-end-to-end without pulling in unfinished features.
+Design Constraint #6: this module is transport-agnostic (127.0.0.1 binding
+is configured in server.daemon via uvicorn.Config, not here).
 
-Host binding (127.0.0.1 only) is configured in server.daemon via
-uvicorn.Config; this module is transport-agnostic.
+Route overview
+──────────────
+  GET  /              redirect hub based on setup/auth state
+  GET  /healthz       liveness probe (from #52 — preserved)
+  GET  /setup         first-run wizard
+  POST /setup/<step>  advance wizard step (final step: complete setup)
+  GET  /login         password login form
+  POST /login         verify password, create session
+  POST /logout        delete session, clear cookie
+  GET  /forgot        password recovery placeholder (#60)
+  POST /forgot        write recovery token file placeholder (#60)
+  GET  /reset         password reset form placeholder (#60)
+  POST /reset         password reset action placeholder (#60)
+  GET  /profile       settings + linked-accounts placeholder (#47)
+  POST /profile       save settings to app_config
+  GET  /ledgers       read-only ledger tree
+  GET  /link          Plaid Link JS embed
+  GET  /static/<path> static file serving
 """
 
-from fastapi import FastAPI
+from __future__ import annotations
+
+import os
+import secrets
+import time
+from pathlib import Path
+from typing import Optional
+
+from fastapi import FastAPI, Form, Request
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
+from fastapi.staticfiles import StaticFiles
+from fastapi.templating import Jinja2Templates
+
+import server.paths as _paths
+from server.db import get_db, init_db
+from ui.auth import (
+    SESSION_COOKIE,
+    check_session,
+    create_session,
+    delete_session,
+    get_password_hash,
+    hash_password,
+    set_password_hash,
+    verify_password,
+)
+
+# ── App setup ───────────────────────────────────────────────────────────────
 
 app = FastAPI(title="Friday Budgeting Pro UI", version="0.1.0")
 
+_TEMPLATE_DIR = Path(__file__).parent / "templates"
+_STATIC_DIR = Path(__file__).parent / "static"
+
+templates = Jinja2Templates(directory=str(_TEMPLATE_DIR))
+
+app.mount("/static", StaticFiles(directory=str(_STATIC_DIR)), name="static")
+
+
+# ── Helpers ─────────────────────────────────────────────────────────────────
+
+def _db_path() -> Path:
+    """Return the active DB path (test-overridable via server.paths.DB_PATH)."""
+    return _paths.DB_PATH
+
+
+def _password_is_set() -> bool:
+    return bool(get_password_hash(_db_path()))
+
+
+def _is_authenticated(request: Request) -> bool:
+    return check_session(request, _db_path())
+
+
+def _redirect(url: str) -> RedirectResponse:
+    return RedirectResponse(url=url, status_code=302)
+
+
+def _get_notification_pref() -> str:
+    """Read notification_pref from app_config, default 'openclaw'."""
+    conn = get_db(_db_path())
+    try:
+        row = conn.execute(
+            "SELECT notification_pref FROM app_config WHERE id = 1"
+        ).fetchone()
+        if row is None:
+            return "openclaw"
+        return row["notification_pref"] or "openclaw"
+    except Exception:
+        # Column may not exist until a migration; treat as unset.
+        return "openclaw"
+    finally:
+        conn.close()
+
+
+def _set_notification_pref(pref: str) -> None:
+    """Persist notification_pref in app_config.
+
+    NOTE: The app_config table was created by #52 with only ui_password_hash
+    and ui_password_set_at.  We add notification_pref via ALTER TABLE IF NOT
+    EXISTS (idempotent).  New columns for linked accounts etc. wait for #47.
+    """
+    conn = get_db(_db_path())
+    try:
+        # Ensure the column exists (SQLite doesn't support IF NOT EXISTS on
+        # ALTER TABLE, so we catch the OperationalError on duplicate).
+        try:
+            conn.execute(
+                "ALTER TABLE app_config ADD COLUMN notification_pref TEXT"
+            )
+            conn.commit()
+        except Exception:
+            pass  # Column already exists
+
+        conn.execute(
+            "INSERT INTO app_config (id, notification_pref) VALUES (1, ?) "
+            "ON CONFLICT(id) DO UPDATE SET notification_pref=excluded.notification_pref",
+            (pref,),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def _get_ledgers() -> list[dict]:
+    """Query ledgers + line_items from the DB and return a list of dicts."""
+    conn = get_db(_db_path())
+    try:
+        ledger_rows = conn.execute(
+            "SELECT id, name FROM ledgers ORDER BY name"
+        ).fetchall()
+        ledgers = []
+        for lr in ledger_rows:
+            items = conn.execute(
+                "SELECT name, item_type FROM line_items WHERE ledger_id = ? ORDER BY name",
+                (lr["id"],),
+            ).fetchall()
+            ledgers.append({
+                "name": lr["name"],
+                "line_items": [{"name": i["name"], "item_type": i["item_type"]} for i in items],
+            })
+        return ledgers
+    finally:
+        conn.close()
+
+
+# ── Wizard state helpers ─────────────────────────────────────────────────────
+# Setup wizard tracks progress in app_config.setup_step (0 = not started,
+# 1–3 = in-progress, 4 = waiting on bank link, 5 = complete).
+# We store it inline with the password write so no extra column is needed for
+# steps 1–3; we just track completion by whether the password hash is set.
+
+# Wizard session data is stored in a small in-process dict keyed by a
+# short-lived wizard token cookie.  Alternatively, steps could round-trip
+# form data; here we use a plain dict for simplicity.  This is reset on
+# daemon restart, which is fine for a one-time wizard.
+_wizard_state: dict[str, dict] = {}
+
+
+def _get_wizard_token(request: Request) -> Optional[str]:
+    return request.cookies.get("friday_bp_wizard")
+
+
+def _wizard_data(request: Request) -> dict:
+    token = _get_wizard_token(request)
+    if token and token in _wizard_state:
+        return _wizard_state[token]
+    return {}
+
+
+def _update_wizard(response: Response, token: str, data: dict) -> None:
+    _wizard_state[token] = data
+    response.set_cookie(
+        "friday_bp_wizard",
+        token,
+        httponly=True,
+        samesite="strict",
+        max_age=3600,
+    )
+
+
+def _clear_wizard(response: Response, token: Optional[str]) -> None:
+    if token and token in _wizard_state:
+        del _wizard_state[token]
+    response.delete_cookie("friday_bp_wizard")
+
+
+# ── Routes ────────────────────────────────────────────────────────────────────
+
+# ── /healthz ─────────────────────────────────────────────────────────────────
 
 @app.get("/healthz")
 def healthz() -> dict[str, str]:
     """Liveness probe — returns 200 OK when the daemon is running."""
     return {"status": "ok"}
+
+
+# ── / ────────────────────────────────────────────────────────────────────────
+
+@app.get("/")
+def index(request: Request):
+    """Redirect hub.
+
+    - No password set  → /setup
+    - Not authenticated → /login
+    - Authenticated    → /profile
+    """
+    if not _password_is_set():
+        return _redirect("/setup")
+    if not _is_authenticated(request):
+        return _redirect("/login")
+    return _redirect("/profile")
+
+
+# ── /setup ───────────────────────────────────────────────────────────────────
+
+@app.get("/setup", response_class=HTMLResponse)
+def setup_get(request: Request):
+    """Render the setup wizard step 1.
+
+    Only accessible when the password has not been set yet.  If already set,
+    return 404 so the wizard cannot be re-run.
+    """
+    if _password_is_set():
+        return HTMLResponse(status_code=404, content="Setup already complete.")
+    wizard_token = _get_wizard_token(request)
+    if not wizard_token:
+        wizard_token = secrets.token_hex(16)
+    state = _wizard_state.get(wizard_token, {})
+    step = state.get("step", 1)
+    resp = templates.TemplateResponse(
+        request,
+        "setup.html",
+        {"step": step, "error": state.get("error")},
+    )
+    _update_wizard(resp, wizard_token, {**state, "step": step})
+    return resp
+
+
+@app.post("/setup/{step}", response_class=HTMLResponse)
+async def setup_post(request: Request, step: int):
+    """Handle each wizard step.
+
+    Steps 1–3 collect data and advance.  Step 4 is the bank-link step;
+    for THIS PR we call apply_initial_setup() and finalise password.
+
+    apply_initial_setup() is the MCP tool from server.main — we call the
+    underlying DB writes directly here to avoid circular import with FastMCP
+    while still exercising the same logic.
+    """
+    if _password_is_set():
+        return HTMLResponse(status_code=404, content="Setup already complete.")
+
+    form = await request.form()
+    wizard_token = _get_wizard_token(request) or secrets.token_hex(16)
+    state = _wizard_state.get(wizard_token, {})
+
+    if step == 1:
+        password = (form.get("password") or "").strip()
+        confirm = (form.get("password_confirm") or "").strip()
+        if len(password) < 8:
+            state = {**state, "step": 1, "error": "Password must be at least 8 characters."}
+            resp = templates.TemplateResponse(
+                request,
+                "setup.html",
+                {"step": 1, "error": state["error"]},
+            )
+            _update_wizard(resp, wizard_token, state)
+            return resp
+        if password != confirm:
+            state = {**state, "step": 1, "error": "Passwords do not match."}
+            resp = templates.TemplateResponse(
+                request,
+                "setup.html",
+                {"step": 1, "error": state["error"]},
+            )
+            _update_wizard(resp, wizard_token, state)
+            return resp
+        state = {**state, "step": 2, "password": password, "error": None}
+        resp = templates.TemplateResponse(
+            request,
+            "setup.html",
+            {"step": 2, "error": None},
+        )
+        _update_wizard(resp, wizard_token, state)
+        return resp
+
+    elif step == 2:
+        pref = form.get("notification_pref") or "openclaw"
+        state = {**state, "step": 3, "notification_pref": pref, "error": None}
+        resp = templates.TemplateResponse(
+            request,
+            "setup.html",
+            {"step": 3, "error": None},
+        )
+        _update_wizard(resp, wizard_token, state)
+        return resp
+
+    elif step == 3:
+        ledger_name = (form.get("ledger_name") or "Personal").strip() or "Personal"
+        state = {**state, "step": 4, "ledger_name": ledger_name, "error": None}
+        resp = templates.TemplateResponse(
+            request,
+            "setup.html",
+            {"step": 4, "error": None},
+        )
+        _update_wizard(resp, wizard_token, state)
+        return resp
+
+    elif step == 4:
+        # Final step: persist password + notification pref + ledger, then
+        # redirect to Plaid link (or profile if user skips bank step).
+        # The form has either "Open Plaid Link" or "Skip for now".
+        password = state.get("password")
+        if not password:
+            # Wizard state lost (e.g. restart); bounce back to step 1.
+            _clear_wizard(RedirectResponse(url="/setup", status_code=302), wizard_token)
+            return _redirect("/setup")
+
+        # Persist password hash (#37 will replace PBKDF2 with argon2id).
+        hashed = hash_password(password)
+        set_password_hash(_db_path(), hashed)
+
+        # Persist notification preference.
+        pref = state.get("notification_pref", "openclaw")
+        _set_notification_pref(pref)
+
+        # Create the ledger if it doesn't exist yet.
+        ledger_name = state.get("ledger_name", "Personal")
+        _ensure_ledger(ledger_name)
+
+        # Clear wizard state.
+        redirect = _redirect("/profile")
+        _clear_wizard(redirect, wizard_token)
+        return redirect
+
+    else:
+        return HTMLResponse(status_code=404, content="Unknown setup step.")
+
+
+def _ensure_ledger(name: str) -> None:
+    """Create a ledger row if one with this name doesn't already exist."""
+    import uuid as _uuid
+    conn = get_db(_db_path())
+    try:
+        existing = conn.execute(
+            "SELECT id FROM ledgers WHERE name = ?", (name,)
+        ).fetchone()
+        if existing is None:
+            conn.execute(
+                "INSERT INTO ledgers (id, name) VALUES (?, ?)",
+                (str(_uuid.uuid4()), name),
+            )
+            conn.commit()
+    finally:
+        conn.close()
+
+
+# ── /login ───────────────────────────────────────────────────────────────────
+
+@app.get("/login", response_class=HTMLResponse)
+def login_get(request: Request):
+    """Render login form.  If no password is set, redirect to /setup."""
+    if not _password_is_set():
+        return _redirect("/setup")
+    return templates.TemplateResponse(
+        request,
+        "login.html",
+        {"error": None},
+    )
+
+
+@app.post("/login")
+async def login_post(request: Request):
+    """Verify password; on success create session and redirect to /profile.
+
+    On failure: re-render login.html with an error.
+
+    Rate limiting: TODO (#37) — login_attempts table is populated below so
+    #37 can add enforcement without a schema change.
+    """
+    if not _password_is_set():
+        return _redirect("/setup")
+
+    form = await request.form()
+    password = (form.get("password") or "")
+
+    stored_hash = get_password_hash(_db_path())
+    success = stored_hash is not None and verify_password(password, stored_hash)
+
+    # Record attempt (rate-limiting hook for #37).
+    _record_login_attempt(success)
+
+    if not success:
+        return templates.TemplateResponse(
+            request,
+            "login.html",
+            {"error": "Incorrect password."},
+            status_code=200,
+        )
+
+    # Create session.
+    ua = request.headers.get("user-agent")
+    token = create_session(_db_path(), user_agent=ua)
+
+    response = _redirect("/profile")
+    response.set_cookie(
+        SESSION_COOKIE,
+        token,
+        httponly=True,
+        samesite="strict",
+    )
+    return response
+
+
+def _record_login_attempt(success: bool) -> None:
+    """Insert a row into login_attempts so #37 can add rate limiting."""
+    conn = get_db(_db_path())
+    try:
+        conn.execute(
+            "INSERT INTO login_attempts (attempted_at, success) VALUES (?, ?)",
+            (int(time.time()), 1 if success else 0),
+        )
+        conn.commit()
+    except Exception:
+        pass
+    finally:
+        conn.close()
+
+
+# ── /logout ──────────────────────────────────────────────────────────────────
+
+@app.post("/logout")
+def logout(request: Request):
+    """Delete session row and clear cookie."""
+    token = request.cookies.get(SESSION_COOKIE)
+    if token:
+        delete_session(_db_path(), token)
+    response = _redirect("/login")
+    response.delete_cookie(SESSION_COOKIE)
+    return response
+
+
+# ── /forgot ──────────────────────────────────────────────────────────────────
+
+@app.get("/forgot", response_class=HTMLResponse)
+def forgot_get(request: Request):
+    """Placeholder recovery page (full flow in #60)."""
+    return templates.TemplateResponse(
+        request,
+        "forgot.html",
+        {"sent": False},
+    )
+
+
+@app.post("/forgot", response_class=HTMLResponse)
+def forgot_post(request: Request):
+    """Write a recovery token file placeholder (#60).
+
+    Writes ~/.friday-bp/recovery.txt with a random token.  The full recovery
+    flow (token validation, new password entry) lands with issue #60.
+    """
+    token = secrets.token_hex(32)
+    recovery_path = _paths.APP_DIR / "recovery.txt"
+    try:
+        _paths.APP_DIR.mkdir(mode=0o700, parents=True, exist_ok=True)
+        recovery_path.write_text(
+            f"Friday Budgeting Pro — password recovery token\n"
+            f"Token: {token}\n"
+            f"Generated: {time.strftime('%Y-%m-%d %H:%M:%S')}\n\n"
+            f"Visit http://127.0.0.1:6789/reset and enter this token.\n"
+            f"(Full recovery flow ships with issue #60.)\n"
+        )
+        os.chmod(recovery_path, 0o600)
+    except Exception:
+        pass  # Non-fatal in this PR; #60 adds proper error handling.
+
+    return templates.TemplateResponse(
+        request,
+        "forgot.html",
+        {"sent": True},
+    )
+
+
+# ── /reset ───────────────────────────────────────────────────────────────────
+
+@app.get("/reset", response_class=HTMLResponse)
+def reset_get(request: Request):
+    """Placeholder reset page (#60)."""
+    return templates.TemplateResponse(
+        request,
+        "reset.html",
+        {"error": None},
+    )
+
+
+@app.post("/reset", response_class=HTMLResponse)
+async def reset_post(request: Request):
+    """Placeholder reset handler (#60).
+
+    TODO (#60): Validate token from recovery.txt, update password hash,
+    delete recovery.txt, redirect to /login.
+    """
+    return templates.TemplateResponse(
+        request,
+        "reset.html",
+        {"error": "Password reset is not yet implemented. See issue #60."},
+    )
+
+
+# ── /profile ─────────────────────────────────────────────────────────────────
+
+@app.get("/profile", response_class=HTMLResponse)
+def profile_get(request: Request):
+    """Settings page.  Requires authentication."""
+    if not _is_authenticated(request):
+        return _redirect("/login")
+    pref = _get_notification_pref()
+    return templates.TemplateResponse(
+        request,
+        "profile.html",
+        {"notification_pref": pref, "saved": False},
+    )
+
+
+@app.post("/profile", response_class=HTMLResponse)
+async def profile_post(request: Request):
+    """Save settings.  Requires authentication.
+
+    Persists what's already in app_config (notification_pref).
+    New columns (linked-account settings, etc.) wait for #47.
+    """
+    if not _is_authenticated(request):
+        return _redirect("/login")
+    form = await request.form()
+    pref = form.get("notification_pref") or "openclaw"
+    _set_notification_pref(pref)
+    return templates.TemplateResponse(
+        request,
+        "profile.html",
+        {"notification_pref": pref, "saved": True},
+    )
+
+
+# ── /ledgers ─────────────────────────────────────────────────────────────────
+
+@app.get("/ledgers", response_class=HTMLResponse)
+def ledgers_get(request: Request):
+    """Read-only ledger tree.  Requires authentication.
+
+    Queries the DB directly because server.main.list_ledgers() is still a
+    stub returning {'status': 'not_implemented'}.  A minimal editor is #48.
+    """
+    if not _is_authenticated(request):
+        return _redirect("/login")
+    ledgers = _get_ledgers()
+    return templates.TemplateResponse(
+        request,
+        "ledgers.html",
+        {"ledgers": ledgers},
+    )
+
+
+# ── /link ─────────────────────────────────────────────────────────────────────
+
+@app.get("/link", response_class=HTMLResponse)
+def link_get(request: Request, token: Optional[str] = None):
+    """Plaid Link JS embed.
+
+    Accepts ?token=<link_token> from whoever generates the link token
+    (setup wizard, profile page, or an MCP-issued URL).
+
+    Loopback-only binding is enforced by daemon.py; this route just renders
+    the embed.
+    """
+    if not _is_authenticated(request):
+        return _redirect("/login")
+    return templates.TemplateResponse(
+        request,
+        "link.html",
+        {"link_token": token},
+    )
