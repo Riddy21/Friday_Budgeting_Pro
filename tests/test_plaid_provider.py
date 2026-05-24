@@ -1,5 +1,5 @@
 """
-Tests for server/plaid_client.py
+Tests for server/providers/plaid.py (PlaidProvider)
 
 All Plaid API calls are mocked — no network access required.
 """
@@ -36,26 +36,26 @@ def _mock_plaid_api(mock_api_cls: MagicMock) -> MagicMock:
 
 class TestCreateLinkToken(unittest.TestCase):
 
-    @patch("server.plaid_client.plaid_api.PlaidApi")
+    @patch("server.providers.plaid.plaid_api.PlaidApi")
     def test_returns_link_token(self, mock_api_cls):
         api = _mock_plaid_api(mock_api_cls)
         api.link_token_create.return_value = {"link_token": "link-sandbox-abc123"}
 
         with patch.dict(os.environ, _env(), clear=False):
-            from server import plaid_client
-            result = plaid_client.create_link_token()
+            from server.providers.plaid import PlaidProvider
+            result = PlaidProvider().create_link_token()
 
         self.assertEqual(result, "link-sandbox-abc123")
         api.link_token_create.assert_called_once()
 
-    @patch("server.plaid_client.plaid_api.PlaidApi")
+    @patch("server.providers.plaid.plaid_api.PlaidApi")
     def test_custom_user_id(self, mock_api_cls):
         api = _mock_plaid_api(mock_api_cls)
         api.link_token_create.return_value = {"link_token": "link-sandbox-xyz"}
 
         with patch.dict(os.environ, _env(), clear=False):
-            from server import plaid_client
-            result = plaid_client.create_link_token(user_id="user-42")
+            from server.providers.plaid import PlaidProvider
+            result = PlaidProvider().create_link_token(user_id="user-42")
 
         self.assertEqual(result, "link-sandbox-xyz")
         call_args = api.link_token_create.call_args
@@ -70,7 +70,7 @@ class TestCreateLinkToken(unittest.TestCase):
 
 class TestExchangePublicToken(unittest.TestCase):
 
-    @patch("server.plaid_client.plaid_api.PlaidApi")
+    @patch("server.providers.plaid.plaid_api.PlaidApi")
     def test_returns_access_token_and_item_id(self, mock_api_cls):
         api = _mock_plaid_api(mock_api_cls)
         api.item_public_token_exchange.return_value = {
@@ -79,8 +79,8 @@ class TestExchangePublicToken(unittest.TestCase):
         }
 
         with patch.dict(os.environ, _env(), clear=False):
-            from server import plaid_client
-            result = plaid_client.exchange_public_token("public-sandbox-abc")
+            from server.providers.plaid import PlaidProvider
+            result = PlaidProvider().exchange_public_token("public-sandbox-abc")
 
         self.assertEqual(result["access_token"], "access-sandbox-token-abc")
         self.assertEqual(result["item_id"], "item-id-xyz")
@@ -93,7 +93,7 @@ class TestExchangePublicToken(unittest.TestCase):
 
 class TestSyncTransactions(unittest.TestCase):
 
-    @patch("server.plaid_client.plaid_api.PlaidApi")
+    @patch("server.providers.plaid.plaid_api.PlaidApi")
     def test_sync_without_cursor(self, mock_api_cls):
         api = _mock_plaid_api(mock_api_cls)
         api.transactions_sync.return_value = {
@@ -104,15 +104,15 @@ class TestSyncTransactions(unittest.TestCase):
         }
 
         with patch.dict(os.environ, _env(), clear=False):
-            from server import plaid_client
-            result = plaid_client.sync_transactions("access-sandbox-token")
+            from server.providers.plaid import PlaidProvider
+            result = PlaidProvider().sync_transactions("access-sandbox-token")
 
         self.assertEqual(len(result["added"]), 1)
         self.assertEqual(result["next_cursor"], "cursor-v2")
         self.assertEqual(result["modified"], [])
         self.assertEqual(result["removed"], [])
 
-    @patch("server.plaid_client.plaid_api.PlaidApi")
+    @patch("server.providers.plaid.plaid_api.PlaidApi")
     def test_sync_with_cursor(self, mock_api_cls):
         api = _mock_plaid_api(mock_api_cls)
         api.transactions_sync.return_value = {
@@ -123,8 +123,8 @@ class TestSyncTransactions(unittest.TestCase):
         }
 
         with patch.dict(os.environ, _env(), clear=False):
-            from server import plaid_client
-            result = plaid_client.sync_transactions(
+            from server.providers.plaid import PlaidProvider
+            result = PlaidProvider().sync_transactions(
                 "access-sandbox-token", cursor="cursor-v2"
             )
 
@@ -147,12 +147,12 @@ class TestEnvValidation(unittest.TestCase):
         bad_env = _env({"PLAID_ENV": "staging"})
         with patch.dict(os.environ, bad_env, clear=False):
             import importlib
-            from server import plaid_client
-            importlib.reload(plaid_client)
+            from server.providers import plaid as plaid_module
+            importlib.reload(plaid_module)
             with self.assertRaises(ValueError):
-                plaid_client.create_link_token()
+                plaid_module.PlaidProvider().create_link_token()
 
-    @patch("server.plaid_client.plaid_api.PlaidApi")
+    @patch("server.providers.plaid.plaid_api.PlaidApi")
     def test_missing_client_id_raises_environment_error(self, mock_api_cls):
         env = {
             "PLAID_ENV": "sandbox",
@@ -163,12 +163,12 @@ class TestEnvValidation(unittest.TestCase):
         patched.update(env)
         with patch.dict(os.environ, patched, clear=True):
             import importlib
-            from server import plaid_client
-            importlib.reload(plaid_client)
+            from server.providers import plaid as plaid_module
+            importlib.reload(plaid_module)
             with self.assertRaises(EnvironmentError):
-                plaid_client.create_link_token()
+                plaid_module.PlaidProvider().create_link_token()
 
-    @patch("server.plaid_client.plaid_api.PlaidApi")
+    @patch("server.providers.plaid.plaid_api.PlaidApi")
     def test_missing_secret_raises_environment_error(self, mock_api_cls):
         env = {
             "PLAID_ENV": "sandbox",
@@ -178,10 +178,10 @@ class TestEnvValidation(unittest.TestCase):
         patched.update(env)
         with patch.dict(os.environ, patched, clear=True):
             import importlib
-            from server import plaid_client
-            importlib.reload(plaid_client)
+            from server.providers import plaid as plaid_module
+            importlib.reload(plaid_module)
             with self.assertRaises(EnvironmentError):
-                plaid_client.create_link_token()
+                plaid_module.PlaidProvider().create_link_token()
 
 
 if __name__ == "__main__":
