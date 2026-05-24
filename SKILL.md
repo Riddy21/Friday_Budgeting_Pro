@@ -36,8 +36,8 @@ metadata:
             {
               "id": "launchd",
               "kind": "shell",
-              "command": "python3 -m server.installer",
-              "label": "Install daemon (launchd)",
+              "command": "sh scripts/install.sh",
+              "label": "Install daemon (launchd plist + registration)",
             },
           ],
         "uninstall":
@@ -45,7 +45,7 @@ metadata:
             {
               "id": "launchd-remove",
               "kind": "shell",
-              "command": "launchctl bootout gui/$UID/ai.openclaw.friday-budgeting-pro 2>/dev/null; rm -f ~/Library/LaunchAgents/ai.openclaw.friday-budgeting-pro.plist",
+              "command": "sh scripts/uninstall.sh",
               "label": "Remove daemon",
             },
           ],
