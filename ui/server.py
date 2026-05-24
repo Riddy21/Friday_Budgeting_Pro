@@ -120,6 +120,17 @@ _PREF_TO_CHANNEL = {"openclaw": "openclaw_chat", "ui": "in_ui", "macos": "macos"
                     "openclaw_chat": "openclaw_chat", "in_ui": "in_ui"}
 
 
+def _get_username() -> str:
+    conn = get_db(_db_path())
+    try:
+        row = conn.execute("SELECT username FROM app_config WHERE id=1").fetchone()
+        return row["username"] if row and row["username"] else "User"
+    except Exception:
+        return "User"
+    finally:
+        conn.close()
+
+
 def _get_notification_channel() -> str:
     conn = get_db(_db_path())
     try:
@@ -280,6 +291,7 @@ async def setup_post(request: Request, step: int):
         return HTMLResponse(status_code=404, content="Setup already complete.")
     form = await request.form()
     if step == 1:
+        username = (form.get("username") or "").strip()
         pw = (form.get("password") or "").strip()
         cf = (form.get("password_confirm") or "").strip()
         dch = "openclaw_chat" if _openclaw_home_exists() else "macos"
@@ -296,6 +308,14 @@ async def setup_post(request: Request, step: int):
             _update_wizard(resp, tok, {"step": 1, "wizard_active": False, "error": err})
             return resp
         set_password_hash(_db_path(), hash_password(pw))
+        # Save username
+        _conn = get_db(_db_path())
+        try:
+            try: _conn.execute("ALTER TABLE app_config ADD COLUMN username TEXT")
+            except: pass
+            _conn.execute("INSERT INTO app_config (id, username) VALUES (1, ?) ON CONFLICT(id) DO UPDATE SET username=excluded.username", (username or "User",))
+            _conn.commit()
+        finally: _conn.close()
         ua = request.headers.get("user-agent")
         stoken = create_session(_db_path(), user_agent=ua)
         ns = {"step": 2, "wizard_active": True, "session_token": stoken, "error": None}
@@ -360,11 +380,8 @@ def login_get(request: Request):
     """Render login form.  If no password is set, redirect to /setup."""
     if not _password_is_set():
         return _redirect("/setup")
-    return templates.TemplateResponse(
-        request,
-        "login.html",
-        {"error": None},
-    )
+    username = _get_username()
+    return templates.TemplateResponse(request, "login.html", {"error": None, "username": username})
 
 
 @app.post("/login")
@@ -491,18 +508,35 @@ async def reset_post(request: Request):
 
 # ── /profile ─────────────────────────────────────────────────────────────────
 
+def _get_connections() -> list[dict]:
+    """Query bank_connections and return a list of dicts."""
+    conn = get_db(_db_path())
+    try:
+        rows = conn.execute(
+            "SELECT id, institution_name, status, last_synced_at "
+            "FROM bank_connections ORDER BY rowid"
+        ).fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
 @app.get("/profile", response_class=HTMLResponse)
 def profile_get(request: Request):
     """Settings page.  Requires authentication."""
     if _is_authenticated(request):
         pref = _get_notification_pref()
+        connections = _get_connections()
         return templates.TemplateResponse(request, "profile.html",
-            {"notification_pref": pref, "saved": False})
+            {"notification_pref": pref, "saved": False,
+             "connections": connections, "action_result": None})
     st = request.cookies.get(_SETUP_COMPLETE_COOKIE)
     if st and _check_raw_session(_db_path(), st):
         pref = _get_notification_pref()
+        connections = _get_connections()
         resp = templates.TemplateResponse(request, "profile.html",
-            {"notification_pref": pref, "saved": False})
+            {"notification_pref": pref, "saved": False,
+             "connections": connections, "action_result": None})
         resp.set_cookie(SESSION_COOKIE, st, httponly=True, samesite="strict")
         resp.delete_cookie(_SETUP_COMPLETE_COOKIE)
         return resp
@@ -514,20 +548,82 @@ def profile_get(request: Request):
 
 @app.post("/profile", response_class=HTMLResponse)
 async def profile_post(request: Request):
-    """Save settings.  Requires authentication.
+    """Save settings and handle linked-account actions.  Requires authentication.
 
-    Persists what's already in app_config (notification_pref).
-    New columns (linked-account settings, etc.) wait for #47.
+    Actions (via hidden 'action' field):
+      - (none / save_settings): save notification_pref
+      - sync_now: trigger server.main.sync()
+      - export_now: trigger server.main.export_excel()
+      - disconnect_bank: delete bank_connection by bank_id
+      - reconnect_bank: call server.main.refresh_connection(id=bank_id)
     """
     if not _is_authenticated(request):
         return _redirect("/login")
     form = await request.form()
-    pref = form.get("notification_pref") or "openclaw"
-    _set_notification_pref(pref)
+    action = (form.get("action") or "").strip()
+    pref = _get_notification_pref()
+    connections = _get_connections()
+    action_result: dict | None = None
+
+    if action == "sync_now":
+        import server.main as _sm
+        try:
+            result = _sm.sync()
+            action_result = {"ok": True, "message": "Sync complete.", "detail": result}
+        except Exception as exc:
+            action_result = {"ok": False, "message": f"Sync failed: {exc}"}
+
+    elif action == "export_now":
+        import server.main as _sm
+        try:
+            result = _sm.export_excel()
+            path = result.get("path", "")
+            action_result = {"ok": True, "message": f"Export saved to: {path}"}
+        except Exception as exc:
+            action_result = {"ok": False, "message": f"Export failed: {exc}"}
+
+    elif action == "disconnect_bank":
+        bank_id = (form.get("bank_id") or "").strip()
+        if not bank_id:
+            action_result = {"ok": False, "message": "No bank_id provided."}
+        else:
+            import server.main as _sm
+            try:
+                _sm.disconnect(id=bank_id)
+                connections = _get_connections()  # refresh after delete
+                action_result = {"ok": True, "message": "Bank account disconnected."}
+            except Exception as exc:
+                action_result = {"ok": False, "message": f"Disconnect failed: {exc}"}
+
+    elif action == "reconnect_bank":
+        bank_id = (form.get("bank_id") or "").strip()
+        if not bank_id:
+            action_result = {"ok": False, "message": "No bank_id provided."}
+        else:
+            import server.main as _sm
+            try:
+                result = _sm.refresh_connection(id=bank_id)
+                url = result.get("url", "")
+                action_result = {"ok": True, "message": f"Reconnect here: {url}", "url": url}
+            except Exception as exc:
+                action_result = {"ok": False, "message": f"Reconnect failed: {exc}"}
+
+    else:
+        # Default: save notification_pref
+        pref = form.get("notification_pref") or "openclaw"
+        _set_notification_pref(pref)
+        return templates.TemplateResponse(
+            request,
+            "profile.html",
+            {"notification_pref": pref, "saved": True,
+             "connections": connections, "action_result": None},
+        )
+
     return templates.TemplateResponse(
         request,
         "profile.html",
-        {"notification_pref": pref, "saved": True},
+        {"notification_pref": pref, "saved": False,
+         "connections": connections, "action_result": action_result},
     )
 
 

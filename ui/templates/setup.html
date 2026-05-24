@@ -25,8 +25,11 @@
   <!-- ── Step 1: Set password ────────────────────────────────────────── -->
   {% if step == 1 %}
   <form method="post" action="/setup/1">
-    <h2>Set a password</h2>
-    <p>This password protects your local budgeting dashboard.</p>
+    <h2>Create your account</h2>
+    <p>Set a username and password to protect your local dashboard.</p>
+    <label for="username">Your name</label>
+    <input id="username" name="username" type="text" required
+           placeholder="e.g. Ridvan" autocomplete="username" />
     <label for="password">Password</label>
     <input id="password" name="password" type="password" required minlength="8"
            placeholder="At least 8 characters" autocomplete="new-password" />

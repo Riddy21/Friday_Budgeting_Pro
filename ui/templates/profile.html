@@ -45,22 +45,75 @@
   <!-- Quick actions -->
   <section>
     <h2>Data</h2>
+    {% if action_result %}
+      {% if action_result.ok %}
+      <div class="alert alert-success">{{ action_result.message }}</div>
+      {% if action_result.url %}
+      <p><a href="{{ action_result.url }}" class="btn-primary" target="_blank">Open Reconnect Link</a></p>
+      {% endif %}
+      {% else %}
+      <div class="alert alert-error">{{ action_result.message }}</div>
+      {% endif %}
+    {% endif %}
     <div class="action-row">
       <a href="/ledgers" class="btn-secondary">View Ledgers</a>
-      <!-- Sync / Export are MCP operations in v0.1; these are informational links. -->
-      <span class="hint">Sync and export are available via OpenClaw chat.</span>
+      <form method="post" action="/profile" style="display:inline">
+        <input type="hidden" name="action" value="sync_now">
+        <button type="submit" class="btn-secondary" id="btn-sync-now">Sync Now</button>
+      </form>
+      <form method="post" action="/profile" style="display:inline">
+        <input type="hidden" name="action" value="export_now">
+        <button type="submit" class="btn-secondary">Export Excel</button>
+      </form>
     </div>
   </section>
 
-  <!-- Linked Accounts — TODO (#47): Full linked-accounts section with
-       Reconnect / Disconnect / + Connect a bank buttons. -->
+  <!-- Linked Accounts (#47) -->
   <section id="linked-accounts">
     <h2>Linked Accounts</h2>
-    <p class="hint">Linked account management coming in issue <strong>#47</strong>.
-       To connect a bank now, use the <code>start_link</code> MCP tool via
-       OpenClaw chat.</p>
-    <!-- TODO (#47): Render bank_connections list with status pills and
-         Reconnect / Disconnect / + Connect a bank buttons. -->
+    {% if connections %}
+    <table class="connections-table">
+      <thead>
+        <tr>
+          <th>Institution</th>
+          <th>Status</th>
+          <th>Last Synced</th>
+          <th>Actions</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for conn in connections %}
+        <tr>
+          <td>{{ conn.institution_name if conn.institution_name else "—" }}</td>
+          <td>
+            <span class="status-pill status-{{ conn.status }}">
+              {{ conn.status }}
+            </span>
+          </td>
+          <td>{{ conn.last_synced_at if conn.last_synced_at else "Never" }}</td>
+          <td class="action-cell">
+            {% if conn.status == "needs_reauth" %}
+            <form method="post" action="/profile" style="display:inline">
+              <input type="hidden" name="action" value="reconnect_bank">
+              <input type="hidden" name="bank_id" value="{{ conn.id }}">
+              <button type="submit" class="btn-warning">Reconnect</button>
+            </form>
+            {% endif %}
+            <form method="post" action="/profile" style="display:inline">
+              <input type="hidden" name="action" value="disconnect_bank">
+              <input type="hidden" name="bank_id" value="{{ conn.id }}">
+              <button type="submit" class="btn-danger"
+                onclick="return confirm('Disconnect this bank account?')">Disconnect</button>
+            </form>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <p class="hint">No bank accounts connected yet. Use the
+       <code>start_link</code> MCP tool via OpenClaw chat to connect a bank.</p>
+    {% endif %}
   </section>
 </div>
 {% endblock %}
