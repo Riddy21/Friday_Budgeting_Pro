@@ -1,8 +1,25 @@
-"""Tests for package.json ClawHub metadata."""
+"""Tests for package.json ClawHub metadata.
+
+NOTE: As of commit b46888 the install convention moved from package.json
+install hooks into SKILL.md's `metadata.openclaw.install` block (the canonical
+location per the OpenClaw skill spec). package.json now only carries the
+high-level package identity (name, version, description, keywords, repo,
+slug, homepage) plus a pointer to SKILL.md via `openclaw.skillFile`.
+"""
 import json
 import os
 
-REQUIRED_FIELDS = ["name", "version", "description", "keywords", "repository", "slug", "install"]
+# Fields that must be present in package.json itself.
+# Install hooks live in SKILL.md → metadata.openclaw.install (see SKILL.md tests).
+REQUIRED_FIELDS = [
+    "name",
+    "version",
+    "description",
+    "keywords",
+    "repository",
+    "slug",
+    "openclaw",
+]
 
 
 def load_package_json():
@@ -33,6 +50,8 @@ def test_required_fields_non_empty():
             assert value.strip() != "", f"Field '{field}' must not be empty string"
         elif isinstance(value, list):
             assert len(value) > 0, f"Field '{field}' must not be empty list"
+        elif isinstance(value, dict):
+            assert len(value) > 0, f"Field '{field}' must not be empty dict"
 
 
 def test_name():
@@ -68,9 +87,10 @@ def test_slug():
     assert isinstance(pkg["slug"], str) and pkg["slug"].strip(), "slug must be a non-empty string"
 
 
-def test_install_hooks_present():
+def test_openclaw_pointer_to_skill_file():
+    """package.json points at SKILL.md, which holds the canonical install convention."""
     pkg = load_package_json()
-    install = pkg["install"]
-    assert isinstance(install, dict), "install must be an object"
-    assert "pre" in install, "install.pre hook must be present"
-    assert "post" in install, "install.post hook must be present"
+    openclaw = pkg["openclaw"]
+    assert isinstance(openclaw, dict), "openclaw must be an object"
+    assert "skillFile" in openclaw, "openclaw.skillFile must point at the skill markdown"
+    assert openclaw["skillFile"].strip(), "openclaw.skillFile must not be empty"
