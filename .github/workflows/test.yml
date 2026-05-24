@@ -24,19 +24,40 @@ jobs:
         with:
           python-version: "3.11"
       - run: pip install -r requirements.txt
-      # Smoke test: every MCP tool must import cleanly and return a dict (not crash on import)
+      # Smoke test: server imports cleanly and setup_status returns a dict
+      # Uses a temp dir for DB so CI doesn't need ~/.friday-bp
       - run: |
           python3 -c "
-          import os, sys
+          import os, sys, tempfile, pathlib
+
+          # Point DB at a writable temp dir
+          tmp = tempfile.mkdtemp()
+          os.environ['FRIDAY_BP_APP_DIR'] = tmp
           os.environ.setdefault('PLAID_CLIENT_ID', 'test')
           os.environ.setdefault('PLAID_SECRET', 'test')
           os.environ.setdefault('PLAID_ENV', 'sandbox')
           sys.path.insert(0, '.')
+
+          # Patch paths before import
+          import server.paths as paths
+          paths.APP_DIR = pathlib.Path(tmp)
+          paths.DB_PATH = paths.APP_DIR / 'data.db'
+          paths.SYNC_LOCK_PATH = paths.APP_DIR / 'sync.lock'
+          paths.EXPORTS_DIR = paths.APP_DIR / 'exports'
+          paths.APP_DIR.mkdir(parents=True, exist_ok=True)
+          paths.EXPORTS_DIR.mkdir(parents=True, exist_ok=True)
+
           import server.main as m
+
+          # Init the DB schema
+          from server.db import init_db
+          init_db(paths.DB_PATH)
+
           tools = [k for k in dir(m) if not k.startswith('_')]
           print(f'Server imported OK, {len(tools)} exports')
-          # Verify setup_status returns a dict
+
           r = m.setup_status()
           assert isinstance(r, dict), f'setup_status returned {type(r)}'
+          assert r.get('status') != 'not_implemented', f'setup_status is a stub: {r}'
           print('setup_status OK:', r)
           "
