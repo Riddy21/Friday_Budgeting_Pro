@@ -78,10 +78,13 @@ CREATE TABLE IF NOT EXISTS sync_cursors (
 );
 
 -- UI auth: single-row app config (single-user system)
+-- TODO: existing DBs will not have the notification_channel column added here;
+--       a migration (ALTER TABLE app_config ADD COLUMN ...) is needed for them.
 CREATE TABLE IF NOT EXISTS app_config (
   id INTEGER PRIMARY KEY CHECK (id = 1),
   ui_password_hash TEXT,       -- argon2id hash
-  ui_password_set_at INTEGER
+  ui_password_set_at INTEGER,
+  notification_channel TEXT DEFAULT 'in_ui'  -- openclaw_chat | macos | in_ui
 );
 
 -- UI session cookies (server-side store, survives restarts)
@@ -91,6 +94,16 @@ CREATE TABLE IF NOT EXISTS sessions (
   last_seen_at INTEGER NOT NULL,
   expires_at INTEGER NOT NULL,
   user_agent TEXT
+);
+
+-- Notification log — every send() call writes a row; the UI reads this for banners
+CREATE TABLE IF NOT EXISTS notifications (
+  id TEXT PRIMARY KEY,
+  message TEXT NOT NULL,
+  urgency TEXT DEFAULT 'normal',  -- normal | high
+  created_at INTEGER NOT NULL,
+  delivered_via TEXT,             -- openclaw_chat | macos | in_ui
+  read INTEGER DEFAULT 0
 );
 
 -- Login attempt log for rate limiting
