@@ -1,4 +1,9 @@
 #!/bin/sh
+# DEPRECATED: This script has been superseded by server/installer.py (see issue #94).
+# It is kept as a reference only. SKILL.md now calls:
+#   python3 -m server.installer install
+# Do NOT add new logic here.
+#
 # install.sh — Friday Budgeting Pro installer
 # Called by ClawHub as the post-install hook (SKILL.md metadata.openclaw.install).
 # Safe to run multiple times — all steps are idempotent.
