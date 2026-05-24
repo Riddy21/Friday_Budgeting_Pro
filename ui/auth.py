@@ -322,6 +322,27 @@ def get_active_user_id(db_path) -> Optional[str]:
         conn.close()
 
 
+# ── Recovery token store (shared with MCP tools) ────────────────────────────
+# Maps token -> (user_id, expiry_float).  In-memory; tokens do not survive
+# daemon restarts, which is acceptable for a local single-user app.
+
+_recovery_tokens: dict[str, tuple[str, float]] = {}
+_RECOVERY_TOKEN_TTL: int = 600  # 10 minutes
+
+
+def add_recovery_token(token: str, user_id: str) -> None:
+    """Register *token* → *user_id* in the in-memory recovery-token store.
+
+    The token expires after ``_RECOVERY_TOKEN_TTL`` seconds.  This helper
+    is shared by the UI POST /forgot handler and the MCP
+    ``reset_ui_password`` tool so both operate on the same in-memory map.
+    """
+    import time as _time_mod
+
+    expiry = _time_mod.time() + _RECOVERY_TOKEN_TTL
+    _recovery_tokens[token] = (user_id, expiry)
+
+
 # ── Legacy app_config helpers (kept for backward compat) ─────────────────
 # These delegate to the users table when a user exists, otherwise fall back
 # to the app_config table.  New code should use the user-centric helpers
