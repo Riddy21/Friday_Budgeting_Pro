@@ -46,15 +46,11 @@ import server.paths as _paths
 from server.db import get_db, init_db
 from ui.auth import (
     SESSION_COOKIE,
-    check_rate_limit,
     check_session,
-    clear_failed_attempts,
     create_session,
     delete_session,
     get_password_hash,
     hash_password,
-    prune_old_login_attempts,
-    record_login_attempt,
     set_password_hash,
     verify_password,
 )
@@ -376,32 +372,16 @@ async def login_post(request: Request):
     """Verify password; on success create session and redirect to /profile.
 
     On failure: re-render login.html with an error.
-
-    Rate limiting (#37): rejects with 429 after 5 failed attempts in 5 min.
-    Opportunistically prunes login_attempts rows older than 30 days.
+    No rate limiting — single-user local app (per d4403c0).
     """
     if not _password_is_set():
         return _redirect("/setup")
-
-    # Opportunistic cleanup of old attempts (30-day horizon).
-    prune_old_login_attempts(_db_path())
-
-    # Enforce rate limit before touching the password.
-    blocked, retry_after = check_rate_limit(_db_path())
-    if blocked:
-        return JSONResponse(
-            status_code=429,
-            content={"error": "too_many_attempts", "retry_after_seconds": retry_after},
-        )
 
     form = await request.form()
     password = (form.get("password") or "")
 
     stored_hash = get_password_hash(_db_path())
     success = stored_hash is not None and verify_password(password, stored_hash)
-
-    # Record this attempt.
-    record_login_attempt(_db_path(), success)
 
     if not success:
         return templates.TemplateResponse(
@@ -410,9 +390,6 @@ async def login_post(request: Request):
             {"error": "Incorrect password."},
             status_code=200,
         )
-
-    # Successful login — clear the recent failure counter.
-    clear_failed_attempts(_db_path())
     # Clear any pending setup session.
     st = request.cookies.get(_SETUP_COMPLETE_COOKIE)
     if st:

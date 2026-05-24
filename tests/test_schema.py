@@ -42,7 +42,6 @@ def test_all_tables_exist():
         "sync_cursors",
         "app_config",
         "sessions",
-        "login_attempts",
     }
     assert expected <= tables(conn), (
         f"Missing tables: {expected - tables(conn)}"
@@ -118,11 +117,6 @@ def test_sessions_columns():
     cols = columns(conn, "sessions")
     assert {"id", "created_at", "last_seen_at", "expires_at", "user_agent"} <= cols
 
-
-def test_login_attempts_columns():
-    conn = get_connection()
-    cols = columns(conn, "login_attempts")
-    assert {"id", "attempted_at", "success"} <= cols
 
 
 def test_schema_loads_twice_idempotent():

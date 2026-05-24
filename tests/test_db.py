@@ -29,7 +29,6 @@ EXPECTED_TABLES = {
     "sync_cursors",
     "app_config",
     "sessions",
-    "login_attempts",
 }
 
 
