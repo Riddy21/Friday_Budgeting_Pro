@@ -139,6 +139,14 @@ Three things, kept minimal:
 Personal), click into one to add/rename/remove line items, add new
 ledgers when you need them (e.g. for a rental property).
 
+Ledgers come in three types:
+- **Personal** (default) — standard household budget with line items like Salary, Groceries, Dining, etc.
+- **Property** — rental/investment property ledger with pre-seeded items: Rent income, Mortgage, Property tax, Maintenance & repairs, Insurance, Utilities.
+- **Investment** — tracks investment accounts with Contributions and Dividends & Returns.
+
+Create typed ledgers via MCP: `create_property_ledger('123 Main St')` or `create_investment_ledger('TFSA')`.
+Link a bank account to a ledger so its transactions route there by default: `set_account_ledger(account_id, ledger_id)`.
+
 Reviewing classifications, running queries, anything beyond the basics -
 those still happen through the MCP adapter (your OpenClaw agent or any
 other MCP client).

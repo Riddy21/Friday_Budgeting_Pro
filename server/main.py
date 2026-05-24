@@ -650,7 +650,8 @@ def list_ledgers() -> dict:
     try:
         if uid:
             ledger_rows = conn.execute(
-                "SELECT id, name FROM ledgers WHERE user_id = ? OR user_id IS NULL ORDER BY name",
+                "SELECT id, name, type, description FROM ledgers "
+                "WHERE user_id = ? OR user_id IS NULL ORDER BY name",
                 (uid,),
             ).fetchall()
         else:
@@ -665,6 +666,8 @@ def list_ledgers() -> dict:
                 {
                     "id": lr["id"],
                     "name": lr["name"],
+                    "type": lr["type"],
+                    "description": lr["description"],
                     "items": [
                         {"id": i["id"], "name": i["name"], "type": i["item_type"]} for i in items
                     ],
@@ -807,6 +810,184 @@ def remove_line_item(id: str) -> dict:
         conn.close()
 
     return {"status": "ok"}
+
+
+@mcp.tool
+def set_account_ledger(account_id: str, ledger_id: str) -> dict:
+    """Link a bank account to a default ledger for transaction routing.
+
+    Transactions from this account will be routed to the specified ledger by
+    default during classification.
+
+    Parameters
+    ----------
+    account_id : str
+        Internal bank_account id.
+    ledger_id : str
+        ID of the target ledger (must belong to the active user).
+
+    Returns
+    -------
+    dict
+        ``{"status": "ok"}`` on success or ``{"status": "error", ...}``.
+    """
+    uid = get_active_user_id(server.paths.DB_PATH)
+    conn = get_db(server.paths.DB_PATH)
+    try:
+        # Verify account belongs to active user (via bank_connections.user_id)
+        if uid:
+            acct_row = conn.execute(
+                """
+                SELECT ba.id FROM bank_accounts ba
+                JOIN bank_connections bc ON bc.id = ba.connection_id
+                WHERE ba.id = ? AND bc.user_id = ?
+                """,
+                (account_id, uid),
+            ).fetchone()
+        else:
+            acct_row = conn.execute(
+                "SELECT id FROM bank_accounts WHERE id = ?", (account_id,)
+            ).fetchone()
+
+        if acct_row is None:
+            return {
+                "status": "error",
+                "message": f"account_id {account_id!r} not found or not owned by active user",
+            }
+
+        # Verify ledger belongs to active user
+        if uid:
+            ledger_row = conn.execute(
+                "SELECT id FROM ledgers WHERE id = ? AND (user_id = ? OR user_id IS NULL)",
+                (ledger_id, uid),
+            ).fetchone()
+        else:
+            ledger_row = conn.execute(
+                "SELECT id FROM ledgers WHERE id = ?", (ledger_id,)
+            ).fetchone()
+
+        if ledger_row is None:
+            return {
+                "status": "error",
+                "message": f"ledger_id {ledger_id!r} not found or not owned by active user",
+            }
+
+        conn.execute(
+            "UPDATE bank_accounts SET default_ledger_id = ? WHERE id = ?",
+            (ledger_id, account_id),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    return {"status": "ok"}
+
+
+@mcp.tool
+def create_property_ledger(name: str, description: str = None) -> dict:
+    """Create a ledger for a rental/investment property with default line items.
+
+    Seeds 6 standard line items:
+      Income: ``Rent income``
+      Expenses: ``Mortgage``, ``Property tax``, ``Maintenance & repairs``,
+                ``Insurance``, ``Utilities``
+
+    Parameters
+    ----------
+    name : str
+        Ledger name (e.g. "123 Main St").
+    description : str, optional
+        Optional address or label (e.g. "2-bed condo, downtown").
+
+    Returns
+    -------
+    dict
+        ``{"status": "ok", "ledger_id": "<uuid>"}``
+    """
+    name = name.strip() if name else ""
+    if not name:
+        return {"status": "error", "message": "Ledger name must be non-empty"}
+
+    uid = get_active_user_id(server.paths.DB_PATH)
+    if uid is None:
+        return {"status": "error", "message": "No active user"}
+
+    _PROPERTY_LINE_ITEMS = [
+        ("Rent income", "income"),
+        ("Mortgage", "expense"),
+        ("Property tax", "expense"),
+        ("Maintenance & repairs", "expense"),
+        ("Insurance", "expense"),
+        ("Utilities", "expense"),
+    ]
+
+    ledger_id = str(uuid.uuid4())
+    conn = get_db(server.paths.DB_PATH)
+    try:
+        with db_txn(conn):
+            conn.execute(
+                "INSERT INTO ledgers (id, name, user_id, type, description) "
+                "VALUES (?, ?, ?, 'property', ?)",
+                (ledger_id, name, uid, description),
+            )
+            for item_name, item_type in _PROPERTY_LINE_ITEMS:
+                conn.execute(
+                    "INSERT INTO line_items (id, ledger_id, name, item_type) VALUES (?, ?, ?, ?)",
+                    (str(uuid.uuid4()), ledger_id, item_name, item_type),
+                )
+    finally:
+        conn.close()
+
+    return {"status": "ok", "ledger_id": ledger_id}
+
+
+@mcp.tool
+def create_investment_ledger(name: str) -> dict:
+    """Create a ledger for tracking investments with default line items.
+
+    Seeds 2 standard line items:
+      ``Contributions`` (expense), ``Dividends & Returns`` (income)
+
+    Parameters
+    ----------
+    name : str
+        Ledger name (e.g. "TFSA", "RRSP").
+
+    Returns
+    -------
+    dict
+        ``{"status": "ok", "ledger_id": "<uuid>"}``
+    """
+    name = name.strip() if name else ""
+    if not name:
+        return {"status": "error", "message": "Ledger name must be non-empty"}
+
+    uid = get_active_user_id(server.paths.DB_PATH)
+    if uid is None:
+        return {"status": "error", "message": "No active user"}
+
+    _INVESTMENT_LINE_ITEMS = [
+        ("Contributions", "expense"),
+        ("Dividends & Returns", "income"),
+    ]
+
+    ledger_id = str(uuid.uuid4())
+    conn = get_db(server.paths.DB_PATH)
+    try:
+        with db_txn(conn):
+            conn.execute(
+                "INSERT INTO ledgers (id, name, user_id, type) VALUES (?, ?, ?, 'investment')",
+                (ledger_id, name, uid),
+            )
+            for item_name, item_type in _INVESTMENT_LINE_ITEMS:
+                conn.execute(
+                    "INSERT INTO line_items (id, ledger_id, name, item_type) VALUES (?, ?, ?, ?)",
+                    (str(uuid.uuid4()), ledger_id, item_name, item_type),
+                )
+    finally:
+        conn.close()
+
+    return {"status": "ok", "ledger_id": ledger_id}
 
 
 # ---------------------------------------------------------------------------
