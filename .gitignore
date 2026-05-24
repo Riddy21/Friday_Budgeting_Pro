@@ -1,3 +1,4 @@
+.env
 .tokens.json
 state.json
 __pycache__/
