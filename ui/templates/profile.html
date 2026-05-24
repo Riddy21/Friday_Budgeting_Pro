@@ -214,9 +214,12 @@
     {% endif %}
 
     {% else %}
-    <p class="hint">No bank accounts connected yet. Use the
-       <code>start_link</code> MCP tool via OpenClaw chat to connect a bank.</p>
+    <p class="hint">No bank accounts connected yet.</p>
     {% endif %}
+
+    <div style="margin-top:1rem">
+      <a href="/link" class="btn-primary">+ Connect a bank</a>
+    </div>
   </section>
 </div>
 {% endblock %}
