@@ -1,78 +1,125 @@
 ---
 name: friday-budgeting-pro
 description: >
-  An OpenClaw skill that lets the user manage personal finances by chatting with
-  HAL. Connects to banks via Plaid, auto-classifies transactions using a tiered
-  engine (rules → LLM → ask user), stores everything in a local SQLite file,
-  exports to Excel on request, and runs a daily sync. The user interacts
-  entirely through natural-language chat — no UI, no commands, no config files.
-version: "0.1"
+  AI-powered personal finance tracker. Connects to your banks via Plaid,
+  auto-classifies transactions, syncs daily, and exports to Excel. Ask your
+  agent about spending, connect banks, manage ledgers, or trigger exports.
+homepage: https://github.com/Riddy21/Friday_Budgeting_Pro
+metadata:
+  {
+    "openclaw":
+      {
+        "emoji": "💰",
+        "os": ["darwin"],
+        "requires": { "bins": ["python3"] },
+        "mcp":
+          {
+            "server": "friday-budgeting-pro",
+            "transport": "stdio",
+            "command": "python3",
+            "args": ["-m", "server.main"],
+          },
+        "install":
+          [
+            {
+              "id": "pip",
+              "kind": "shell",
+              "command": "pip3 install --break-system-packages -q -r requirements.txt",
+              "label": "Install Python dependencies",
+            },
+            {
+              "id": "db-init",
+              "kind": "shell",
+              "command": "python3 -c \"import server.db as d, server.paths as p; d.init_db(p.DB_PATH)\"",
+              "label": "Initialize database",
+            },
+            {
+              "id": "launchd",
+              "kind": "shell",
+              "command": "python3 -m server.installer",
+              "label": "Install daemon (launchd)",
+            },
+          ],
+        "uninstall":
+          [
+            {
+              "id": "launchd-remove",
+              "kind": "shell",
+              "command": "launchctl bootout gui/$UID/ai.openclaw.friday-budgeting-pro 2>/dev/null; rm -f ~/Library/LaunchAgents/ai.openclaw.friday-budgeting-pro.plist",
+              "label": "Remove daemon",
+            },
+          ],
+      },
+  }
 ---
 
 # Friday Budgeting Pro
 
+AI-powered personal finance on your own Mac. Connects to your banks via Plaid,
+classifies transactions automatically (and asks when it's unsure), syncs in the
+background, and exports to Excel. A small local UI at `http://127.0.0.1:6789`
+handles setup and profile management; everything else happens through your agent.
+
+## Setup
+
+After install, open `http://127.0.0.1:6789` in your browser to:
+1. Set a password for the local dashboard
+2. Connect your first bank via Plaid
+3. Done — daily sync scheduled automatically
+
 ## When to Use This Skill
 
-Invoke this skill when the user's message contains finance-related intent. Key
-trigger keywords include:
+Invoke for any personal finance request:
 
-**Banking / Accounts**
-- banks, bank account, banking, connect bank, add bank, Plaid, institution
-- balance, account balance, checking, savings, credit card
+- Spending summaries ("how much did I spend on dining this month?")
+- Bank connections ("connect my TD account", "reconnect my BMO")
+- Transaction queries ("what was that $47 Amazon charge?")
+- Classification ("mark Home Depot as rental property maintenance")
+- Exports ("export my finances to Excel")
+- Sync ("sync my transactions")
+- Ledger management ("add a rental property ledger")
 
-**Transactions / Spending**
-- transactions, transaction, spending, charges, purchases
-- expenses, expense, expenditure
-- income, salary, paycheck, deposit
+## Available MCP Tools
 
-**Budgeting / Tracking**
-- budget, budgeting, budget report
-- ledger, line item, category, categorize, classify
-- monthly report, weekly summary, spending summary
+### Setup
+- `setup_status` — check if first-run setup is complete
+- `apply_initial_setup` — initialize ledgers, notifications, first sync
 
-**Actions / Exports**
-- export, Excel, spreadsheet, download
-- sync, refresh, update transactions
-- re-auth, reconnect bank
+### Banks
+- `start_link` — generate Plaid Link URL to connect a bank
+- `complete_link` — exchange public token after user completes Link
+- `list_connections` — list connected banks and their status
+- `refresh_connection` — reauth a broken connection (Update Mode)
+- `disconnect` — remove a bank connection
 
-## Example Trigger Phrases
+### Ledgers
+- `list_ledgers` — show all ledgers and line items
+- `add_ledger` — create a new ledger
+- `add_line_item` — add a line item to a ledger
 
-- "How much did I spend on groceries this month?"
-- "Connect my TD Bank account."
-- "Show me my transactions from last week."
-- "What's my budget looking like?"
-- "Export my expenses to Excel."
-- "Sync my bank transactions."
-- "I spent a lot on dining out — can you show me a breakdown?"
-- "What was that $47 charge from Amazon?"
-- "Add a rule: Starbucks is always Dining."
-- "How much income did I receive in April?"
-- "My Plaid connection needs re-authorization."
-- "Show me my top spending categories."
+### Transactions
+- `sync` — pull latest transactions from all banks
+- `list` — query transactions (date, ledger, category filters)
+- `get_needs_review` — transactions awaiting classification
+- `route` — assign a transaction to a ledger/line item
+- `add_hint` — add a natural-language classification hint
+
+### Reports
+- `summary` — spending totals for a period
+- `export_excel` — generate Excel workbook(s)
+- `get_ui_url` — return the local dashboard URL
 
 ## Do / Don't
 
-### ✅ Do
+**Do**
+- Always use the MCP tools — never guess from general knowledge
+- Call `sync` before answering spending questions if data may be stale
+- Use `get_needs_review` periodically and walk the user through classifications
+- Open `start_link` when the user wants to connect or reconnect a bank
+- Respect that all data is local and private — don't mention paths or internals
 
-- Invoke this skill for any question about personal finances, spending, or
-  banking.
-- Call the Friday Budgeting Pro MCP tools to answer finance questions.
-- Trigger conversational setup if this is the user's first time (DB empty).
-- Notify the user when a bank connection needs re-authorization.
-- Use the MCP `export` tool when the user asks for an Excel file.
-- Classify ambiguous transactions by asking the user directly.
-- Schedule or confirm the daily 6 AM sync via OpenClaw cron when requested.
-
-### ❌ Don't
-
-- Don't try to answer finance questions from general knowledge — always go
-  through the MCP tools which read the local DB.
-- Don't store or log Plaid tokens in plain text; the server handles encryption.
-- Don't expose internal implementation details (DB paths, encryption keys) to
-  the user.
-- Don't handle multi-user or business finance scenarios — this is personal
-  finance only.
-- Don't open a web browser or direct the user to any external URL except via
-  the Plaid Link flow managed by the MCP server.
-- Don't invoke this skill for generic money questions unrelated to the user's
-  own accounts (e.g., "what is inflation?").
+**Don't**
+- Don't answer "what is inflation?" type questions — invoke for personal accounts only
+- Don't store tokens or credentials in plain text
+- Don't expose DB paths, encryption keys, or implementation details to the user
+- Don't try to open the Plaid UI yourself — return the URL and let the user click

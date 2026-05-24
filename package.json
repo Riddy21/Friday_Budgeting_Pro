@@ -1,22 +1,16 @@
 {
   "name": "friday-budgeting-pro",
   "version": "0.1.0",
-  "description": "An OpenClaw skill that lets the user manage personal finances by chatting with HAL. Connects to banks via Plaid, auto-classifies transactions using a tiered engine (rules → LLM → ask user), stores everything in a local SQLite file, exports to Excel on request, runs a daily sync via an OpenClaw cron job, and pings the user when it needs help classifying something.",
+  "description": "AI-powered personal finance tracker for OpenClaw. Connects to banks via Plaid, auto-classifies transactions, syncs daily, and exports to Excel.",
   "slug": "friday-budgeting-pro",
-  "keywords": [
-    "finance",
-    "budgeting",
-    "plaid",
-    "ai",
-    "openclaw",
-    "mcp"
-  ],
+  "homepage": "https://github.com/Riddy21/Friday_Budgeting_Pro",
+  "keywords": ["finance", "budgeting", "plaid", "banking", "mcp", "openclaw"],
   "repository": {
     "type": "git",
     "url": "https://github.com/Riddy21/Friday_Budgeting_Pro"
   },
-  "install": {
-    "pre": "",
-    "post": ""
+  "openclaw": {
+    "skillFile": "SKILL.md",
+    "minVersion": "2026.1.0"
   }
 }
