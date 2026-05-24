@@ -228,3 +228,173 @@ def test_sync_lock_contention(env, monkeypatch):
         held.close()
 
     assert result == {"status": "already_running"}
+
+
+# ---------------------------------------------------------------------------
+# Test 5: account name and type are saved from Plaid sync response (#125)
+# ---------------------------------------------------------------------------
+
+_ADDED_TXNS_ACCT_META = [
+    {
+        "transaction_id": "plaid-txn-meta-1",
+        "account_id": "plaid-acct-meta",
+        "date": "2024-02-01",
+        "name": "Tim Hortons",
+        "merchant_name": "Tim Hortons",
+        "amount": 3.50,
+        "pending": False,
+    },
+]
+
+_ACCOUNTS_META = [
+    {
+        "account_id": "plaid-acct-meta",
+        "name": "Chequing",
+        "official_name": "TD Canada Trust Chequing",
+        "type": "depository",
+        "subtype": "checking",
+    },
+]
+
+
+def _mock_sync_with_accounts(access_token, cursor=None):
+    return {
+        "added": _ADDED_TXNS_ACCT_META,
+        "modified": [],
+        "removed": [],
+        "next_cursor": "cursor-meta",
+        "accounts": _ACCOUNTS_META,
+    }
+
+
+def test_sync_saves_account_name_and_type(env, monkeypatch):
+    """bank_accounts.name and .type are populated from the Plaid accounts list."""
+    monkeypatch.setattr("server.main._plaid.sync_transactions", _mock_sync_with_accounts)
+    monkeypatch.setattr("server.crypto.decrypt", lambda x: x)
+    monkeypatch.setattr(
+        "server.health_monitor.check_all_connections",
+        lambda db, plaid_provider=None: _HEALTH_NOOP,
+    )
+
+    result = sync()
+    assert result["status"] == "ok"
+    assert result["added"] == 1
+
+    conn = get_db(env["db"])
+    row = conn.execute(
+        "SELECT name, type FROM bank_accounts WHERE plaid_account_id = ?",
+        ("plaid-acct-meta",),
+    ).fetchone()
+    conn.close()
+
+    assert row is not None
+    # official_name takes precedence over name
+    assert row["name"] == "TD Canada Trust Chequing"
+    assert row["type"] == "depository"
+
+
+def test_sync_account_name_type_idempotent(env, monkeypatch):
+    """Syncing twice does not blank out already-populated name/type."""
+    monkeypatch.setattr("server.main._plaid.sync_transactions", _mock_sync_with_accounts)
+    monkeypatch.setattr("server.crypto.decrypt", lambda x: x)
+    monkeypatch.setattr(
+        "server.health_monitor.check_all_connections",
+        lambda db, plaid_provider=None: _HEALTH_NOOP,
+    )
+
+    sync()
+    sync()  # second call — should not wipe name/type
+
+    conn = get_db(env["db"])
+    row = conn.execute(
+        "SELECT name, type FROM bank_accounts WHERE plaid_account_id = ?",
+        ("plaid-acct-meta",),
+    ).fetchone()
+    conn.close()
+
+    assert row["name"] == "TD Canada Trust Chequing"
+    assert row["type"] == "depository"
+
+
+def test_sync_account_no_official_name_falls_back_to_name(env, monkeypatch):
+    """When official_name is absent, name field is used instead."""
+    accounts_no_official = [
+        {
+            "account_id": "plaid-acct-noofficialname",
+            "name": "Savings Account",
+            "official_name": None,
+            "type": "depository",
+        },
+    ]
+    added_txns = [
+        {
+            "transaction_id": "plaid-txn-noofficialname-1",
+            "account_id": "plaid-acct-noofficialname",
+            "date": "2024-03-01",
+            "name": "Grocery Store",
+            "merchant_name": None,
+            "amount": 42.00,
+            "pending": False,
+        },
+    ]
+
+    def _mock_no_official(access_token, cursor=None):
+        return {
+            "added": added_txns,
+            "modified": [],
+            "removed": [],
+            "next_cursor": "c",
+            "accounts": accounts_no_official,
+        }
+
+    monkeypatch.setattr("server.main._plaid.sync_transactions", _mock_no_official)
+    monkeypatch.setattr("server.crypto.decrypt", lambda x: x)
+    monkeypatch.setattr(
+        "server.health_monitor.check_all_connections",
+        lambda db, plaid_provider=None: _HEALTH_NOOP,
+    )
+
+    sync()
+
+    conn = get_db(env["db"])
+    row = conn.execute(
+        "SELECT name FROM bank_accounts WHERE plaid_account_id = ?",
+        ("plaid-acct-noofficialname",),
+    ).fetchone()
+    conn.close()
+
+    assert row["name"] == "Savings Account"
+
+
+def test_sync_no_accounts_in_response_does_not_crash(env, monkeypatch):
+    """Sync with no 'accounts' key in response still works (graceful degradation)."""
+    def _mock_no_accounts(access_token, cursor=None):
+        return {
+            "added": _ADDED_TXNS,
+            "modified": [],
+            "removed": [],
+            "next_cursor": "c",
+            # 'accounts' key is absent
+        }
+
+    monkeypatch.setattr("server.main._plaid.sync_transactions", _mock_no_accounts)
+    monkeypatch.setattr("server.crypto.decrypt", lambda x: x)
+    monkeypatch.setattr(
+        "server.health_monitor.check_all_connections",
+        lambda db, plaid_provider=None: _HEALTH_NOOP,
+    )
+
+    result = sync()
+    assert result["status"] == "ok"
+    assert result["added"] == 3
+
+    # name/type remain NULL — that's OK, the bug isn't triggered when accounts absent
+    conn = get_db(env["db"])
+    row = conn.execute(
+        "SELECT name, type FROM bank_accounts WHERE plaid_account_id = ?",
+        ("plaid-acct-1",),
+    ).fetchone()
+    conn.close()
+    assert row is not None
+    assert row["name"] is None
+    assert row["type"] is None
