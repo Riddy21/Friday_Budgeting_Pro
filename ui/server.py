@@ -1252,8 +1252,16 @@ def link_get(request: Request, token: Optional[str] = None):
     """
     if not _is_authenticated(request):
         return _redirect("/login")
+    # Build the full redirect URI for OAuth institutions (e.g. Wealthsimple)
+    base_url = str(request.base_url).rstrip("/")
+    oauth_redirect_uri = f"{base_url}/link"
     return templates.TemplateResponse(
         request,
         "link.html",
-        {"link_token": token},
+        {
+            "link_token": token,
+            "complete_url": "/link/complete",
+            "back_url": "/profile",
+            "oauth_redirect_uri": oauth_redirect_uri,
+        },
     )
