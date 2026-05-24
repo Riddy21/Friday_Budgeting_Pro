@@ -10,7 +10,17 @@
   <header>
     <div class="header-inner">
       <a class="brand" href="/">📊 Friday Budgeting Pro</a>
-      {% block nav %}{% endblock %}
+      {% block nav %}
+      {% if current_page %}
+      <nav>
+        <a href="/dashboard" {% if current_page == 'dashboard' %}class="active"{% endif %}>Dashboard</a>
+        <a href="/accounts" {% if current_page == 'accounts' %}class="active"{% endif %}>Accounts</a>
+        <a href="/ledgers" {% if current_page == 'ledgers' %}class="active"{% endif %}>Ledgers</a>
+        <a href="/settings" {% if current_page == 'settings' %}class="active"{% endif %}>Settings</a>
+        <a href="/logout" style="margin-left:auto">Log out</a>
+      </nav>
+      {% endif %}
+      {% endblock %}
     </div>
   </header>
 

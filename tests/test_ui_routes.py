@@ -87,14 +87,14 @@ def _complete_setup(client: TestClient, password: str = "testpassword123") -> No
     # Step 4: final — should redirect to /profile
     r = client.post("/setup/4", data={})
     assert r.status_code == 302, f"Setup step 4 failed: {r.status_code}"
-    assert r.headers["location"] == "/profile"
+    assert r.headers["location"] == "/dashboard"
 
 
 def _login(client: TestClient, password: str = "testpassword123") -> TestClient:
     """POST /login and return the same client (which now holds the session cookie)."""
     r = client.post("/login", data={"password": password})
     assert r.status_code == 302, f"Login failed: {r.status_code}"
-    assert r.headers["location"] == "/profile"
+    assert r.headers["location"] == "/dashboard"
     # TestClient stores Set-Cookie automatically.
     return client
 
@@ -162,7 +162,7 @@ class TestAfterSetup:
     def test_login_correct_password_redirects_to_profile_with_cookie(self, client):
         r = client.post("/login", data={"password": "testpassword123"})
         assert r.status_code == 302
-        assert r.headers["location"] == "/profile"
+        assert r.headers["location"] == "/dashboard"
         # TestClient stores the cookie; verify Set-Cookie was in response.
         assert "set-cookie" in r.headers
 
