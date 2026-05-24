@@ -33,13 +33,35 @@ the background.
 
 ## Install
 
+### Production (from registry)
+
 ```bash
 clawhub install friday-budgeting-pro
 ```
 
-This installs the daemon and starts it at user login (via launchd). The
-first time it boots, open `http://127.0.0.1:6789` in your browser to
-finish setup.
+Installs the latest published version from the ClawHub registry.
+
+### Dev / Local clone
+
+```bash
+git clone https://github.com/Riddy21/Friday_Budgeting_Pro bank-transactions
+clawhub install ./bank-transactions
+# or from anywhere:
+clawhub install /path/to/bank-transactions
+```
+
+Installs directly from your local clone — skips the registry. Use this when
+testing changes before publishing. The same three install hooks fire in both
+modes:
+
+| Hook | What it does |
+|---|---|
+| **pip** | `pip3 install -r requirements.txt` |
+| **db-init** | Creates `~/.friday-bp/data.db` (SQLite) |
+| **launchd** | Registers the daemon via `server/installer.py`, starts at login |
+
+Either way, once installation completes open `http://127.0.0.1:6789` in your
+browser to finish setup.
 
 ---
 
