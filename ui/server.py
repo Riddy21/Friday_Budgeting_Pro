@@ -525,22 +525,44 @@ def _get_connections() -> list[dict]:
         conn.close()
 
 
+def _get_accounts() -> list[dict]:
+    """Query bank_accounts joined with their connection and return list of dicts."""
+    conn = get_db(_db_path())
+    try:
+        rows = conn.execute(
+            "SELECT ba.id, ba.name, ba.mask, ba.type, ba.subtype, ba.description,"
+            "       bc.institution_name"
+            "  FROM bank_accounts ba"
+            "  JOIN bank_connections bc ON bc.id = ba.connection_id"
+            " ORDER BY bc.institution_name, ba.name"
+        ).fetchall()
+        return [dict(r) for r in rows]
+    except Exception:
+        return []
+    finally:
+        conn.close()
+
+
 @app.get("/profile", response_class=HTMLResponse)
 def profile_get(request: Request):
     """Settings page.  Requires authentication."""
     if _is_authenticated(request):
         pref = _get_notification_pref()
         connections = _get_connections()
+        accounts = _get_accounts()
         return templates.TemplateResponse(request, "profile.html",
             {"notification_pref": pref, "saved": False,
-             "connections": connections, "action_result": None})
+             "connections": connections, "accounts": accounts,
+             "action_result": None})
     st = request.cookies.get(_SETUP_COMPLETE_COOKIE)
     if st and _check_raw_session(_db_path(), st):
         pref = _get_notification_pref()
         connections = _get_connections()
+        accounts = _get_accounts()
         resp = templates.TemplateResponse(request, "profile.html",
             {"notification_pref": pref, "saved": False,
-             "connections": connections, "action_result": None})
+             "connections": connections, "accounts": accounts,
+             "action_result": None})
         resp.set_cookie(SESSION_COOKIE, st, httponly=True, samesite="strict")
         resp.delete_cookie(_SETUP_COMPLETE_COOKIE)
         return resp
@@ -567,6 +589,7 @@ async def profile_post(request: Request):
     action = (form.get("action") or "").strip()
     pref = _get_notification_pref()
     connections = _get_connections()
+    accounts = _get_accounts()
     action_result: dict | None = None
 
     if action == "sync_now":
@@ -620,15 +643,51 @@ async def profile_post(request: Request):
             request,
             "profile.html",
             {"notification_pref": pref, "saved": True,
-             "connections": connections, "action_result": None},
+             "connections": connections, "accounts": accounts,
+             "action_result": None},
         )
 
     return templates.TemplateResponse(
         request,
         "profile.html",
         {"notification_pref": pref, "saved": False,
-         "connections": connections, "action_result": action_result},
+         "connections": connections, "accounts": accounts,
+         "action_result": action_result},
     )
+
+
+# ── /profile/accounts/{account_id}/description ──────────────────────────────────────────────────
+
+
+@app.patch("/profile/accounts/{account_id}/description")
+async def account_description_patch(request: Request, account_id: str):
+    """Save a user-supplied description for a bank account.
+
+    Requires authentication.  Reads JSON body: {"description": "<text>"}.
+    Returns {"status": "ok", "account_id": ...} or 404 if not found.
+    """
+    from fastapi.responses import JSONResponse
+    if not _is_authenticated(request):
+        return JSONResponse({"error": "not authenticated"}, status_code=401)
+
+    body = await request.json()
+    description = (body.get("description") or "").strip() or None
+
+    conn = get_db(_db_path())
+    try:
+        result = conn.execute(
+            "UPDATE bank_accounts SET description = ? WHERE id = ?",
+            (description, account_id),
+        )
+        conn.commit()
+        if result.rowcount == 0:
+            return JSONResponse(
+                {"error": f"account_id {account_id!r} not found"}, status_code=404
+            )
+    finally:
+        conn.close()
+
+    return JSONResponse({"status": "ok", "account_id": account_id})
 
 
 # ── /ledgers ─────────────────────────────────────────────────────────────────

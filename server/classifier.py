@@ -153,7 +153,24 @@ def classify_with_llm(
         hints_text = "  (none)"
 
     # ------------------------------------------------------------------
-    # 3. Build context: 5 most recent reviewed entries with same merchant
+    # 3. Build context: account description (if present)
+    # ------------------------------------------------------------------
+    account_description: str | None = None
+    if isinstance(transaction, dict):
+        bank_account_id = transaction.get("bank_account_id")
+    else:
+        cols = [d[0] for d in transaction.description] if hasattr(transaction, "description") else []
+        bank_account_id = transaction["bank_account_id"] if "bank_account_id" in cols else None
+    if bank_account_id:
+        acct_row = conn.execute(
+            "SELECT description FROM bank_accounts WHERE id = ?",
+            (bank_account_id,),
+        ).fetchone()
+        if acct_row and acct_row["description"]:
+            account_description = acct_row["description"]
+
+    # ------------------------------------------------------------------
+    # 4. Build context: 5 most recent reviewed entries with same merchant
     # ------------------------------------------------------------------
     merchant: str = transaction["merchant"] or ""
     recent_rows = conn.execute(
@@ -181,7 +198,7 @@ def classify_with_llm(
         recent_text = "  (none)"
 
     # ------------------------------------------------------------------
-    # 4. Compose the prompt
+    # 5. Compose the prompt
     # ------------------------------------------------------------------
     system_msg = (
         "You are a personal finance classifier. Your job is to classify a bank "
@@ -193,10 +210,17 @@ def classify_with_llm(
         "the user's hints, and any recent similar transactions."
     )
 
+    account_context_section = (
+        f"## Account Context\n  {account_description}\n\n"
+        if account_description
+        else ""
+    )
+
     user_msg = (
         f"## Ledger Tree\n{ledger_tree_text}\n\n"
         f"## Classification Hints\n{hints_text}\n\n"
         f"## Recent Similar Transactions (reviewed)\n{recent_text}\n\n"
+        f"{account_context_section}"
         f"## Transaction to Classify\n"
         f"  Merchant : {merchant}\n"
         f"  Amount   : ${transaction['amount']:.2f}\n"
