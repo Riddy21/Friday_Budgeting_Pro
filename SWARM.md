@@ -43,6 +43,7 @@ For each open PR (`gh pr list --state open`):
   - ARCHITECTURE.md (no design violations)
   - CONTRIBUTING.md anti-patterns
   - Interactive check line present in PR body (required for UI + MCP tickets)
+- **Documentation check:** verify the PR updates ARCHITECTURE.md, README.md, and the route overview comment where relevant. If docs are missing, request changes — do not merge undocumented behaviour changes.
 - **Decide:**
   - ✅ Looks good + CI green → `gh pr review --approve`, then `gh pr merge --squash --delete-branch`
   - ❌ Issues → `gh pr review --request-changes --body "<specific feedback>"`, leave PR open. Worker will fix and re-push.

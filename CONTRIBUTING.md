@@ -39,6 +39,17 @@ This doc is the operating manual for agent contributors.
 8. **Wait for review.** A human (or a reviewer agent) approves and merges.
    Don't self-merge.
 
+## Documentation Requirements (mandatory on every PR)
+
+Every PR that changes behaviour, routes, UI, or architecture **must** update docs in the same commit. Do not open a PR without doing this.
+
+- **ARCHITECTURE.md** — update if you add/remove/change routes, pages, DB schema, design constraints, or out-of-scope items
+- **README.md** — update if the user-facing behaviour changes (new page, removed feature, new install step)
+- **`ui/server.py` route overview comment** (top of file) — keep the route list current
+- **Inline docstrings** — every new route, MCP tool, and DB helper must have a docstring
+
+If nothing in these files needs updating for your ticket, add a note in the PR body: *"No doc changes needed — internal-only change."* The PM will verify.
+
 ## Code Rules
 
 - **Python 3.11+**
