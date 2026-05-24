@@ -14,19 +14,45 @@
 {% block content %}
 <div class="card">
   <h1>Ledgers</h1>
-  <p class="hint">Read-only view. A minimal ledger editor is coming in issue
-     <strong>#48</strong>.</p>
+
+  {% if flash %}
+  <p class="hint" style="color:#2a9d8f"><strong>{{ flash }}</strong></p>
+  {% endif %}
+
+  {# ── Add new ledger ──────────────────────────────────────────── #}
+  <section class="ledger-block">
+    <h2>Add Ledger</h2>
+    <form method="post" action="/ledgers">
+      <input type="hidden" name="action" value="add_ledger">
+      <label for="new-ledger-name">Name</label>
+      <input id="new-ledger-name" type="text" name="name" required placeholder="e.g. Personal">
+      <button type="submit">Add Ledger</button>
+    </form>
+  </section>
 
   {% if ledgers %}
     {% for ledger in ledgers %}
     <section class="ledger-block">
-      <h2>{{ ledger.name }}</h2>
+      <h2>
+        {{ ledger.name }}
+        {# ── Delete ledger ─────────────────────────────────────── #}
+        <form method="post" action="/ledgers" style="display:inline;margin-left:1rem">
+          <input type="hidden" name="action" value="delete_ledger">
+          <input type="hidden" name="ledger_id" value="{{ ledger.id }}">
+          <button type="submit" class="btn-link" style="color:#e76f51"
+                  onclick="return confirm('Delete ledger {{ ledger.name }} and all its line items?')">
+            Delete ledger
+          </button>
+        </form>
+      </h2>
+
       {% if ledger.line_items %}
       <table>
         <thead>
           <tr>
             <th>Line item</th>
             <th>Type</th>
+            <th></th>
           </tr>
         </thead>
         <tbody>
@@ -34,6 +60,13 @@
           <tr>
             <td>{{ item.name }}</td>
             <td><span class="badge badge-{{ item.item_type }}">{{ item.item_type }}</span></td>
+            <td>
+              <form method="post" action="/ledgers" style="display:inline">
+                <input type="hidden" name="action" value="delete_line_item">
+                <input type="hidden" name="line_item_id" value="{{ item.id }}">
+                <button type="submit" class="btn-link" style="color:#e76f51">Delete</button>
+              </form>
+            </td>
           </tr>
           {% endfor %}
         </tbody>
@@ -41,11 +74,27 @@
       {% else %}
       <p class="hint">No line items yet.</p>
       {% endif %}
+
+      {# ── Add line item ──────────────────────────────────────── #}
+      <details style="margin-top:.75rem">
+        <summary>Add line item</summary>
+        <form method="post" action="/ledgers" style="margin-top:.5rem">
+          <input type="hidden" name="action" value="add_line_item">
+          <input type="hidden" name="ledger_id" value="{{ ledger.id }}">
+          <label for="li-name-{{ ledger.id }}">Name</label>
+          <input id="li-name-{{ ledger.id }}" type="text" name="name" required
+                 placeholder="e.g. Groceries">
+          <fieldset style="display:inline;border:none;padding:0">
+            <label><input type="radio" name="item_type" value="expense" checked> Expense</label>
+            <label style="margin-left:.5rem"><input type="radio" name="item_type" value="income"> Income</label>
+          </fieldset>
+          <button type="submit" style="margin-left:.5rem">Add</button>
+        </form>
+      </details>
     </section>
     {% endfor %}
   {% else %}
-  <p>No ledgers found. Set up a ledger via OpenClaw chat or complete the
-     <a href="/setup">setup wizard</a>.</p>
+  <p>No ledgers yet. Add one above or set one up via OpenClaw chat.</p>
   {% endif %}
 </div>
 {% endblock %}

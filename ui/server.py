@@ -42,6 +42,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Resp
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
+from dotenv import load_dotenv as _load_dotenv; _load_dotenv()
 import server.paths as _paths
 from server.db import get_db, init_db
 from ui.auth import (
@@ -183,12 +184,16 @@ def _get_ledgers() -> list[dict]:
         ledgers = []
         for lr in ledger_rows:
             items = conn.execute(
-                "SELECT name, item_type FROM line_items WHERE ledger_id = ? ORDER BY name",
+                "SELECT id, name, item_type FROM line_items WHERE ledger_id = ? ORDER BY name",
                 (lr["id"],),
             ).fetchall()
             ledgers.append({
+                "id": lr["id"],
                 "name": lr["name"],
-                "line_items": [{"name": i["name"], "item_type": i["item_type"]} for i in items],
+                "line_items": [
+                    {"id": i["id"], "name": i["name"], "item_type": i["item_type"]}
+                    for i in items
+                ],
             })
         return ledgers
     finally:
@@ -630,20 +635,116 @@ async def profile_post(request: Request):
 # ── /ledgers ─────────────────────────────────────────────────────────────────
 
 @app.get("/ledgers", response_class=HTMLResponse)
-def ledgers_get(request: Request):
-    """Read-only ledger tree.  Requires authentication.
-
-    Queries the DB directly because server.main.list_ledgers() is still a
-    stub returning {'status': 'not_implemented'}.  A minimal editor is #48.
-    """
+def ledgers_get(request: Request, flash: Optional[str] = None):
+    """Ledger tree editor.  Requires authentication."""
     if not _is_authenticated(request):
         return _redirect("/login")
     ledgers = _get_ledgers()
     return templates.TemplateResponse(
         request,
         "ledgers.html",
-        {"ledgers": ledgers},
+        {"ledgers": ledgers, "flash": flash},
     )
+
+
+@app.post("/ledgers")
+async def ledgers_post(request: Request):
+    """Mutate the ledger tree.  Requires authentication.
+
+    Actions:
+        add_line_item    -- add a line item to an existing ledger
+        add_ledger       -- create a new ledger
+        delete_line_item -- remove a line item
+        delete_ledger    -- remove a ledger and all its line items
+    """
+    if not _is_authenticated(request):
+        accept = request.headers.get("accept", "")
+        if "application/json" in accept:
+            return JSONResponse({"error": "unauthenticated"}, status_code=401)
+        return _redirect("/login")
+
+    import uuid as _uuid
+
+    form = await request.form()
+    action = (form.get("action") or "").strip()
+    accept = request.headers.get("accept", "")
+    want_json = "application/json" in accept
+
+    conn = get_db(_db_path())
+    try:
+        if action == "add_line_item":
+            ledger_id = (form.get("ledger_id") or "").strip()
+            name = (form.get("name") or "").strip()
+            item_type = (form.get("item_type") or "expense").strip()
+            if item_type not in ("income", "expense"):
+                item_type = "expense"
+            if not ledger_id or not name:
+                if want_json:
+                    return JSONResponse({"error": "ledger_id and name required"}, status_code=400)
+                return _redirect("/ledgers?flash=ledger_id+and+name+required")
+            row = conn.execute("SELECT id FROM ledgers WHERE id = ?", (ledger_id,)).fetchone()
+            if row is None:
+                if want_json:
+                    return JSONResponse({"error": "ledger not found"}, status_code=404)
+                return _redirect("/ledgers?flash=Ledger+not+found")
+            new_id = str(_uuid.uuid4())
+            conn.execute(
+                "INSERT INTO line_items (id, ledger_id, name, item_type) VALUES (?, ?, ?, ?)",
+                (new_id, ledger_id, name, item_type),
+            )
+            conn.commit()
+            if want_json:
+                return JSONResponse({"success": True, "id": new_id})
+            return _redirect("/ledgers?flash=Line+item+added")
+
+        elif action == "add_ledger":
+            name = (form.get("name") or "").strip()
+            if not name:
+                if want_json:
+                    return JSONResponse({"error": "name required"}, status_code=400)
+                return _redirect("/ledgers?flash=name+required")
+            new_id = str(_uuid.uuid4())
+            conn.execute(
+                "INSERT INTO ledgers (id, name) VALUES (?, ?)",
+                (new_id, name),
+            )
+            conn.commit()
+            if want_json:
+                return JSONResponse({"success": True, "id": new_id})
+            return _redirect("/ledgers?flash=Ledger+added")
+
+        elif action == "delete_line_item":
+            line_item_id = (form.get("line_item_id") or "").strip()
+            if not line_item_id:
+                if want_json:
+                    return JSONResponse({"error": "line_item_id required"}, status_code=400)
+                return _redirect("/ledgers?flash=line_item_id+required")
+            conn.execute("DELETE FROM line_items WHERE id = ?", (line_item_id,))
+            conn.commit()
+            if want_json:
+                return JSONResponse({"success": True})
+            return _redirect("/ledgers?flash=Line+item+deleted")
+
+        elif action == "delete_ledger":
+            ledger_id = (form.get("ledger_id") or "").strip()
+            if not ledger_id:
+                if want_json:
+                    return JSONResponse({"error": "ledger_id required"}, status_code=400)
+                return _redirect("/ledgers?flash=ledger_id+required")
+            # Cascade delete: remove line items first (no ON DELETE CASCADE in schema)
+            conn.execute("DELETE FROM line_items WHERE ledger_id = ?", (ledger_id,))
+            conn.execute("DELETE FROM ledgers WHERE id = ?", (ledger_id,))
+            conn.commit()
+            if want_json:
+                return JSONResponse({"success": True})
+            return _redirect("/ledgers?flash=Ledger+deleted")
+
+        else:
+            if want_json:
+                return JSONResponse({"error": f"unknown action: {action}"}, status_code=400)
+            return _redirect("/ledgers?flash=Unknown+action")
+    finally:
+        conn.close()
 
 
 # ── /link ─────────────────────────────────────────────────────────────────────
