@@ -447,6 +447,7 @@ system working while you're not looking.
   /setup         →  first-run wizard (one-time, locked after completion)
   /login         →  password login
   /profile       →  settings, password, sync/export actions, Linked Accounts list
+  /export/excel  →  GET — stream .xlsx workbook as browser download (auth required)
   /ledgers       →  minimal ledger / line-item editor
   /link          →  Plaid Link flow (used by setup wizard, profile, MCP links)
 ```

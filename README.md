@@ -130,7 +130,7 @@ Three things, kept minimal:
 - Log out
 - Read-only system info (Plaid env, last sync time, daemon uptime)
 - **Sync now** button
-- **Export to Excel** button
+- **Export to Excel** button — available as a browser download at `/export/excel` (streams the workbook directly to your browser without saving to disk)
 - **Linked Accounts** - compact list of connected banks with status pills
   and **Reconnect / Disconnect / + Connect a bank** buttons. No fancy
   cards, just a list.
