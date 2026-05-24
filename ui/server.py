@@ -1196,8 +1196,10 @@ def link_start(request: Request):
     if not _is_authenticated(request):
         return _redirect("/login")
     import server.main as _sm
+    import os as _os
+    plaid_env = _os.environ.get("PLAID_ENV", "sandbox").lower()
 
-    result = _sm.start_link()
+    result = _sm.start_link(plaid_env=plaid_env)
     # start_link returns {"url": "http://127.0.0.1:6789/link?token=<token>"}
     url = result.get("url", "")
     if not url or "token=" not in url:
