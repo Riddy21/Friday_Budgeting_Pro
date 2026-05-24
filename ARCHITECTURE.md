@@ -623,6 +623,41 @@ exposure.**
 
 ---
 
+## Database Migration Strategy
+
+### Rules (mandatory for all schema changes)
+1. **All migrations are additive** — `ADD COLUMN` only. Never `DROP` or rename a column.
+2. **New columns must have a `DEFAULT`** or be nullable — existing rows have no value.
+3. **`init_db()` does not migrate** — it only creates tables that don't exist. Migrations live in `migrate_db()` in `server/db.py`.
+4. **`migrate_db()` is idempotent** — safe to run on every startup. Pattern: `PRAGMA table_info(…)` to check if column exists before `ALTER TABLE`.
+5. **Code handles `NULL` gracefully** — any column added post-release may be `NULL` in old DBs. Use `COALESCE(col, default)` in queries, not bare column reads.
+6. **FK columns are nullable** — new FK columns added via migration cannot be enforced on existing rows.
+7. **Never rename** — add the new name, deprecate the old, remove old only after confirmed no readers remain.
+
+### Backward compatibility
+Old app version reading a DB with new columns: **ignores them** — safe.
+New app version reading an old DB with missing columns: **sees NULL** — must handle gracefully.
+
+### Forward compatibility
+If a migration adds columns that a rollback would not know about, the rollback sees unknown columns in `PRAGMA table_info` but does not fail — SQLite allows this. Document rollback steps in the migration comment.
+
+### Migration version tracking
+Add a row to `app_config` comments (no separate migrations table needed — `migrate_db()` is self-describing via its idempotency checks).
+
+| Version | Date | Changes |
+|---------|------|---------|
+| v1 | 2026-05-23 | Initial schema |
+| v2 | 2026-05-24 | `bank_accounts`: currency, balance_current, balance_available, description, default_ledger_id. `ledgers`: type, description. `transactions`: currency, amount_home, plaid_category_detailed. `transaction_entries`: amount_home, entry_type, uncertain, reasoning, corrected_from_line_item_id, corrected_at. `app_config`: home_currency, timezone. New tables: classification_rules, fx_rates |
+
+### Pitfalls to avoid in migrations
+- ❌ `NOT NULL` without `DEFAULT` on a new column — breaks existing rows
+- ❌ Forgetting `migrate_db()` call in startup — new columns never added to existing DBs
+- ❌ Assuming a column exists — always `COALESCE` or check `PRAGMA table_info` in code
+- ❌ Non-idempotent migration — if it runs twice it must be safe
+- ❌ Migrating data in the same step as schema change — do schema first, backfill as a separate step
+
+---
+
 ## Pitfalls We're Explicitly Avoiding
 
 Things that often go wrong in this kind of system, and how this design dodges them:
