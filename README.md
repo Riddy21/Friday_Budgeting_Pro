@@ -236,6 +236,26 @@ read it). Copy it into the reset page to set a new one.
 **"How do I uninstall?"** → `clawhub uninstall friday-budgeting-pro`.
 Your data file stays unless you delete it manually.
 
+### Proactive Re-Auth Alerts
+
+Friday will proactively notify you when a bank connection needs attention.
+During the daily 06:00 sync, it checks for connections in these states:
+
+- **`needs_reauth`** — Plaid login has expired (e.g. you changed your bank password).
+  > ⚠️ Your BMO Bank of Montreal connection needs re-authorization. Say 'reconnect BMO Bank of Montreal' to open the re-auth flow.
+
+- **`pending_expiration`** — Token is about to expire (some institutions rotate tokens).
+  > ⚠️ Your TD Bank connection expires soon. Say 'reconnect TD Bank' to refresh it.
+
+- **Never synced** — A connection was added but sync has never run.
+  > ⚠️ Your Scotiabank connection needs re-authorization. Say 'reconnect Scotiabank' to open the re-auth flow.
+
+Alerts are throttled to at most once every 24 hours per connection so you
+won't be spammed. You can also ask your agent directly:
+> "Do any of my bank connections need attention?"
+
+and it will call `get_connections_needing_attention` and report back.
+
 ---
 
 ## License

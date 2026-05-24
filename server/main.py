@@ -128,8 +128,12 @@ def _register_openclaw_cron() -> bool:
         "payload": {
             "kind": "agentTurn",
             "message": (
-                "Run friday-budgeting-pro sync: call the sync MCP tool, "
-                "then call get_needs_review and notify the user about any "
+                "Run friday-budgeting-pro daily tasks in order: "
+                "1) Call get_connections_needing_attention — if any connections "
+                "are returned, alert the user immediately with their suggested_message "
+                "(e.g. '\u26a0\ufe0f 1 connection needs attention: BMO Bank of Montreal'). "
+                "2) Call the sync MCP tool to pull new transactions. "
+                "3) Call get_needs_review and notify the user about any "
                 "transactions needing classification."
             ),
             "timeoutSeconds": 900,
@@ -448,6 +452,110 @@ def list_connections() -> dict:
         conn.close()
 
     return {"connections": connections}
+
+
+@mcp.tool
+def get_connections_needing_attention() -> dict:
+    """Return bank connections that need user action (re-auth or pending expiration).
+
+    A connection needs attention when:
+      - ``status = 'needs_reauth'``  — credentials have expired / login required.
+      - ``status = 'pending_expiration'`` — token will expire soon.
+      - ``last_synced_at IS NULL`` — connection was added but never synced.
+
+    For each connection returned, ``last_alerted_at`` is updated to the current
+    Unix timestamp so repeated cron calls do not spam the user more often than
+    once every 24 hours.
+
+    Returns
+    -------
+    dict
+        {"connections": [{"connection_id", "institution_name", "status",
+                          "days_until_expiry", "suggested_message",
+                          "last_alerted_at"}, ...]}
+    """
+    uid = get_active_user_id(server.paths.DB_PATH)
+    if uid is None:
+        return {"connections": []}
+
+    now = int(_time.time())
+    alert_cooldown = 24 * 60 * 60  # 24 hours in seconds
+
+    conn = get_db(server.paths.DB_PATH)
+    try:
+        rows = conn.execute(
+            """
+            SELECT id, institution_name, status, last_synced_at,
+                   last_alerted_at
+            FROM bank_connections
+            WHERE user_id = ?
+              AND (
+                    status IN ('needs_reauth', 'pending_expiration')
+                    OR last_synced_at IS NULL
+              )
+            ORDER BY rowid
+            """,
+            (uid,),
+        ).fetchall()
+
+        result_connections = []
+        for row in rows:
+            connection_id = row["id"]
+            institution_name = row["institution_name"] or "Your bank"
+            status = row["status"]
+            last_alerted_at = row["last_alerted_at"]
+
+            # Throttle: skip if alerted within the last 24 hours.
+            if last_alerted_at is not None and (now - last_alerted_at) < alert_cooldown:
+                continue
+
+            # Determine days_until_expiry for pending_expiration connections.
+            # We don't have an explicit expiry date stored in the current schema;
+            # report as None until a dedicated expiry field is added.
+            days_until_expiry: Optional[int] = None
+
+            # Build suggested message.
+            if status == "pending_expiration":
+                if days_until_expiry is not None:
+                    suggested_message = (
+                        f"Your {institution_name} connection expires in "
+                        f"{days_until_expiry} days. "
+                        f"Say 'reconnect {institution_name}' to refresh it."
+                    )
+                else:
+                    suggested_message = (
+                        f"Your {institution_name} connection expires soon. "
+                        f"Say 'reconnect {institution_name}' to refresh it."
+                    )
+            else:
+                # needs_reauth or never-synced
+                suggested_message = (
+                    f"Your {institution_name} connection needs re-authorization. "
+                    f"Say 'reconnect {institution_name}' to open the re-auth flow."
+                )
+
+            # Update last_alerted_at to now.
+            conn.execute(
+                "UPDATE bank_connections SET last_alerted_at = ? WHERE id = ?",
+                (now, connection_id),
+            )
+
+            result_connections.append(
+                {
+                    "connection_id": connection_id,
+                    "institution_name": row["institution_name"],
+                    "status": status,
+                    "days_until_expiry": days_until_expiry,
+                    "suggested_message": suggested_message,
+                    "last_alerted_at": now,
+                }
+            )
+
+        conn.commit()
+    finally:
+        conn.close()
+
+    return {"connections": result_connections}
 
 
 @mcp.tool
