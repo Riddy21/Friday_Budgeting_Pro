@@ -218,6 +218,27 @@ threat model.
 
 ---
 
+## Testing
+
+The regular test suite runs with pytest and needs no extra deps:
+
+```bash
+python3 -m pytest -q
+```
+
+### Browser tests (optional)
+
+UI tests use Playwright and are **skipped automatically** when Playwright is not
+installed, so CI is never broken by a missing dep. To activate them locally:
+
+```bash
+pip install playwright
+playwright install chromium
+python3 -m pytest tests/ui/
+```
+
+---
+
 ## Troubleshooting
 
 **"Bank connection broken"** → Ask your OpenClaw agent (or any MCP client)
