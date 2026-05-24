@@ -1120,6 +1120,37 @@ def configure_plaid(
 
 
 # ---------------------------------------------------------------------------
+# UI URL tool
+# ---------------------------------------------------------------------------
+
+_VALID_PAGES = {"accounts", "ledgers", "profile", "dashboard"}
+
+
+@mcp.tool
+def get_ui_url(page: str = "") -> dict:
+    """Return the URL of the Friday Budgeting Pro UI.
+
+    Args:
+        page: Optional page name.  One of 'accounts', 'ledgers', 'profile',
+              'dashboard', or empty string for the base URL.
+
+    Returns:
+        {"url": "http://127.0.0.1:<port>[/<page>]"}
+
+    Raises:
+        ValueError: if *page* is not a recognised page name.
+    """
+    port = os.environ.get("FRIDAY_BP_UI_PORT", "6789")
+    if page == "":
+        return {"url": f"http://127.0.0.1:{port}"}
+    if page not in _VALID_PAGES:
+        raise ValueError(
+            f"unknown page {page!r}; valid pages are {sorted(_VALID_PAGES)!r}"
+        )
+    return {"url": f"http://127.0.0.1:{port}/{page}"}
+
+
+# ---------------------------------------------------------------------------
 # Entrypoint
 # ---------------------------------------------------------------------------
 
