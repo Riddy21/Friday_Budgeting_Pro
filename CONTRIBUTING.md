@@ -25,11 +25,46 @@ This doc is the operating manual for agent contributors.
 5. **Test.** Every ticket has a test requirement in its body. CI runs
    `pytest -q` on every push — green CI is non-negotiable.
 
-6. **Interactive sanity check** (mandatory before opening a PR):
-   - **UI tickets:** Start the server and use Peekaboo browser automation to verify the affected page loads and the core flow works.
-   - **MCP tickets:** Call the new/changed tools directly in Python and confirm they return real output (not `{'status': 'not_implemented'}` or errors).
-   - **Infra/docs/schema tickets:** pytest is sufficient, no interactive check needed.
-   - Include a one-line summary of what you tested in the PR body under **Interactive check:**
+6. **Interactive sanity check (mandatory before every commit to UI or MCP code — no exceptions):**
+
+   #### UI tickets — Playwright required
+   Run the full Playwright UI test suite locally before every commit that touches `ui/`:
+   ```bash
+   pip install playwright && playwright install chromium
+   pytest tests/ui/ -v
+   ```
+   All tests must pass. Then manually verify the full page checklist:
+   ```
+   /login     — login form renders, username + password fields present
+   /setup     — wizard loads
+   /dashboard — Sync Now + Export Excel present
+   /accounts  — accounts grouped by institution, balances shown, Connect a bank button present
+   /ledgers   — ledger list renders, + Add ledger button present
+   /settings  — page loads, home currency + timezone fields present
+   /link      — page loads without error
+   ```
+   Every page must return 200. Every required button must be present.
+   **Do not open a PR if any Playwright test fails or any page is broken.**
+
+   #### MCP tickets — call tools directly
+   For every new or changed MCP tool, call it in Python before committing:
+   ```python
+   import sys; sys.path.insert(0, '.')
+   from dotenv import load_dotenv; load_dotenv()
+   from server.main import <tool_name>
+   result = <tool_name>(<args>)
+   assert result.get('status') != 'not_implemented', f'still a stub: {result}'
+   print(result)  # must show real data, not a placeholder
+   ```
+   **Do not open a PR if any tool returns `not_implemented` or throws an unhandled exception.**
+
+   #### Infra / docs / schema tickets
+   `pytest -q` is sufficient. No interactive check needed.
+
+   #### PR body
+   Include:
+   - **Interactive check:** one line describing what you ran and that it passed
+   - **Playwright:** `pytest tests/ui/ — N passed` (UI tickets only)
 
 7. **Open a PR.**
    - Title: `[P<phase>] <ticket title>`
