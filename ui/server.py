@@ -1188,6 +1188,23 @@ def ledger_items_delete(request: Request, ledger_id: str, item_id: str):
     return JSONResponse({"deleted": item_id})
 
 
+# ── /link/start ──────────────────────────────────────────────────────────────
+
+@app.get("/link/start")
+def link_start(request: Request):
+    """Generate a Plaid link token and redirect to /link?token=..."""
+    if not _is_authenticated(request):
+        return _redirect("/login")
+    import server.main as _sm
+    result = _sm.start_link()
+    # start_link returns {"url": "http://127.0.0.1:6789/link?token=<token>"}
+    url = result.get("url", "")
+    if not url or "token=" not in url:
+        return _redirect("/profile?error=link_token_failed")
+    token = url.split("token=", 1)[1]
+    return _redirect(f"/link?token={token}")
+
+
 # ── /link ─────────────────────────────────────────────────────────────────────
 
 
