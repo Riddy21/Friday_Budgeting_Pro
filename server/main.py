@@ -30,6 +30,7 @@ import server.paths
 import server.crypto
 from server.providers.plaid import PlaidProvider
 import server.health_monitor
+from ui.auth import get_active_user_id
 
 _plaid = PlaidProvider()
 
@@ -153,19 +154,49 @@ def _register_openclaw_cron() -> bool:
 
 
 @mcp.tool
+def list_profiles() -> dict:
+    """Return a list of local profiles (usernames).
+
+    Does not require authentication.  Returns usernames only (no hashes).
+    """
+    conn = get_db(server.paths.DB_PATH)
+    try:
+        rows = conn.execute(
+            "SELECT id, username, created_at FROM users ORDER BY created_at"
+        ).fetchall()
+        return {
+            "profiles": [
+                {"id": r["id"], "username": r["username"], "created_at": r["created_at"]}
+                for r in rows
+            ]
+        }
+    finally:
+        conn.close()
+
+
+@mcp.tool
 def setup_status() -> dict:
     """Return whether initial setup is not_started, in_progress, or complete.
 
     Status rules:
-      - "not_started"  → 0 ledgers AND 0 bank_connections
+      - "not_started"  → 0 ledgers AND 0 bank_connections (for current user)
       - "in_progress"  → ≥1 ledger AND 0 bank_connections
                          (user picked a ledger but hasn't linked a bank yet)
       - "complete"     → ≥1 ledger AND ≥1 bank_connection
     """
+    uid = get_active_user_id(server.paths.DB_PATH)
     conn = get_db(server.paths.DB_PATH)
     try:
-        ledger_count = conn.execute("SELECT COUNT(*) FROM ledgers").fetchone()[0]
-        bank_count = conn.execute("SELECT COUNT(*) FROM bank_connections").fetchone()[0]
+        if uid:
+            ledger_count = conn.execute(
+                "SELECT COUNT(*) FROM ledgers WHERE user_id = ?", (uid,)
+            ).fetchone()[0]
+            bank_count = conn.execute(
+                "SELECT COUNT(*) FROM bank_connections WHERE user_id = ?", (uid,)
+            ).fetchone()[0]
+        else:
+            ledger_count = conn.execute("SELECT COUNT(*) FROM ledgers").fetchone()[0]
+            bank_count = conn.execute("SELECT COUNT(*) FROM bank_connections").fetchone()[0]
     finally:
         conn.close()
 
@@ -241,23 +272,31 @@ def apply_initial_setup(
     line_items_created = 0
     hints_created = 0
 
+    uid = get_active_user_id(server.paths.DB_PATH)
+
     conn = get_db(server.paths.DB_PATH)
     try:
         with db_txn(conn):
             for spec in ledger_specs:
                 ledger_name = spec["name"]
 
-                # Upsert ledger — skip if already present.
-                existing_ledger = conn.execute(
-                    "SELECT id FROM ledgers WHERE name = ?", (ledger_name,)
-                ).fetchone()
+                # Upsert ledger — skip if already present for this user.
+                if uid:
+                    existing_ledger = conn.execute(
+                        "SELECT id FROM ledgers WHERE name = ? AND user_id = ?",
+                        (ledger_name, uid),
+                    ).fetchone()
+                else:
+                    existing_ledger = conn.execute(
+                        "SELECT id FROM ledgers WHERE name = ?", (ledger_name,)
+                    ).fetchone()
                 if existing_ledger:
                     ledger_id = existing_ledger["id"]
                 else:
                     ledger_id = str(uuid.uuid4())
                     conn.execute(
-                        "INSERT INTO ledgers (id, name) VALUES (?, ?)",
-                        (ledger_id, ledger_name),
+                        "INSERT INTO ledgers (id, name, user_id) VALUES (?, ?, ?)",
+                        (ledger_id, ledger_name, uid),
                     )
                     ledgers_created.append(ledger_name)
 
@@ -279,15 +318,21 @@ def apply_initial_setup(
 
             # Upsert hints — de-dupe on exact text.
             for hint_text in (hints or []):
-                existing_hint = conn.execute(
-                    "SELECT id FROM classification_hints WHERE text = ?",
-                    (hint_text,),
-                ).fetchone()
+                if uid:
+                    existing_hint = conn.execute(
+                        "SELECT id FROM classification_hints WHERE text = ? AND user_id = ?",
+                        (hint_text, uid),
+                    ).fetchone()
+                else:
+                    existing_hint = conn.execute(
+                        "SELECT id FROM classification_hints WHERE text = ?",
+                        (hint_text,),
+                    ).fetchone()
                 if existing_hint:
                     continue
                 conn.execute(
-                    "INSERT INTO classification_hints (id, text) VALUES (?, ?)",
-                    (str(uuid.uuid4()), hint_text),
+                    "INSERT INTO classification_hints (id, text, user_id) VALUES (?, ?, ?)",
+                    (str(uuid.uuid4()), hint_text, uid),
                 )
                 hints_created += 1
     finally:
@@ -338,16 +383,17 @@ def complete_link(public_token: str) -> dict:
 
     encrypted_token = server.crypto.encrypt(access_token)
     connection_id = str(uuid.uuid4())
+    uid = get_active_user_id(server.paths.DB_PATH)
 
     conn = get_db(server.paths.DB_PATH)
     try:
         conn.execute(
             """
             INSERT INTO bank_connections
-                (id, plaid_item_id, plaid_access_token_encrypted, status)
-            VALUES (?, ?, ?, 'active')
+                (id, plaid_item_id, plaid_access_token_encrypted, status, user_id)
+            VALUES (?, ?, ?, 'active', ?)
             """,
-            (connection_id, item_id, encrypted_token),
+            (connection_id, item_id, encrypted_token, uid),
         )
         conn.commit()
     finally:
@@ -358,20 +404,25 @@ def complete_link(public_token: str) -> dict:
 
 @mcp.tool
 def list_connections() -> dict:
-    """List all saved Plaid bank connections.
+    """List all saved bank connections for the current user.
 
     Returns id, institution_name, status, and last_synced_at for each
     connection.  The encrypted access token is NEVER included in the output.
     """
+    uid = get_active_user_id(server.paths.DB_PATH)
     conn = get_db(server.paths.DB_PATH)
     try:
-        rows = conn.execute(
-            """
-            SELECT id, institution_name, status, last_synced_at
-            FROM bank_connections
-            ORDER BY rowid
-            """
-        ).fetchall()
+        if uid:
+            rows = conn.execute(
+                "SELECT id, institution_name, status, last_synced_at "
+                "FROM bank_connections WHERE user_id = ? ORDER BY rowid",
+                (uid,),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT id, institution_name, status, last_synced_at "
+                "FROM bank_connections ORDER BY rowid"
+            ).fetchall()
         connections = [dict(r) for r in rows]
     finally:
         conn.close()
@@ -824,22 +875,29 @@ def route(transaction_id: str, allocations: List) -> dict:
 
 @mcp.tool
 def add_hint(text: str) -> dict:
-    """Save a natural-language classification hint."""
+    """Save a natural-language classification hint for the current user."""
     cleaned = text.strip()
     if len(cleaned) < 1:
         raise ValueError("hint text must be non-empty")
+    uid = get_active_user_id(server.paths.DB_PATH)
     conn = get_db(server.paths.DB_PATH)
     try:
-        existing = conn.execute(
-            "SELECT id FROM classification_hints WHERE text = ?",
-            (cleaned,),
-        ).fetchone()
+        if uid:
+            existing = conn.execute(
+                "SELECT id FROM classification_hints WHERE text = ? AND user_id = ?",
+                (cleaned, uid),
+            ).fetchone()
+        else:
+            existing = conn.execute(
+                "SELECT id FROM classification_hints WHERE text = ?",
+                (cleaned,),
+            ).fetchone()
         if existing:
             return {"id": existing["id"], "text": cleaned, "created": False}
         new_id = str(uuid.uuid4())
         conn.execute(
-            "INSERT INTO classification_hints (id, text) VALUES (?, ?)",
-            (new_id, cleaned),
+            "INSERT INTO classification_hints (id, text, user_id) VALUES (?, ?, ?)",
+            (new_id, cleaned, uid),
         )
         conn.commit()
         return {"id": new_id, "text": cleaned, "created": True}
@@ -849,12 +907,19 @@ def add_hint(text: str) -> dict:
 
 @mcp.tool
 def list_hints() -> dict:
-    """Return all classification hints."""
+    """Return all classification hints for the current user."""
+    uid = get_active_user_id(server.paths.DB_PATH)
     conn = get_db(server.paths.DB_PATH)
     try:
-        rows = conn.execute(
-            "SELECT id, text FROM classification_hints ORDER BY rowid"
-        ).fetchall()
+        if uid:
+            rows = conn.execute(
+                "SELECT id, text FROM classification_hints WHERE user_id = ? ORDER BY rowid",
+                (uid,),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT id, text FROM classification_hints ORDER BY rowid"
+            ).fetchall()
         return {"hints": [{"id": row["id"], "text": row["text"]} for row in rows]}
     finally:
         conn.close()

@@ -35,6 +35,9 @@ def init_db(path: str | Path) -> None:
     columns added after the initial schema are run here.  Each migration is
     guarded so it is a no-op if the column already exists.
     """
+    import uuid as _uuid
+    import time as _time
+
     path = Path(path)
     schema_path = Path(__file__).parent.parent / "db" / "schema.sql"
     sql = schema_path.read_text()
@@ -45,17 +48,92 @@ def init_db(path: str | Path) -> None:
         conn.commit()
 
         # Migration: bank_accounts.description (added in #127)
-        existing_cols = {
-            row[1]
-            for row in conn.execute("PRAGMA table_info(bank_accounts)")
-        }
-        if "description" not in existing_cols:
-            conn.execute(
-                "ALTER TABLE bank_accounts ADD COLUMN description TEXT"
-            )
+        ba_cols = {row[1] for row in conn.execute("PRAGMA table_info(bank_accounts)")}
+        if "description" not in ba_cols:
+            conn.execute("ALTER TABLE bank_accounts ADD COLUMN description TEXT")
             conn.commit()
+
+        # Migration: user_id columns (#131 — multi-profile support)
+        # These are guarded so they are no-ops if the column already exists.
+        _add_col_if_missing(conn, "bank_connections", "user_id", "TEXT")
+        _add_col_if_missing(conn, "ledgers", "user_id", "TEXT")
+        _add_col_if_missing(conn, "classification_hints", "user_id", "TEXT")
+        _add_col_if_missing(conn, "sessions", "user_id", "TEXT")
+
+        # Migration: create default user only when there is existing data to migrate
+        # (i.e. rows exist that need a user_id) but no users have been created yet.
+        # On truly fresh DBs, we leave users empty so the setup wizard can create
+        # the first user with a real username and password.
+        user_count = conn.execute("SELECT COUNT(*) FROM users").fetchone()[0]
+        if user_count == 0:
+            # Check if any existing rows need migration
+            existing_data = (
+                conn.execute("SELECT COUNT(*) FROM bank_connections").fetchone()[0] > 0
+                or conn.execute("SELECT COUNT(*) FROM ledgers").fetchone()[0] > 0
+                or conn.execute("SELECT COUNT(*) FROM classification_hints").fetchone()[0] > 0
+                or conn.execute("SELECT COUNT(*) FROM sessions").fetchone()[0] > 0
+            )
+
+            # Also check if app_config has a password hash (old single-user DB)
+            legacy_hash: str | None = None
+            try:
+                row = conn.execute(
+                    "SELECT ui_password_hash FROM app_config WHERE id = 1"
+                ).fetchone()
+                if row and row[0]:
+                    legacy_hash = row[0]
+            except Exception:
+                pass
+
+            if existing_data or legacy_hash is not None:
+                # This is a legacy single-user DB — create the default user.
+                default_user_id = "default-user-id"
+                now = int(_time.time())
+
+                if legacy_hash is None:
+                    # Has data but no password hash — use a non-verifiable placeholder.
+                    import secrets as _secrets
+                    from argon2 import PasswordHasher as _PH
+                    legacy_hash = _PH().hash(_secrets.token_hex(32))
+
+                conn.execute(
+                    "INSERT INTO users (id, username, password_hash, created_at) "
+                    "VALUES (?, ?, ?, ?)",
+                    (default_user_id, "default", legacy_hash, now),
+                )
+                conn.commit()
+
+                # Backfill NULL user_id on all existing rows.
+                for table in ("bank_connections", "ledgers", "classification_hints", "sessions"):
+                    conn.execute(
+                        f"UPDATE {table} SET user_id = ? WHERE user_id IS NULL",
+                        (default_user_id,),
+                    )
+                conn.commit()
+            # else: fresh DB, no migration needed — setup wizard creates the first user.
+        else:
+            # Users already exist — backfill any rows that slipped through without a user_id.
+            default_user_row = conn.execute(
+                "SELECT id FROM users ORDER BY created_at LIMIT 1"
+            ).fetchone()
+            if default_user_row:
+                first_uid = default_user_row["id"]
+                for table in ("bank_connections", "ledgers", "classification_hints", "sessions"):
+                    conn.execute(
+                        f"UPDATE {table} SET user_id = ? WHERE user_id IS NULL",
+                        (first_uid,),
+                    )
+                conn.commit()
     finally:
         conn.close()
+
+
+def _add_col_if_missing(conn: sqlite3.Connection, table: str, col: str, col_type: str) -> None:
+    """ALTER TABLE to add *col* if it is not already present."""
+    existing = {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}
+    if col not in existing:
+        conn.execute(f"ALTER TABLE {table} ADD COLUMN {col} {col_type}")
+        conn.commit()
 
 
 @contextmanager

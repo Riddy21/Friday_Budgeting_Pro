@@ -7,7 +7,11 @@ to your banks, classifying every transaction, and keeping a spreadsheet
 up to date. It runs as a small daemon on your Mac with **multiple equal
 ways to interact with it** - no single one is the "main" way.
 
-**Single user. Local-only. AI does the heavy lifting; you stay in control.**
+**Local profiles. Local-only. AI does the heavy lifting; you stay in control.**
+
+Supports multiple named local profiles — each with their own password, linked banks,
+ledgers, and transactions. Only one profile can be active at a time (like switching
+accounts on a Mac, not a SaaS system).
 
 📐 [Read the architecture](./ARCHITECTURE.md) (this is the source of truth)
 
