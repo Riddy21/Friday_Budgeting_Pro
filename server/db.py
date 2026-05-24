@@ -28,6 +28,12 @@ def init_db(path: str | Path) -> None:
 
     Idempotent — the schema uses IF NOT EXISTS throughout, so calling this
     on an already-initialised database is safe.
+
+    Migrations
+    ----------
+    After the base schema is applied, any ALTER TABLE migrations needed for
+    columns added after the initial schema are run here.  Each migration is
+    guarded so it is a no-op if the column already exists.
     """
     path = Path(path)
     schema_path = Path(__file__).parent.parent / "db" / "schema.sql"
@@ -37,6 +43,17 @@ def init_db(path: str | Path) -> None:
     try:
         conn.executescript(sql)
         conn.commit()
+
+        # Migration: bank_accounts.description (added in #127)
+        existing_cols = {
+            row[1]
+            for row in conn.execute("PRAGMA table_info(bank_accounts)")
+        }
+        if "description" not in existing_cols:
+            conn.execute(
+                "ALTER TABLE bank_accounts ADD COLUMN description TEXT"
+            )
+            conn.commit()
     finally:
         conn.close()
 

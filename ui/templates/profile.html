@@ -110,6 +110,61 @@
         {% endfor %}
       </tbody>
     </table>
+
+    <!-- Per-account descriptions (#127) -->
+    {% if accounts %}
+    <div id="account-descriptions" style="margin-top:1rem">
+      <h3 style="font-size:1rem;margin-bottom:0.5rem">Account Descriptions</h3>
+      <p class="hint" style="margin-bottom:0.75rem">Optional context shown to the AI classifier when routing transactions from each account.</p>
+      {% for acct in accounts %}
+      <div class="account-desc-row" style="display:flex;align-items:center;gap:0.5rem;margin-bottom:0.5rem">
+        <span style="min-width:14rem;font-weight:500">
+          {{ acct.institution_name or "—" }} &mdash; {{ acct.name or acct.mask or acct.id }}
+          {% if acct.type %}<small class="hint">({{ acct.type }})</small>{% endif %}
+        </span>
+        <input
+          type="text"
+          id="desc-{{ acct.id }}"
+          class="account-desc-input"
+          data-account-id="{{ acct.id }}"
+          value="{{ acct.description or '' }}"
+          placeholder="e.g. Day-to-day spending"
+          style="flex:1;min-width:0"
+        >
+        <button
+          type="button"
+          class="btn-secondary btn-save-desc"
+          data-account-id="{{ acct.id }}"
+          style="white-space:nowrap"
+        >Save</button>
+        <span class="desc-feedback" id="fb-{{ acct.id }}" style="font-size:0.85em;min-width:4rem"></span>
+      </div>
+      {% endfor %}
+    </div>
+    <script>
+    (function() {
+      document.querySelectorAll('.btn-save-desc').forEach(function(btn) {
+        btn.addEventListener('click', function() {
+          var id = btn.getAttribute('data-account-id');
+          var val = document.getElementById('desc-' + id).value;
+          var fb = document.getElementById('fb-' + id);
+          fetch('/profile/accounts/' + id + '/description', {
+            method: 'PATCH',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({description: val})
+          }).then(function(r) {
+            fb.textContent = r.ok ? 'Saved ✓' : 'Error';
+            fb.style.color = r.ok ? 'green' : 'red';
+            setTimeout(function(){ fb.textContent = ''; }, 2500);
+          }).catch(function(){
+            fb.textContent = 'Error'; fb.style.color = 'red';
+          });
+        });
+      });
+    })();
+    </script>
+    {% endif %}
+
     {% else %}
     <p class="hint">No bank accounts connected yet. Use the
        <code>start_link</code> MCP tool via OpenClaw chat to connect a bank.</p>

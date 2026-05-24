@@ -423,6 +423,42 @@ def disconnect(id: str) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# Account tools
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool
+def set_account_description(account_id: str, description: str) -> dict:
+    """Set a user-supplied description for a bank account.
+
+    The description is stored in bank_accounts.description and is used as
+    additional context when the LLM classifier decides how to route
+    transactions from that account.
+
+    Args:
+        account_id: The internal bank_account id (not the Plaid account id).
+        description: Free-text description, e.g. "Day-to-day spending" or
+            "Business expenses - do not mix with personal".
+
+    Returns:
+        {"status": "ok", "account_id": account_id}
+    """
+    conn = get_db(server.paths.DB_PATH)
+    try:
+        result = conn.execute(
+            "UPDATE bank_accounts SET description = ? WHERE id = ?",
+            (description, account_id),
+        )
+        conn.commit()
+        if result.rowcount == 0:
+            return {"status": "error", "message": f"account_id {account_id!r} not found"}
+    finally:
+        conn.close()
+
+    return {"status": "ok", "account_id": account_id}
+
+
+# ---------------------------------------------------------------------------
 # Ledger tools
 # ---------------------------------------------------------------------------
 
