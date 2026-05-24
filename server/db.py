@@ -122,6 +122,16 @@ def init_db(path: str | Path) -> None:
         _add_col_if_missing(conn, "classification_hints", "user_id", "TEXT")
         _add_col_if_missing(conn, "sessions", "user_id", "TEXT")
 
+        # Migration: ledger types + description (#174)
+        _add_col_if_missing(conn, "ledgers", "type", "TEXT NOT NULL DEFAULT 'personal'")
+        _add_col_if_missing(conn, "ledgers", "description", "TEXT")
+
+        # Migration: bank_accounts default_ledger_id (#174)
+        _add_col_if_missing(conn, "bank_accounts", "default_ledger_id", "TEXT")
+
+        # Migration: line_items item_type (#174)
+        _add_col_if_missing(conn, "line_items", "item_type", "TEXT NOT NULL DEFAULT 'expense'")
+
         # Migration: create default user only when there is existing data to migrate
         # (i.e. rows exist that need a user_id) but no users have been created yet.
         # On truly fresh DBs, we leave users empty so the setup wizard can create

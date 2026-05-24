@@ -265,10 +265,13 @@ Only what HAL actually needs to call. Grouped:
 - `disconnect(id)`
 
 ### Ledgers (rarely used after setup)
-- `list_ledgers()`
-- `add_line_item(ledger_id, name, item_type)`
-- `add_ledger(name)`
+- `list_ledgers()` — returns `id`, `name`, `type`, `description`, and `items` for each ledger
+- `add_ledger(name)` — creates a generic personal ledger
+- `create_property_ledger(name, description?)` — creates a `property` ledger seeded with 6 default line items (Rent income, Mortgage, Property tax, Maintenance & repairs, Insurance, Utilities)
+- `create_investment_ledger(name)` — creates an `investment` ledger seeded with 2 default line items (Contributions, Dividends & Returns)
+- `add_line_item(ledger_id, name, item_type)` — `item_type` is `income` or `expense`
 - `remove_line_item(id)`
+- `set_account_ledger(account_id, ledger_id)` — routes transactions from a bank account to a specific ledger by default
 
 ### Transactions
 - `sync()` → pull from Plaid, classify, return summary
