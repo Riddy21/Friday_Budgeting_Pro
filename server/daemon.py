@@ -18,8 +18,10 @@ Lifecycle (in order):
      succeed in test/CI environments without a real Keychain.
   4. Start the FastAPI UI app on 127.0.0.1:6789 (overridable via FRIDAY_BP_UI_PORT)
      using uvicorn.
-  5. Start the asyncio Scheduler as a background task.
-  6. Handle SIGTERM/SIGINT for clean shutdown.
+  5. Handle SIGTERM/SIGINT for clean shutdown.
+
+Scheduled syncs are managed by OpenClaw cron (registered via apply_initial_setup).
+See issue #105.
 
 launchd plist installation is OUT OF SCOPE for this module — it lives in
 issue #59 (ClawHub installer).  This module is what #59 will hook into.
@@ -39,7 +41,6 @@ import uvicorn
 import server.crypto as _crypto
 import server.db as _db
 import server.paths as _paths
-from server.scheduler import Scheduler
 from ui.server import app  # noqa: F401 — imported so callers can reference it
 
 __all__ = ["main"]
@@ -72,7 +73,7 @@ def _get_port() -> int:
 
 
 async def _run() -> None:
-    """Async main — starts uvicorn server and scheduler together."""
+    """Async main — starts uvicorn server."""
     port = _get_port()
 
     config = uvicorn.Config(
@@ -82,9 +83,6 @@ async def _run() -> None:
         log_level="info",
     )
     server = uvicorn.Server(config)
-
-    # Scheduler runs alongside uvicorn as a background asyncio task.
-    scheduler = Scheduler()
 
     loop = asyncio.get_running_loop()
 
@@ -97,7 +95,6 @@ async def _run() -> None:
         shutdown_event.set()
         # Ask uvicorn to exit after it finishes in-flight requests.
         server.should_exit = True
-        scheduler.stop()
 
     for sig in (signal.SIGTERM, signal.SIGINT):
         loop.add_signal_handler(sig, _request_shutdown, sig, None)
@@ -110,7 +107,6 @@ async def _run() -> None:
         port,
     )
 
-    await scheduler.run()
     await server.serve()
 
     log.info("Daemon exited cleanly.")
@@ -147,7 +143,7 @@ def main() -> None:
             exc,
         )
 
-    # 4-6. Start uvicorn + scheduler (asyncio loop)
+    # 4-5. Start uvicorn (asyncio loop)
     asyncio.run(_run())
 
 

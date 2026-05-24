@@ -8,8 +8,10 @@ Real implementations land in later tickets.
 from __future__ import annotations
 
 import json as _json
+import subprocess as _subprocess
 import time as _time
 import uuid
+from datetime import datetime as _datetime
 from typing import List, Optional
 
 import logging
@@ -37,6 +39,113 @@ _logger = logging.getLogger(__name__)
 
 # Project root — tests monkeypatch this to a tmp dir so .env writes stay isolated.
 project_root: Path = Path(__file__).resolve().parent.parent
+
+# OpenClaw home directory override — monkeypatched in tests to avoid writing
+# to the real ~/.openclaw/ during unit tests.  None means use the default
+# (Path.home() / ".openclaw").
+_OPENCLAW_HOME: Path | None = None
+
+# ---------------------------------------------------------------------------
+# OpenClaw cron registration
+# ---------------------------------------------------------------------------
+
+
+def _get_local_tz() -> str:
+    """Return the best-effort IANA timezone name for the local system.
+
+    Tries to resolve the /etc/localtime symlink which on macOS and most Linux
+    distros points into the zoneinfo directory tree.  Falls back to the
+    abbreviated timezone name (e.g. ``'EDT'``) when the symlink is absent.
+    """
+    try:
+        result = _subprocess.run(
+            ["readlink", "/etc/localtime"],
+            capture_output=True,
+            text=True,
+            timeout=2,
+        )
+        if result.returncode == 0:
+            tz_str = result.stdout.strip()
+            if "/zoneinfo/" in tz_str:
+                return tz_str.split("/zoneinfo/")[-1]
+    except Exception:  # noqa: BLE001
+        pass
+    # Fallback: abbreviated timezone name (e.g. 'EDT', 'UTC')
+    return _datetime.now().astimezone().tzname() or "UTC"
+
+
+def _register_openclaw_cron() -> bool:
+    """Write the Friday Budgeting Pro sync cron spec to ~/.openclaw/cron/.
+
+    Cron file: ``~/.openclaw/cron/friday-budgeting-pro-sync.json``
+
+    The schedule runs a daily agent turn at 06:00 local time that calls the
+    ``sync`` MCP tool and then notifies the user of any transactions needing
+    review via ``get_needs_review``.
+
+    Detection
+    ---------
+    If ``~/.openclaw/`` does not exist the user is running without OpenClaw.
+    We log a warning and return ``False`` — the app continues to work, it
+    just won't have scheduled syncs.
+
+    Idempotent
+    ----------
+    Overwriting the same file on a repeated call is safe and intentional.
+
+    Returns
+    -------
+    bool
+        ``True`` if the cron file was written; ``False`` if OpenClaw is not
+        installed (``~/.openclaw/`` absent).
+    """
+    oc_dir = _OPENCLAW_HOME if _OPENCLAW_HOME is not None else Path.home() / ".openclaw"
+
+    if not oc_dir.exists():
+        _logger.warning(
+            "OpenClaw directory %s not found — skipping cron registration. "
+            "The app will work without scheduled syncs; run apply_initial_setup "
+            "again after installing OpenClaw to register the cron job.",
+            oc_dir,
+        )
+        return False
+
+    cron_dir = oc_dir / "cron"
+    cron_dir.mkdir(parents=True, exist_ok=True)
+
+    tz = _get_local_tz()
+    spec = {
+        "name": "friday-budgeting-pro-sync",
+        "schedule": {"kind": "cron", "expr": "0 6 * * *", "tz": tz},
+        "sessionTarget": "isolated",
+        "payload": {
+            "kind": "agentTurn",
+            "message": (
+                "Run friday-budgeting-pro sync: call the sync MCP tool, "
+                "then call get_needs_review and notify the user about any "
+                "transactions needing classification."
+            ),
+            "timeoutSeconds": 900,
+        },
+        "delivery": {"mode": "none"},
+    }
+
+    cron_file = cron_dir / "friday-budgeting-pro-sync.json"
+    # Atomic-ish write: write to a sibling temp file then replace.
+    tmp_file = cron_file.with_suffix(".json.tmp")
+    try:
+        tmp_file.write_text(_json.dumps(spec, indent=2))
+        tmp_file.replace(cron_file)
+    except Exception:  # noqa: BLE001
+        try:
+            tmp_file.unlink(missing_ok=True)
+        except OSError:
+            pass
+        raise
+
+    _logger.info("OpenClaw cron registered: %s", cron_file)
+    return True
+
 
 # ---------------------------------------------------------------------------
 # Setup tools
@@ -184,12 +293,15 @@ def apply_initial_setup(
     finally:
         conn.close()
 
+    cron_registered = _register_openclaw_cron()
+
     return {
         "status": "ok",
         "ledgers_created": ledgers_created,
         "line_items_created": line_items_created,
         "hints_created": hints_created,
         "banks_to_link": [*banks_to_link] if banks_to_link else [],
+        "cron_registered": cron_registered,
     }
 
 
