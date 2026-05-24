@@ -1208,6 +1208,35 @@ def link_start(request: Request):
     return _redirect(f"/link?token={token}")
 
 
+# ── /link/complete ─────────────────────────────────────────────────────────
+
+@app.post("/link/complete")
+async def link_complete(request: Request, next: str = "/profile"):
+    """Exchange Plaid public_token for access token and store connection.
+
+    Called by the Plaid Link JS after the user completes the bank auth flow.
+    Expects form field: public_token.
+    """
+    if not _is_authenticated(request):
+        return _redirect("/login")
+    import server.main as _sm
+    import os as _os
+    form = await request.form()
+    public_token = form.get("public_token", "")
+    if not public_token:
+        return _redirect("/profile?error=missing_public_token")
+    plaid_env = _os.environ.get("PLAID_ENV", "sandbox").lower()
+    try:
+        result = _sm.complete_link(public_token=public_token, plaid_env=plaid_env)
+        if result.get("status") == "ok" or result.get("connection_id"):
+            return _redirect(next + "?connected=1")
+        return _redirect("/profile?error=link_exchange_failed")
+    except Exception as exc:
+        import logging
+        logging.getLogger(__name__).error("link_complete failed: %s", exc)
+        return _redirect("/profile?error=link_exchange_failed")
+
+
 # ── /link ─────────────────────────────────────────────────────────────────────
 
 
