@@ -18,7 +18,7 @@
 
 These are hard rules. Don't add features that violate them.
 
-1. **Single-user only.** No multi-tenant accounts. The user *is* the system owner.
+1. **Local profiles (multiple users, one active at a time).** Multiple named profiles can be stored locally — each with their own password, linked bank accounts, ledgers, and transactions. Only one profile can be logged in at a time. No concurrent sessions, no shared data between profiles. This is like switching accounts on a Mac, not a SaaS multi-tenant system.
 2. **No primary interface.** The same core engine is reachable via several
    equal-peer adapters:
    - **Web UI** — only for setup + profile in v0.1; not where you manage
@@ -260,11 +260,12 @@ CREATE TABLE sync_cursors (
   last_synced_at INTEGER
 );
 
--- UI auth: single-row app config (single-user system)
-CREATE TABLE app_config (
-  id INTEGER PRIMARY KEY CHECK (id = 1),
-  ui_password_hash TEXT,           -- argon2id hash
-  ui_password_set_at INTEGER
+-- Users (local profiles — multiple allowed, one active at a time)
+CREATE TABLE users (
+  id TEXT PRIMARY KEY,             -- UUID
+  username TEXT UNIQUE NOT NULL,
+  password_hash TEXT NOT NULL,     -- argon2id hash
+  created_at INTEGER NOT NULL
 );
 
 -- UI session cookies (server-side store, survives restarts)
@@ -579,7 +580,7 @@ you set on first launch.
 - **Session lifetime:** permanent until you explicitly log out. No idle
   timeout. The daemon syncs in the background whether or not you have a
   browser open — the session state is irrelevant to syncing.
-- **No rate limiting.** This is a local single-user app on your own machine.
+- **No rate limiting.** This is a local app on your own machine.
   Anyone who can reach 127.0.0.1 already has access to your Mac.
 - **Password reset (forgotten password):** in-UI "forgot password" link
   generates a recovery token written to `~/.friday-bp/recovery.txt` (file
@@ -739,7 +740,8 @@ That's the whole codebase. ~10 files.
 
 ## What's Explicitly Out of Scope (v0.1)
 
-- ❌ Multi-user / multi-tenant
+- ✅ Local profiles (multiple users, one active at a time) — see users table above
+- ❌ Concurrent sessions / multi-tenant SaaS
 - ❌ Web UI for reviewing/classifying transactions (done via MCP/chat in v0.1)
 - ❌ Web dashboard with charts/analytics
   - These two roll up into the "bigger UI" future ticket (#55).
