@@ -59,6 +59,7 @@ from ui.auth import (
     hash_password,
     list_users,
     set_password_hash,
+    update_user_password,
     verify_password,
 )
 
