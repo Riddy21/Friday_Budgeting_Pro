@@ -61,8 +61,7 @@ class PlaidProvider(BankProvider):
         resolved = (env or os.environ.get("PLAID_ENV", "sandbox")).lower()
         if resolved not in _ENV_MAP:
             raise ValueError(
-                f"Invalid Plaid env '{resolved}'. Must be one of: "
-                + ", ".join(_ENV_MAP)
+                f"Invalid Plaid env '{resolved}'. Must be one of: " + ", ".join(_ENV_MAP)
             )
         self.env: str = resolved
 
