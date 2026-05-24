@@ -5,48 +5,61 @@
 {% block content %}
 <div class="card card-narrow">
   <h1>Connect a bank</h1>
+  <p id="status-text">Opening Plaid Link…</p>
 
-  {% if link_token %}
-  <p>Click the button below to open the secure Plaid Link popup and connect
-     your bank account.</p>
-
-  <button id="plaid-link-btn" class="btn-primary">Open Plaid Link</button>
-
-  <!-- Plaid Link JS — standard CDN embed -->
   <script src="https://cdn.plaid.com/link/v2/stable/link-initialize.js"></script>
   <script>
-    var handler = Plaid.create({
-      token: {{ link_token | tojson }},
-      onSuccess: function(public_token, metadata) {
-        // POST the public_token back so the server can exchange it.
-        var form = document.createElement('form');
-        form.method = 'POST';
-        form.action = '/link/complete';
-        var input = document.createElement('input');
-        input.type = 'hidden';
-        input.name = 'public_token';
-        input.value = public_token;
-        form.appendChild(input);
-        document.body.appendChild(form);
-        form.submit();
-      },
-      onExit: function(err, metadata) {
-        if (err) {
-          console.error('Plaid Link error:', err);
-        }
-      },
-    });
+    // OAuth redirect handling:
+    // If oauth_state_id is in the URL, this is a redirect back from the bank's OAuth page.
+    // We need to reinitialize Plaid Link with the original token stored in sessionStorage.
+    var params = new URLSearchParams(window.location.search);
+    var oauthStateId = params.get('oauth_state_id');
+    var linkToken = oauthStateId
+      ? sessionStorage.getItem('plaid_link_token')
+      : {{ link_token | tojson if link_token else 'null' }};
 
-    document.getElementById('plaid-link-btn').addEventListener('click', function() {
+    // Store the token for potential OAuth redirect
+    if (linkToken && !oauthStateId) {
+      sessionStorage.setItem('plaid_link_token', linkToken);
+    }
+
+    function submitToken(public_token) {
+      var form = document.createElement('form');
+      form.method = 'POST';
+      form.action = '{{ complete_url }}';
+      var input = document.createElement('input');
+      input.type = 'hidden';
+      input.name = 'public_token';
+      input.value = public_token;
+      form.appendChild(input);
+      document.body.appendChild(form);
+      form.submit();
+    }
+
+    if (!linkToken) {
+      document.getElementById('status-text').textContent =
+        'Error: no link token. Please go back and try again.';
+    } else {
+      var handler = Plaid.create({
+        token: linkToken,
+        receivedRedirectUri: oauthStateId ? window.location.href : undefined,
+        onSuccess: function(public_token, metadata) {
+          sessionStorage.removeItem('plaid_link_token');
+          document.getElementById('status-text').textContent = 'Connected! Redirecting…';
+          submitToken(public_token);
+        },
+        onExit: function(err) {
+          if (err) console.error('Plaid Link error:', err);
+          sessionStorage.removeItem('plaid_link_token');
+          window.location.href = '{{ back_url }}';
+        },
+      });
+
+      // Auto-open (no button needed — just opens immediately)
       handler.open();
-    });
+    }
   </script>
-  {% else %}
-  <p>No Plaid link token provided. Use OpenClaw chat to generate a link token
-     (<code>start_link</code> MCP tool), then visit
-     <code>/link?token=&lt;link_token&gt;</code>.</p>
-  {% endif %}
 
-  <p class="hint"><a href="/profile">Back to Profile</a></p>
+  <p class="hint" style="margin-top:24px"><a href="{{ back_url }}">Cancel</a></p>
 </div>
 {% endblock %}

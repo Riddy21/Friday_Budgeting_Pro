@@ -99,13 +99,19 @@ class PlaidProvider(BankProvider):
         Callers MUST encrypt tokens via server.crypto.encrypt before persisting.
         """
         client = self._build_client()
-        request = LinkTokenCreateRequest(
+        import os as _os
+        # CA only — matches old working test app; US+CA causes OAuth issues with Canadian banks
+        _redirect_uri = _os.environ.get("PLAID_REDIRECT_URI")
+        _kwargs = dict(
             user=LinkTokenCreateRequestUser(client_user_id=user_id),
             client_name=_APP_NAME,
             products=[Products("transactions")],
-            country_codes=[CountryCode("US"), CountryCode("CA")],
+            country_codes=[CountryCode("CA")],
             language="en",
         )
+        if _redirect_uri:
+            _kwargs["redirect_uri"] = _redirect_uri
+        request = LinkTokenCreateRequest(**_kwargs)
         response = client.link_token_create(request)
         return response["link_token"]
 
@@ -193,3 +199,18 @@ class PlaidProvider(BankProvider):
             "error_message": error_message,
             "item_id": item_id,
         }
+
+    def get_institution_name(self, access_token: str) -> str:
+        """Return institution name for an access token."""
+        from plaid.model.item_get_request import ItemGetRequest
+        from plaid.model.institutions_get_by_id_request import InstitutionsGetByIdRequest
+        from plaid.model.country_code import CountryCode
+        client = self._build_client()
+        item = client.item_get(ItemGetRequest(access_token=access_token))
+        inst_id = item["item"]["institution_id"]
+        inst = client.institutions_get_by_id(InstitutionsGetByIdRequest(
+            institution_id=inst_id,
+            country_codes=[CountryCode("US"), CountryCode("CA")],
+        ))
+        return inst["institution"]["name"]
+

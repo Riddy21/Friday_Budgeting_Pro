@@ -25,12 +25,18 @@ This doc is the operating manual for agent contributors.
 5. **Test.** Every ticket has a test requirement in its body. CI runs
    `pytest -q` on every push — green CI is non-negotiable.
 
-6. **Open a PR.**
+6. **Interactive sanity check** (mandatory before opening a PR):
+   - **UI tickets:** Start the server and use Peekaboo browser automation to verify the affected page loads and the core flow works.
+   - **MCP tickets:** Call the new/changed tools directly in Python and confirm they return real output (not `{'status': 'not_implemented'}` or errors).
+   - **Infra/docs/schema tickets:** pytest is sufficient, no interactive check needed.
+   - Include a one-line summary of what you tested in the PR body under **Interactive check:**
+
+7. **Open a PR.**
    - Title: `[P<phase>] <ticket title>`
    - Body: must include `Closes #<issue-num>` so the issue auto-closes on merge
    - Use the PR template (auto-populated)
 
-7. **Wait for review.** A human (or a reviewer agent) approves and merges.
+8. **Wait for review.** A human (or a reviewer agent) approves and merges.
    Don't self-merge.
 
 ## Code Rules
