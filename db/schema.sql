@@ -106,6 +106,18 @@ CREATE TABLE IF NOT EXISTS notifications (
   read INTEGER DEFAULT 0
 );
 
+-- Auto-promoted rules audit log (tracks which routing_rules were auto-created and from which transactions)
+-- TODO: existing DBs will not have this table; run the schema again (init_db) or issue a one-off
+--       CREATE TABLE migration to add it to production databases.
+CREATE TABLE IF NOT EXISTS auto_promoted_rules_log (
+  id TEXT PRIMARY KEY,
+  rule_id TEXT NOT NULL REFERENCES routing_rules(id) ON DELETE CASCADE,
+  merchant TEXT NOT NULL,
+  line_item_id TEXT NOT NULL,
+  source_transaction_ids TEXT NOT NULL,  -- JSON array of transaction ids
+  created_at INTEGER NOT NULL
+);
+
 -- Login attempt log for rate limiting
 CREATE TABLE IF NOT EXISTS login_attempts (
   id INTEGER PRIMARY KEY AUTOINCREMENT,

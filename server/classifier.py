@@ -445,6 +445,7 @@ def maybe_promote_to_rule(
     ).fetchone()
 
     if existing is not None:
+        # Do NOT insert another log row for an already-existing rule.
         return {
             "id":               existing[0],
             "merchant_pattern": existing[1],
@@ -452,15 +453,54 @@ def maybe_promote_to_rule(
         }
 
     # ------------------------------------------------------------------
-    # 3. Create the new routing rule
+    # 3. Collect the transaction ids that contributed to the promotion
+    #    (the 3+ consistent reviewed entries for this merchant + line_item)
+    # ------------------------------------------------------------------
+    import time
+
+    source_rows = conn.execute(
+        """
+        SELECT t.id AS txn_id
+          FROM transaction_entries te
+          JOIN transactions t ON t.id = te.transaction_id
+         WHERE t.merchant = ?
+           AND te.source IN ('llm', 'manual')
+           AND te.reviewed = 1
+           AND te.line_item_id = ?
+        ORDER BY t.date DESC
+        """,
+        (merchant, target_line_item_id),
+    ).fetchall()
+    source_transaction_ids: list[str] = [r[0] for r in source_rows]
+
+    # ------------------------------------------------------------------
+    # 4. Create the new routing rule and write the audit log row atomically
     # ------------------------------------------------------------------
     new_id = str(uuid.uuid4())
+    log_id = str(uuid.uuid4())
+    created_at = int(time.time())
+
     conn.execute(
         """
         INSERT INTO routing_rules (id, merchant_pattern, line_item_id)
         VALUES (?, ?, ?)
         """,
         (new_id, merchant, target_line_item_id),
+    )
+    conn.execute(
+        """
+        INSERT INTO auto_promoted_rules_log
+               (id, rule_id, merchant, line_item_id, source_transaction_ids, created_at)
+        VALUES (?,  ?,       ?,        ?,            ?,                      ?)
+        """,
+        (
+            log_id,
+            new_id,
+            merchant,
+            target_line_item_id,
+            json.dumps(source_transaction_ids),
+            created_at,
+        ),
     )
     conn.commit()
 

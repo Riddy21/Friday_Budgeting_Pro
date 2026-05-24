@@ -710,6 +710,105 @@ def export_excel(years: Optional[List] = None) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# Auto-promoted rules audit tools
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool
+def list_auto_promoted_rules() -> dict:
+    """Return all auto-promoted routing rules with their audit log metadata.
+
+    Each entry includes a ``rule_still_active`` boolean indicating whether the
+    underlying ``routing_rule`` still exists in the database.
+    """
+    conn = get_db(server.paths.DB_PATH)
+    try:
+        rows = conn.execute(
+            """
+            SELECT apl.id,
+                   apl.rule_id,
+                   apl.merchant,
+                   apl.line_item_id,
+                   apl.source_transaction_ids,
+                   apl.created_at,
+                   CASE WHEN rr.id IS NOT NULL THEN 1 ELSE 0 END AS rule_still_active
+              FROM auto_promoted_rules_log apl
+              LEFT JOIN routing_rules rr ON rr.id = apl.rule_id
+             ORDER BY apl.created_at DESC
+            """
+        ).fetchall()
+        return {
+            "rules": [
+                {
+                    "id":                     row["id"],
+                    "rule_id":                row["rule_id"],
+                    "merchant":               row["merchant"],
+                    "line_item_id":           row["line_item_id"],
+                    "source_transaction_ids": _json.loads(row["source_transaction_ids"]),
+                    "created_at":             row["created_at"],
+                    "rule_still_active":      bool(row["rule_still_active"]),
+                }
+                for row in rows
+            ]
+        }
+    finally:
+        conn.close()
+
+
+@mcp.tool
+def undo_auto_promoted_rule(rule_id: str) -> dict:
+    """Delete an auto-promoted routing rule and revert affected transaction entries.
+
+    - Deletes the ``routing_rule`` (CASCADE removes the ``auto_promoted_rules_log`` row).
+    - Resets ``reviewed = 0`` on every ``transaction_entry`` whose
+      ``source = 'rule'`` and whose transaction's merchant matches the rule's
+      ``merchant_pattern``.
+    - The entire operation is wrapped in a single transaction for atomicity.
+
+    Returns::
+
+        {"ok": True, "rule_deleted": bool, "entries_reverted": int}
+    """
+    conn = get_db(server.paths.DB_PATH)
+    try:
+        # Look up the rule before deleting so we know the merchant_pattern.
+        rule_row = conn.execute(
+            "SELECT id, merchant_pattern FROM routing_rules WHERE id = ?",
+            (rule_id,),
+        ).fetchone()
+
+        if rule_row is None:
+            return {"ok": True, "rule_deleted": False, "entries_reverted": 0}
+
+        merchant_pattern: str = rule_row["merchant_pattern"]
+
+        with db_txn(conn):
+            # Revert affected transaction_entries (source='rule', merchant matches).
+            cursor = conn.execute(
+                """
+                UPDATE transaction_entries
+                   SET reviewed = 0
+                 WHERE source = 'rule'
+                   AND transaction_id IN (
+                       SELECT id FROM transactions WHERE merchant = ?
+                   )
+                """,
+                (merchant_pattern,),
+            )
+            entries_reverted: int = cursor.rowcount
+
+            # Delete the routing rule (CASCADE deletes the log row too).
+            conn.execute(
+                "DELETE FROM routing_rules WHERE id = ?",
+                (rule_id,),
+            )
+
+        return {"ok": True, "rule_deleted": True, "entries_reverted": entries_reverted}
+    finally:
+        conn.close()
+
+
+# ---------------------------------------------------------------------------
 # Entrypoint
 # ---------------------------------------------------------------------------
 
