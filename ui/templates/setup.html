@@ -58,13 +58,49 @@
 
   <!-- ── Step 3: Connect first bank ────────────────────────────────── -->
   {% elif step == 3 %}
-  <form method="post" action="/setup/3">
-    <h2>Connect your first bank</h2>
-    <p>Link a bank account via Plaid so Friday can import transactions automatically.
-       You can add more banks from the Profile page later.</p>
-    <button type="submit" name="action" value="link" class="btn-primary">Open Plaid Link →</button>
-    <button type="submit" name="action" value="skip" class="btn-secondary">Skip for now</button>
+  <h2>Connect your first bank</h2>
+  <p>Link a bank account via Plaid so Friday can import transactions automatically.</p>
+
+  {% if error %}<div class="alert alert-error">{{ error }}</div>{% endif %}
+
+  {% if link_token %}
+  <!-- Hidden form — submitted by Plaid onSuccess callback -->
+  <form id="plaid-form" method="post" action="/setup/3">
+    <input type="hidden" name="action" value="bank_linked">
+    <input type="hidden" name="public_token" id="public_token_input" value="">
   </form>
+
+  <button id="plaid-link-btn" class="btn-primary">Connect a bank →</button>
+
+  <script src="https://cdn.plaid.com/link/v2/stable/link-initialize.js"></script>
+  <script>
+    var handler = Plaid.create({
+      token: {{ link_token | tojson }},
+      onSuccess: function(public_token, metadata) {
+        document.getElementById("public_token_input").value = public_token;
+        document.getElementById("plaid-form").submit();
+      },
+      onExit: function(err) {
+        if (err) console.error("Plaid Link error:", err);
+      }
+    });
+    document.getElementById("plaid-link-btn").addEventListener("click", function() {
+      handler.open();
+    });
+  </script>
+
+  <form method="post" action="/setup/3" style="margin-top:12px">
+    <input type="hidden" name="action" value="skip">
+    <button type="submit" class="btn-secondary">Skip for now</button>
+  </form>
+
+  {% else %}
+  <div class="alert alert-error">Could not load Plaid — check your credentials in .env</div>
+  <form method="post" action="/setup/3">
+    <input type="hidden" name="action" value="skip">
+    <button type="submit" class="btn-secondary">Skip and continue</button>
+  </form>
+  {% endif %}
 
   <!-- ── Step 4: All done ──────────────────────────────────────────── -->
   {% elif step == 4 %}

@@ -316,16 +316,59 @@ async def setup_post(request: Request, step: int):
         raw = form.get("notification_channel") or form.get("notification_pref") or "openclaw_chat"
         ch = _PREF_TO_CHANNEL.get(raw, raw)
         _set_notification_channel(ch)
-        ns = {**state, "step": 3, "notification_channel": ch, "error": None}
-        resp = templates.TemplateResponse(request, "setup.html", {"step": 3, "error": None})
+        # Generate a Plaid link token now so step 3 can embed it
+        link_token = None
+        try:
+            link_token = _plaid.create_link_token()
+        except Exception as exc:
+            link_token = None  # step 3 will show an error
+        ns = {**state, "step": 3, "notification_channel": ch, "link_token": link_token, "error": None}
+        resp = templates.TemplateResponse(request, "setup.html", {"step": 3, "error": None, "link_token": link_token})
         _update_wizard(resp, tok, ns)
         return resp
     elif step == 3:
-        bl = (form.get("action") or "").strip() == "done"
+        action = (form.get("action") or "").strip()
         ch = state.get("notification_channel", _get_notification_channel())
-        ns = {**state, "step": 4, "bank_linked": bl, "error": None}
+        bank_linked = False
+        error = None
+
+        if action == "bank_linked":
+            # Exchange the public token from Plaid Link
+            public_token = (form.get("public_token") or "").strip()
+            if public_token:
+                try:
+                    import uuid as _uuid
+                    from server.crypto import encrypt
+                    result = _plaid.exchange_public_token(public_token)
+                    institution_name = _get_institution_name(result["access_token"])
+                    conn = get_db(_db_path())
+                    try:
+                        conn.execute(
+                            "INSERT OR IGNORE INTO bank_connections "
+                            "(id, plaid_item_id, plaid_access_token_encrypted, institution_name, status) "
+                            "VALUES (?, ?, ?, ?, 'active')",
+                            (str(_uuid.uuid4()), result["item_id"],
+                             encrypt(result["access_token"]), institution_name),
+                        )
+                        conn.commit()
+                    finally:
+                        conn.close()
+                    bank_linked = True
+                except Exception as exc:
+                    error = f"Bank connection failed: {exc}"
+                    # Re-generate link token to let user retry
+                    link_token = None
+                    try: link_token = _plaid.create_link_token()
+                    except: pass
+                    resp = templates.TemplateResponse(request, "setup.html",
+                        {"step": 3, "error": error, "link_token": link_token})
+                    _update_wizard(resp, tok, {**state, "step": 3})
+                    return resp
+
+        # Advance to step 4 (bank_linked=True means they connected one)
+        ns = {**state, "step": 4, "bank_linked": bank_linked, "error": None}
         resp = templates.TemplateResponse(request, "setup.html",
-            {"step": 4, "error": None, "notification_channel": ch, "bank_linked": bl})
+            {"step": 4, "error": None, "notification_channel": ch, "bank_linked": bank_linked})
         _update_wizard(resp, tok, ns)
         return resp
     elif step == 4:
