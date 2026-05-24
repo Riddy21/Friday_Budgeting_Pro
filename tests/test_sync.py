@@ -121,9 +121,13 @@ def env(tmp_path, monkeypatch):
 # Test 1: normal sync
 # ---------------------------------------------------------------------------
 
+_HEALTH_NOOP = {"checked": 0, "active": 0, "needs_reauth": 0, "pending_expiration": 0}
+
+
 def test_sync_normal(env, monkeypatch):
     monkeypatch.setattr("server.main._plaid.sync_transactions", _mock_sync_ok)
     monkeypatch.setattr("server.crypto.decrypt", lambda x: x)
+    monkeypatch.setattr("server.health_monitor.check_all_connections", lambda db, plaid_provider=None: _HEALTH_NOOP)
 
     result = sync()
 
@@ -169,6 +173,7 @@ def test_sync_item_login_required(env, monkeypatch):
 
     monkeypatch.setattr("server.main._plaid.sync_transactions", _raise_reauth)
     monkeypatch.setattr("server.crypto.decrypt", lambda x: x)
+    monkeypatch.setattr("server.health_monitor.check_all_connections", lambda db, plaid_provider=None: _HEALTH_NOOP)
 
     result = sync()
 
@@ -192,6 +197,7 @@ def test_sync_item_login_required(env, monkeypatch):
 def test_sync_idempotent(env, monkeypatch):
     monkeypatch.setattr("server.main._plaid.sync_transactions", _mock_sync_ok)
     monkeypatch.setattr("server.crypto.decrypt", lambda x: x)
+    monkeypatch.setattr("server.health_monitor.check_all_connections", lambda db, plaid_provider=None: _HEALTH_NOOP)
 
     sync()
     sync()  # second call with identical batch — INSERT OR IGNORE absorbs it
@@ -211,6 +217,7 @@ def test_sync_lock_contention(env, monkeypatch):
 
     monkeypatch.setattr("server.main._plaid.sync_transactions", _mock_sync_ok)
     monkeypatch.setattr("server.crypto.decrypt", lambda x: x)
+    monkeypatch.setattr("server.health_monitor.check_all_connections", lambda db, plaid_provider=None: _HEALTH_NOOP)
 
     # Hold the lock ourselves so sync() cannot acquire it
     held = acquire_sync_lock(timeout=0.0)
