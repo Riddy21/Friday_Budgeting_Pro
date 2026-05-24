@@ -36,7 +36,7 @@ metadata:
             {
               "id": "launchd",
               "kind": "shell",
-              "command": "sh scripts/install.sh",
+              "command": "python3 -m server.installer install",
               "label": "Install daemon (launchd plist + registration)",
             },
           ],
@@ -45,7 +45,7 @@ metadata:
             {
               "id": "launchd-remove",
               "kind": "shell",
-              "command": "sh scripts/uninstall.sh",
+              "command": "python3 -m server.installer uninstall",
               "label": "Remove daemon",
             },
           ],

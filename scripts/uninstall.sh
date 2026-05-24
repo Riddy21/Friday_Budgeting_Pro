@@ -1,4 +1,9 @@
 #!/bin/sh
+# DEPRECATED: This script has been superseded by server/installer.py (see issue #94).
+# It is kept as a reference only. SKILL.md now calls:
+#   python3 -m server.installer uninstall
+# Do NOT add new logic here.
+#
 # uninstall.sh — Friday Budgeting Pro uninstaller
 # Called by ClawHub as the uninstall hook (SKILL.md metadata.openclaw.uninstall).
 # Data in ~/.friday-bp/ is intentionally preserved.
