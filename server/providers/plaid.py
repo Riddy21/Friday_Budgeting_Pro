@@ -99,13 +99,19 @@ class PlaidProvider(BankProvider):
         Callers MUST encrypt tokens via server.crypto.encrypt before persisting.
         """
         client = self._build_client()
-        request = LinkTokenCreateRequest(
+        import os as _os
+        # CA only — matches old working test app; US+CA causes OAuth issues with Canadian banks
+        _redirect_uri = _os.environ.get("PLAID_REDIRECT_URI")
+        _kwargs = dict(
             user=LinkTokenCreateRequestUser(client_user_id=user_id),
             client_name=_APP_NAME,
             products=[Products("transactions")],
-            country_codes=[CountryCode("US"), CountryCode("CA")],
+            country_codes=[CountryCode("CA")],
             language="en",
         )
+        if _redirect_uri:
+            _kwargs["redirect_uri"] = _redirect_uri
+        request = LinkTokenCreateRequest(**_kwargs)
         response = client.link_token_create(request)
         return response["link_token"]
 

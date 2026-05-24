@@ -671,19 +671,19 @@ async def link_disconnect(request: Request, connection_id: str):
     return _redirect("/profile")
 
 @app.get("/link", response_class=HTMLResponse)
-def link_get(request: Request, token: Optional[str] = None):
-    """Plaid Link JS embed.
-
-    Accepts ?token=<link_token> from whoever generates the link token
-    (setup wizard, profile page, or an MCP-issued URL).
-
-    Loopback-only binding is enforced by daemon.py; this route just renders
-    the embed.
-    """
+def link_get(request: Request, token: Optional[str] = None, oauth_state_id: Optional[str] = None):
+    """Plaid Link JS embed. Handles initial load and OAuth redirects."""
     if not _is_authenticated(request):
-        return _redirect("/login")
+        # Preserve full URL for OAuth redirects so auth doesn't lose the state
+        return _redirect(f"/login?next={request.url}")
+    referer = request.headers.get("referer", "")
+    back_url = "/profile"
+    complete_url = "/link/complete"
+    if "setup" in referer:
+        back_url = "/setup"
+        complete_url = "/link/complete?next=/profile"
     return templates.TemplateResponse(
         request,
         "link.html",
-        {"link_token": token},
+        {"link_token": token, "complete_url": complete_url, "back_url": back_url},
     )
