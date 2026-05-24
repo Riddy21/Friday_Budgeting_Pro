@@ -644,26 +644,169 @@ def set_account_description(account_id: str, description: str) -> dict:
 
 @mcp.tool
 def list_ledgers() -> dict:
-    """List all ledgers and their line items."""
-    return {"status": "not_implemented"}
-
-
-@mcp.tool
-def add_line_item(ledger_id: str, name: str, item_type: str) -> dict:
-    """Add a new line item to a ledger."""
-    return {"status": "not_implemented"}
+    """List all ledgers and their line items for the active user."""
+    uid = get_active_user_id(server.paths.DB_PATH)
+    conn = get_db(server.paths.DB_PATH)
+    try:
+        if uid:
+            ledger_rows = conn.execute(
+                "SELECT id, name FROM ledgers WHERE user_id = ? OR user_id IS NULL ORDER BY name",
+                (uid,),
+            ).fetchall()
+        else:
+            return {"ledgers": []}
+        ledgers = []
+        for lr in ledger_rows:
+            items = conn.execute(
+                "SELECT id, name, item_type FROM line_items WHERE ledger_id = ? ORDER BY name",
+                (lr["id"],),
+            ).fetchall()
+            ledgers.append(
+                {
+                    "id": lr["id"],
+                    "name": lr["name"],
+                    "items": [
+                        {"id": i["id"], "name": i["name"], "type": i["item_type"]} for i in items
+                    ],
+                }
+            )
+        return {"ledgers": ledgers}
+    finally:
+        conn.close()
 
 
 @mcp.tool
 def add_ledger(name: str) -> dict:
-    """Create a new ledger."""
-    return {"status": "not_implemented"}
+    """Create a new ledger for the active user.
+
+    Parameters
+    ----------
+    name : str
+        Non-empty ledger name.  Returns an error if a ledger with this name
+        already exists for the active user.
+    """
+    name = name.strip() if name else ""
+    if not name:
+        return {"status": "error", "message": "Ledger name must be non-empty"}
+
+    uid = get_active_user_id(server.paths.DB_PATH)
+    if uid is None:
+        return {"status": "error", "message": "No active user"}
+
+    conn = get_db(server.paths.DB_PATH)
+    try:
+        existing = conn.execute(
+            "SELECT id FROM ledgers WHERE name = ? AND user_id = ?",
+            (name, uid),
+        ).fetchone()
+        if existing:
+            return {"status": "error", "message": f"Ledger '{name}' already exists"}
+        ledger_id = str(uuid.uuid4())
+        conn.execute(
+            "INSERT INTO ledgers (id, name, user_id) VALUES (?, ?, ?)",
+            (ledger_id, name, uid),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    return {"status": "ok", "ledger_id": ledger_id}
+
+
+@mcp.tool
+def add_line_item(ledger_id: str, name: str, item_type: str) -> dict:
+    """Add a new line item to a ledger owned by the active user.
+
+    Parameters
+    ----------
+    ledger_id : str
+        ID of the target ledger.
+    name : str
+        Non-empty display name for the line item.
+    item_type : str
+        Must be ``'income'`` or ``'expense'``.
+    """
+    name = name.strip() if name else ""
+    if not name:
+        return {"status": "error", "message": "Line item name must be non-empty"}
+    if item_type not in ("income", "expense"):
+        return {"status": "error", "message": "item_type must be 'income' or 'expense'"}
+
+    uid = get_active_user_id(server.paths.DB_PATH)
+    conn = get_db(server.paths.DB_PATH)
+    try:
+        if uid:
+            ledger_row = conn.execute(
+                "SELECT id FROM ledgers WHERE id = ? AND (user_id = ? OR user_id IS NULL)",
+                (ledger_id, uid),
+            ).fetchone()
+        else:
+            ledger_row = conn.execute(
+                "SELECT id FROM ledgers WHERE id = ?",
+                (ledger_id,),
+            ).fetchone()
+        if ledger_row is None:
+            return {
+                "status": "error",
+                "message": f"Ledger '{ledger_id}' not found or not owned by active user",
+            }
+
+        item_id = str(uuid.uuid4())
+        conn.execute(
+            "INSERT INTO line_items (id, ledger_id, name, item_type) VALUES (?, ?, ?, ?)",
+            (item_id, ledger_id, name, item_type),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    return {"status": "ok", "item_id": item_id}
 
 
 @mcp.tool
 def remove_line_item(id: str) -> dict:
-    """Remove a line item from a ledger."""
-    return {"status": "not_implemented"}
+    """Remove a line item from a ledger.
+
+    The active user must own the ledger the item belongs to.  If any
+    ``transaction_entries`` reference this item the deletion is refused —
+    delete the entries first or re-route those transactions.
+    """
+    uid = get_active_user_id(server.paths.DB_PATH)
+    conn = get_db(server.paths.DB_PATH)
+    try:
+        if uid:
+            row = conn.execute(
+                """
+                SELECT li.id FROM line_items li
+                JOIN ledgers l ON l.id = li.ledger_id
+                WHERE li.id = ? AND (l.user_id = ? OR l.user_id IS NULL)
+                """,
+                (id, uid),
+            ).fetchone()
+        else:
+            row = conn.execute("SELECT id FROM line_items WHERE id = ?", (id,)).fetchone()
+        if row is None:
+            return {
+                "status": "error",
+                "message": f"Line item '{id}' not found or not owned by active user",
+            }
+
+        entry_count = conn.execute(
+            "SELECT COUNT(*) FROM transaction_entries WHERE line_item_id = ?",
+            (id,),
+        ).fetchone()[0]
+        if entry_count > 0:
+            return {
+                "status": "error",
+                "message": "Line item has attached entries. Delete them first or re-route transactions.",
+            }
+
+        conn.execute("DELETE FROM line_items WHERE id = ?", (id,))
+        conn.commit()
+    finally:
+        conn.close()
+
+    return {"status": "ok"}
 
 
 # ---------------------------------------------------------------------------
