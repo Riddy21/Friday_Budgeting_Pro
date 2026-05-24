@@ -55,6 +55,9 @@ def init_db(path: str | Path) -> None:
         # Migration: user_id columns (#131 — multi-profile support)
         # These are guarded so they are no-ops if the column already exists.
         _add_col_if_missing(conn, "bank_connections", "user_id", "TEXT")
+
+        # Migration: plaid_env (#40 — sandbox vs production env separation)
+        _add_col_if_missing(conn, "bank_connections", "plaid_env", "TEXT NOT NULL DEFAULT 'sandbox'")
         _add_col_if_missing(conn, "ledgers", "user_id", "TEXT")
         _add_col_if_missing(conn, "classification_hints", "user_id", "TEXT")
         _add_col_if_missing(conn, "sessions", "user_id", "TEXT")

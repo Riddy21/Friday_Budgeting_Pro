@@ -116,6 +116,23 @@ def env(tmp_path, monkeypatch):
         "line_item_id": line_item_id,
     }
 
+def _plaid_factory(sync_fn):
+    """Return a PlaidProvider-compatible class that delegates sync_transactions to sync_fn.
+
+    Patching ``server.main.PlaidProvider`` with this factory ensures the mock
+    is used regardless of module reloads in other test files.
+    """
+    class _MockPlaidProvider:
+        def __init__(self, env=None):
+            import os as _os
+            self.env = (env or _os.environ.get("PLAID_ENV", "sandbox")).lower()
+
+        def sync_transactions(self, access_token, cursor=None):
+            return sync_fn(access_token, cursor)
+
+    return _MockPlaidProvider
+
+
 
 # ---------------------------------------------------------------------------
 # Test 1: normal sync
@@ -125,7 +142,7 @@ _HEALTH_NOOP = {"checked": 0, "active": 0, "needs_reauth": 0, "pending_expiratio
 
 
 def test_sync_normal(env, monkeypatch):
-    monkeypatch.setattr("server.main._plaid.sync_transactions", _mock_sync_ok)
+    monkeypatch.setattr("server.main.PlaidProvider", _plaid_factory(_mock_sync_ok))
     monkeypatch.setattr("server.crypto.decrypt", lambda x: x)
     monkeypatch.setattr(
         "server.health_monitor.check_all_connections", lambda db, plaid_provider=None: _HEALTH_NOOP
@@ -174,7 +191,7 @@ def test_sync_item_login_required(env, monkeypatch):
     def _raise_reauth(access_token, cursor=None):
         raise _FakePlaidError("ITEM_LOGIN_REQUIRED")
 
-    monkeypatch.setattr("server.main._plaid.sync_transactions", _raise_reauth)
+    monkeypatch.setattr("server.main.PlaidProvider", _plaid_factory(_raise_reauth))
     monkeypatch.setattr("server.crypto.decrypt", lambda x: x)
     monkeypatch.setattr(
         "server.health_monitor.check_all_connections", lambda db, plaid_provider=None: _HEALTH_NOOP
@@ -201,7 +218,7 @@ def test_sync_item_login_required(env, monkeypatch):
 
 
 def test_sync_idempotent(env, monkeypatch):
-    monkeypatch.setattr("server.main._plaid.sync_transactions", _mock_sync_ok)
+    monkeypatch.setattr("server.main.PlaidProvider", _plaid_factory(_mock_sync_ok))
     monkeypatch.setattr("server.crypto.decrypt", lambda x: x)
     monkeypatch.setattr(
         "server.health_monitor.check_all_connections", lambda db, plaid_provider=None: _HEALTH_NOOP
@@ -224,7 +241,7 @@ def test_sync_idempotent(env, monkeypatch):
 def test_sync_lock_contention(env, monkeypatch):
     from server.sync_lock import acquire_sync_lock
 
-    monkeypatch.setattr("server.main._plaid.sync_transactions", _mock_sync_ok)
+    monkeypatch.setattr("server.main.PlaidProvider", _plaid_factory(_mock_sync_ok))
     monkeypatch.setattr("server.crypto.decrypt", lambda x: x)
     monkeypatch.setattr(
         "server.health_monitor.check_all_connections", lambda db, plaid_provider=None: _HEALTH_NOOP
@@ -280,7 +297,7 @@ def _mock_sync_with_accounts(access_token, cursor=None):
 
 def test_sync_saves_account_name_and_type(env, monkeypatch):
     """bank_accounts.name and .type are populated from the Plaid accounts list."""
-    monkeypatch.setattr("server.main._plaid.sync_transactions", _mock_sync_with_accounts)
+    monkeypatch.setattr("server.main.PlaidProvider", _plaid_factory(_mock_sync_with_accounts))
     monkeypatch.setattr("server.crypto.decrypt", lambda x: x)
     monkeypatch.setattr(
         "server.health_monitor.check_all_connections",
@@ -306,7 +323,7 @@ def test_sync_saves_account_name_and_type(env, monkeypatch):
 
 def test_sync_account_name_type_idempotent(env, monkeypatch):
     """Syncing twice does not blank out already-populated name/type."""
-    monkeypatch.setattr("server.main._plaid.sync_transactions", _mock_sync_with_accounts)
+    monkeypatch.setattr("server.main.PlaidProvider", _plaid_factory(_mock_sync_with_accounts))
     monkeypatch.setattr("server.crypto.decrypt", lambda x: x)
     monkeypatch.setattr(
         "server.health_monitor.check_all_connections",
@@ -358,7 +375,7 @@ def test_sync_account_no_official_name_falls_back_to_name(env, monkeypatch):
             "accounts": accounts_no_official,
         }
 
-    monkeypatch.setattr("server.main._plaid.sync_transactions", _mock_no_official)
+    monkeypatch.setattr("server.main.PlaidProvider", _plaid_factory(_mock_no_official))
     monkeypatch.setattr("server.crypto.decrypt", lambda x: x)
     monkeypatch.setattr(
         "server.health_monitor.check_all_connections",
@@ -389,7 +406,7 @@ def test_sync_no_accounts_in_response_does_not_crash(env, monkeypatch):
             # 'accounts' key is absent
         }
 
-    monkeypatch.setattr("server.main._plaid.sync_transactions", _mock_no_accounts)
+    monkeypatch.setattr("server.main.PlaidProvider", _plaid_factory(_mock_no_accounts))
     monkeypatch.setattr("server.crypto.decrypt", lambda x: x)
     monkeypatch.setattr(
         "server.health_monitor.check_all_connections",

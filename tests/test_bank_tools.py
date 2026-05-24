@@ -44,7 +44,7 @@ def patch_crypto(monkeypatch):
 
 def test_start_link_returns_url_with_link_token(db_path):
     with patch(
-        "server.main._plaid.create_link_token", return_value="link-token-abc"
+        "server.providers.plaid.PlaidProvider.create_link_token", return_value="link-token-abc"
     ) as mock_create:
         from server.main import start_link
 
@@ -64,7 +64,7 @@ def test_complete_link_inserts_row_and_returns_connection_id(db_path):
     exchange_result = {"access_token": "access-sandbox-xyz", "item_id": "item-abc"}
 
     with patch(
-        "server.main._plaid.exchange_public_token", return_value=exchange_result
+        "server.providers.plaid.PlaidProvider.exchange_public_token", return_value=exchange_result
     ) as mock_exchange:
         from server.main import complete_link
 
@@ -98,7 +98,7 @@ def test_list_connections_returns_all_without_encrypted_token(db_path):
     exchange_result_2 = {"access_token": "access-2", "item_id": "item-2"}
 
     with patch(
-        "server.main._plaid.exchange_public_token",
+        "server.providers.plaid.PlaidProvider.exchange_public_token",
         side_effect=[exchange_result_1, exchange_result_2],
     ):
         from server.main import complete_link, list_connections
@@ -129,7 +129,9 @@ def test_list_connections_returns_all_without_encrypted_token(db_path):
 def test_disconnect_removes_connection_and_sync_cursor(db_path):
     exchange_result = {"access_token": "access-del", "item_id": "item-del"}
 
-    with patch("server.main._plaid.exchange_public_token", return_value=exchange_result):
+    with patch(
+        "server.providers.plaid.PlaidProvider.exchange_public_token", return_value=exchange_result
+    ):
         from server.main import complete_link
 
         result = complete_link("public-token-del")
@@ -171,7 +173,7 @@ def test_disconnect_removes_connection_and_sync_cursor(db_path):
 
 def test_refresh_connection_returns_url_with_link_token(db_path):
     with patch(
-        "server.main._plaid.create_link_token", return_value="link-update-token"
+        "server.providers.plaid.PlaidProvider.create_link_token", return_value="link-update-token"
     ) as mock_create:
         from server.main import refresh_connection
 

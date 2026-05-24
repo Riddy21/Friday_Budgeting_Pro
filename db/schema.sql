@@ -17,7 +17,8 @@ CREATE TABLE IF NOT EXISTS bank_connections (
   institution_name TEXT,
   status TEXT DEFAULT 'active',  -- active | needs_reauth
   last_synced_at INTEGER,
-  user_id TEXT REFERENCES users(id)
+  user_id TEXT REFERENCES users(id),
+  plaid_env TEXT NOT NULL DEFAULT 'sandbox'  -- sandbox | development | production
 );
 
 CREATE TABLE IF NOT EXISTS bank_accounts (
