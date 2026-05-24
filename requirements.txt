@@ -8,6 +8,7 @@ uvicorn>=0.29
 openpyxl>=3.1
 jinja2>=3.0
 python-multipart>=0.0.7
+argon2-cffi>=23.1
 # Test deps:
 pytest>=7.0
 httpx>=0.27

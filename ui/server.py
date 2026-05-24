@@ -46,11 +46,15 @@ import server.paths as _paths
 from server.db import get_db, init_db
 from ui.auth import (
     SESSION_COOKIE,
+    check_rate_limit,
     check_session,
+    clear_failed_attempts,
     create_session,
     delete_session,
     get_password_hash,
     hash_password,
+    prune_old_login_attempts,
+    record_login_attempt,
     set_password_hash,
     verify_password,
 )
@@ -386,11 +390,22 @@ async def login_post(request: Request):
 
     On failure: re-render login.html with an error.
 
-    Rate limiting: TODO (#37) — login_attempts table is populated below so
-    #37 can add enforcement without a schema change.
+    Rate limiting (#37): rejects with 429 after 5 failed attempts in 5 min.
+    Opportunistically prunes login_attempts rows older than 30 days.
     """
     if not _password_is_set():
         return _redirect("/setup")
+
+    # Opportunistic cleanup of old attempts (30-day horizon).
+    prune_old_login_attempts(_db_path())
+
+    # Enforce rate limit before touching the password.
+    blocked, retry_after = check_rate_limit(_db_path())
+    if blocked:
+        return JSONResponse(
+            status_code=429,
+            content={"error": "too_many_attempts", "retry_after_seconds": retry_after},
+        )
 
     form = await request.form()
     password = (form.get("password") or "")
@@ -398,8 +413,8 @@ async def login_post(request: Request):
     stored_hash = get_password_hash(_db_path())
     success = stored_hash is not None and verify_password(password, stored_hash)
 
-    # Record attempt (rate-limiting hook for #37).
-    _record_login_attempt(success)
+    # Record this attempt.
+    record_login_attempt(_db_path(), success)
 
     if not success:
         return templates.TemplateResponse(
@@ -408,6 +423,9 @@ async def login_post(request: Request):
             {"error": "Incorrect password."},
             status_code=200,
         )
+
+    # Successful login — clear the recent failure counter.
+    clear_failed_attempts(_db_path())
 
     # Create session.
     ua = request.headers.get("user-agent")
@@ -421,21 +439,6 @@ async def login_post(request: Request):
         samesite="strict",
     )
     return response
-
-
-def _record_login_attempt(success: bool) -> None:
-    """Insert a row into login_attempts so #37 can add rate limiting."""
-    conn = get_db(_db_path())
-    try:
-        conn.execute(
-            "INSERT INTO login_attempts (attempted_at, success) VALUES (?, ?)",
-            (int(time.time()), 1 if success else 0),
-        )
-        conn.commit()
-    except Exception:
-        pass
-    finally:
-        conn.close()
 
 
 # ── /logout ──────────────────────────────────────────────────────────────────
