@@ -43,6 +43,17 @@ finish setup.
 
 ---
 
+## Connecting to Plaid
+
+1. Create a free account at https://dashboard.plaid.com
+2. Team Settings → Keys → copy your **Client ID** and **Production Secret**
+3. Ask your OpenClaw agent: `Set up my Plaid credentials — client ID is <your_id>, secret is <your_secret>`
+4. Agent writes the config and you’re ready to connect banks via the setup wizard.
+
+For sandbox testing, use `env=sandbox` and your sandbox secret instead.
+
+---
+
 ## First Run
 
 When you visit `http://127.0.0.1:6789` for the first time, you see a

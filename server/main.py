@@ -12,6 +12,11 @@ import time as _time
 import uuid
 from typing import List, Optional
 
+import logging
+import os
+import tempfile
+from pathlib import Path
+
 import fastmcp
 
 import server.excel_export as excel_export
@@ -27,6 +32,11 @@ import server.health_monitor
 _plaid = PlaidProvider()
 
 mcp = fastmcp.FastMCP("friday-budgeting-pro")
+
+_logger = logging.getLogger(__name__)
+
+# Project root — tests monkeypatch this to a tmp dir so .env writes stay isolated.
+project_root: Path = Path(__file__).resolve().parent.parent
 
 # ---------------------------------------------------------------------------
 # Setup tools
@@ -806,6 +816,83 @@ def undo_auto_promoted_rule(rule_id: str) -> dict:
         return {"ok": True, "rule_deleted": True, "entries_reverted": entries_reverted}
     finally:
         conn.close()
+
+
+# ---------------------------------------------------------------------------
+# Configuration tools
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool
+def configure_plaid(
+    client_id: str,
+    secret: str,
+    env: str = "production",
+) -> dict:
+    """Write Plaid credentials to .env and update the running process environment.
+
+    Parameters
+    ----------
+    client_id : str
+        Plaid client ID (non-empty).
+    secret : str
+        Plaid secret for the target environment (non-empty).
+    env : str
+        One of ``sandbox``, ``development``, or ``production``.
+        Defaults to ``production``.
+
+    The .env file is written atomically (temp file + os.replace) with mode
+    0o600.  If .env already exists it is fully replaced, not appended.
+    os.environ is updated immediately so the next sync() call picks up the
+    new credentials without a daemon restart.
+
+    Returns
+    -------
+    dict
+        ``{"ok": True, "env": <env>}``
+    """
+    _VALID_ENVS = {"sandbox", "development", "production"}
+
+    if not client_id:
+        raise ValueError("client_id must be non-empty")
+    if not secret:
+        raise ValueError("secret must be non-empty")
+    if env not in _VALID_ENVS:
+        raise ValueError(
+            f"env must be one of {sorted(_VALID_ENVS)!r}, got {env!r}"
+        )
+
+    env_path = project_root / ".env"
+    content = (
+        f"PLAID_CLIENT_ID={client_id}\n"
+        f"PLAID_SECRET={secret}\n"
+        f"PLAID_ENV={env}\n"
+    )
+
+    # Atomic write: write to a sibling temp file, then os.replace into place.
+    env_path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp_path_str = tempfile.mkstemp(dir=env_path.parent, prefix=".env.tmp")
+    try:
+        with os.fdopen(fd, "w") as fh:
+            fh.write(content)
+    except Exception:
+        try:
+            os.unlink(tmp_path_str)
+        except OSError:
+            pass
+        raise
+
+    os.replace(tmp_path_str, env_path)
+    os.chmod(env_path, 0o600)
+
+    # Update the running process so the next sync() call picks up new creds.
+    os.environ["PLAID_CLIENT_ID"] = client_id
+    os.environ["PLAID_SECRET"] = secret
+    os.environ["PLAID_ENV"] = env
+
+    _logger.info("configure_plaid: wrote .env (env=%s)", env)
+
+    return {"ok": True, "env": env}
 
 
 # ---------------------------------------------------------------------------
