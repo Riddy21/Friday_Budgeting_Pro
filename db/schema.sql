@@ -17,8 +17,7 @@ CREATE TABLE IF NOT EXISTS bank_connections (
   institution_name TEXT,
   status TEXT DEFAULT 'active',  -- active | needs_reauth
   last_synced_at INTEGER,
-  user_id TEXT REFERENCES users(id),
-  plaid_env TEXT NOT NULL DEFAULT 'sandbox'  -- sandbox | development | production
+  user_id TEXT REFERENCES users(id)
 );
 
 CREATE TABLE IF NOT EXISTS bank_accounts (
@@ -35,8 +34,7 @@ CREATE TABLE IF NOT EXISTS bank_accounts (
 CREATE TABLE IF NOT EXISTS ledgers (
   id TEXT PRIMARY KEY,
   name TEXT NOT NULL,
-  user_id TEXT REFERENCES users(id),
-  plaid_env TEXT NOT NULL DEFAULT 'sandbox'  -- sandbox | development | production
+  user_id TEXT REFERENCES users(id)
 );
 
 CREATE TABLE IF NOT EXISTS line_items (
@@ -80,8 +78,7 @@ CREATE TABLE IF NOT EXISTS routing_rules (
 CREATE TABLE IF NOT EXISTS classification_hints (
   id TEXT PRIMARY KEY,
   text TEXT NOT NULL,
-  user_id TEXT REFERENCES users(id),
-  plaid_env TEXT NOT NULL DEFAULT 'sandbox'  -- sandbox | development | production
+  user_id TEXT REFERENCES users(id)
 );
 
 -- Plaid sync cursors
@@ -110,8 +107,7 @@ CREATE TABLE IF NOT EXISTS sessions (
   last_seen_at INTEGER NOT NULL,
   expires_at INTEGER NOT NULL,  -- TODO: unused; kept for backward compat with existing DBs
   user_agent TEXT,
-  user_id TEXT REFERENCES users(id),
-  plaid_env TEXT NOT NULL DEFAULT 'sandbox'  -- sandbox | development | production
+  user_id TEXT REFERENCES users(id)
 );
 
 -- Notification log — every send() call writes a row; the UI reads this for banners
