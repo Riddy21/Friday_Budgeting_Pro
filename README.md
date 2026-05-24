@@ -146,8 +146,8 @@ Cursor, mcporter on the CLI) work too — anywhere you can call MCP tools.
 - 📁 **Your data lives in `~/.friday-bp/data.db`** (SQLite, yours)
 - 🚫 **No telemetry**, no cloud sync, no third parties except Plaid + your
   chosen LLM
-- ⏱️ **Sessions persist 7 days idle**, then re-login required
-- 🛡️ **Rate-limited logins** (5 failed attempts → lockout)
+- ⏱️ **Sessions persist until you log out** — no idle timeout
+- 🔄 **Bank sync runs in the background regardless** of whether you’re logged into the UI
 
 See [ARCHITECTURE.md § Security](./ARCHITECTURE.md#security) for the full
 threat model.

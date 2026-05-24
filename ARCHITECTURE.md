@@ -576,9 +576,11 @@ you set on first launch.
   Never sent back to the browser.
 - **Login flow:** GET `/login` → POST with password → server validates →
   sets HttpOnly + SameSite=Strict session cookie → redirects to `/profile`.
-- **Session lifetime:** 7 days idle, server-side store in the `sessions`
-  table so they survive daemon restarts.
-- **Rate limit:** 5 failed attempts in 5 minutes → lockout.
+- **Session lifetime:** permanent until you explicitly log out. No idle
+  timeout. The daemon syncs in the background whether or not you have a
+  browser open — the session state is irrelevant to syncing.
+- **No rate limiting.** This is a local single-user app on your own machine.
+  Anyone who can reach 127.0.0.1 already has access to your Mac.
 - **Password reset (forgotten password):** in-UI "forgot password" link
   generates a recovery token written to `~/.friday-bp/recovery.txt` (file
   perms 0600). User opens that file from a terminal, copies the token,
