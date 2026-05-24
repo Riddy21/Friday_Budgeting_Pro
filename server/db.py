@@ -46,6 +46,61 @@ def init_db(path: str | Path) -> None:
         conn.executescript(sql)
         conn.commit()
 
+        # Seed default classification_rules if none exist yet
+        default_count = conn.execute(
+            "SELECT COUNT(*) FROM classification_rules WHERE is_default = 1"
+        ).fetchone()[0]
+        if default_count == 0:
+            import uuid as _uuid
+
+            now = int(_time.time())
+            _DEFAULT_RULES = [
+                (
+                    1,
+                    "Pending skip",
+                    "Skip any transaction that is still pending",
+                    "skip",
+                ),
+                (
+                    10,
+                    "Internal transfer",
+                    "If the same amount leaves one account and arrives at another of mine within 3 days, mark both as Transfer",
+                    "transfer",
+                ),
+                (
+                    20,
+                    "Investment contribution",
+                    "Outflows to Wealthsimple, Questrade, or any investment platform are Transfer/Savings, not spending",
+                    "transfer",
+                ),
+                (
+                    30,
+                    "Credit card payment",
+                    "A payment from chequing that matches a credit card balance is a Transfer — the individual charges are already tracked",
+                    "transfer",
+                ),
+                (
+                    40,
+                    "Salary/payroll",
+                    "Transactions tagged as payroll or salary by the bank are Income",
+                    "income",
+                ),
+                (
+                    50,
+                    "Bank fees",
+                    "Monthly account fees and bank charges are Bank Fees",
+                    "spending",
+                ),
+            ]
+            for priority, name, description, rule_type in _DEFAULT_RULES:
+                conn.execute(
+                    "INSERT INTO classification_rules "
+                    "(id, name, description, rule_type, line_item_id, priority, is_default, enabled, created_at) "
+                    "VALUES (?, ?, ?, ?, NULL, ?, 1, 1, ?)",
+                    (str(_uuid.uuid4()), name, description, rule_type, priority, now),
+                )
+            conn.commit()
+
         # Migration: bank_accounts.description (added in #127)
         ba_cols = {row[1] for row in conn.execute("PRAGMA table_info(bank_accounts)")}
         if "description" not in ba_cols:

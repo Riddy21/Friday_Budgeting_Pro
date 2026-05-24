@@ -1623,6 +1623,254 @@ def reset_ui_password() -> dict:
 
 
 # ---------------------------------------------------------------------------
+# Classification rules tools
+# ---------------------------------------------------------------------------
+
+_VALID_RULE_TYPES = {"transfer", "savings", "spending", "income", "skip"}
+
+
+@mcp.tool
+def list_rules() -> dict:
+    """Return all classification rules sorted by priority ascending.
+
+    Returns
+    -------
+    dict
+        ``{"rules": [{id, name, description, rule_type, line_item_id,
+        priority, is_default, enabled, created_at}, ...]}``
+    """
+    conn = get_db(server.paths.DB_PATH)
+    try:
+        rows = conn.execute(
+            "SELECT id, name, description, rule_type, line_item_id, "
+            "priority, is_default, enabled, created_at "
+            "FROM classification_rules ORDER BY priority ASC"
+        ).fetchall()
+        return {
+            "rules": [
+                {
+                    "id": row["id"],
+                    "name": row["name"],
+                    "description": row["description"],
+                    "rule_type": row["rule_type"],
+                    "line_item_id": row["line_item_id"],
+                    "priority": row["priority"],
+                    "is_default": bool(row["is_default"]),
+                    "enabled": bool(row["enabled"]),
+                    "created_at": row["created_at"],
+                }
+                for row in rows
+            ]
+        }
+    finally:
+        conn.close()
+
+
+@mcp.tool
+def add_rule(
+    name: str,
+    description: str,
+    rule_type: str,
+    line_item_id: str = None,
+    priority: int = 100,
+) -> dict:
+    """Create a new classification rule.
+
+    Parameters
+    ----------
+    name : str
+        Short display name for the rule.
+    description : str
+        Natural language description of what this rule matches and does.
+    rule_type : str
+        One of ``'transfer'``, ``'savings'``, ``'spending'``, ``'income'``,
+        or ``'skip'``.
+    line_item_id : str, optional
+        Target line item ID (optional).
+    priority : int, optional
+        Evaluation order — lower numbers run first.  Defaults to 100.
+
+    Returns
+    -------
+    dict
+        ``{"status": "ok", "rule_id": "<uuid>"}``
+    """
+    if rule_type not in _VALID_RULE_TYPES:
+        raise ValueError(
+            f"rule_type must be one of {sorted(_VALID_RULE_TYPES)!r}, got {rule_type!r}"
+        )
+    rule_id = str(uuid.uuid4())
+    now = int(_time.time())
+    conn = get_db(server.paths.DB_PATH)
+    try:
+        conn.execute(
+            "INSERT INTO classification_rules "
+            "(id, name, description, rule_type, line_item_id, priority, is_default, enabled, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, 0, 1, ?)",
+            (rule_id, name.strip(), description.strip(), rule_type, line_item_id, priority, now),
+        )
+        conn.commit()
+        return {"status": "ok", "rule_id": rule_id}
+    finally:
+        conn.close()
+
+
+@mcp.tool
+def update_rule(
+    id: str,
+    name: str = None,
+    description: str = None,
+    rule_type: str = None,
+    priority: int = None,
+    enabled: bool = None,
+    line_item_id: str = None,
+) -> dict:
+    """Update one or more fields on an existing classification rule.
+
+    Only the fields that are explicitly provided are changed.  Any field
+    left as ``None`` is untouched.
+
+    Returns
+    -------
+    dict
+        ``{"status": "ok"}`` or ``{"status": "error", "message": "..."}``
+    """
+    if rule_type is not None and rule_type not in _VALID_RULE_TYPES:
+        raise ValueError(
+            f"rule_type must be one of {sorted(_VALID_RULE_TYPES)!r}, got {rule_type!r}"
+        )
+    updates = []
+    params = []
+    if name is not None:
+        updates.append("name = ?")
+        params.append(name.strip())
+    if description is not None:
+        updates.append("description = ?")
+        params.append(description.strip())
+    if rule_type is not None:
+        updates.append("rule_type = ?")
+        params.append(rule_type)
+    if priority is not None:
+        updates.append("priority = ?")
+        params.append(priority)
+    if enabled is not None:
+        updates.append("enabled = ?")
+        params.append(1 if enabled else 0)
+    if line_item_id is not None:
+        updates.append("line_item_id = ?")
+        params.append(line_item_id)
+    if not updates:
+        return {"status": "ok"}  # nothing to do
+    params.append(id)
+    conn = get_db(server.paths.DB_PATH)
+    try:
+        cursor = conn.execute(
+            f"UPDATE classification_rules SET {', '.join(updates)} WHERE id = ?",
+            params,
+        )
+        conn.commit()
+        if cursor.rowcount == 0:
+            return {"status": "error", "message": f"Rule not found: {id}"}
+        return {"status": "ok"}
+    finally:
+        conn.close()
+
+
+@mcp.tool
+def reorder_rules(rule_ids: list) -> dict:
+    """Assign sequential priorities (10, 20, 30, …) to the supplied rule IDs.
+
+    The first ID in the list gets priority 10, second gets 20, etc.  Any
+    rules **not** in the list are left unchanged.
+
+    Returns
+    -------
+    dict
+        ``{"status": "ok"}``
+    """
+    conn = get_db(server.paths.DB_PATH)
+    try:
+        with db_txn(conn):
+            for i, rule_id in enumerate(rule_ids):
+                conn.execute(
+                    "UPDATE classification_rules SET priority = ? WHERE id = ?",
+                    ((i + 1) * 10, rule_id),
+                )
+        return {"status": "ok"}
+    finally:
+        conn.close()
+
+
+@mcp.tool
+def disable_rule(id: str) -> dict:
+    """Disable a classification rule so it is skipped during evaluation.
+
+    Returns
+    -------
+    dict
+        ``{"status": "ok"}`` or ``{"status": "error", "message": "..."}``
+    """
+    conn = get_db(server.paths.DB_PATH)
+    try:
+        cursor = conn.execute("UPDATE classification_rules SET enabled = 0 WHERE id = ?", (id,))
+        conn.commit()
+        if cursor.rowcount == 0:
+            return {"status": "error", "message": f"Rule not found: {id}"}
+        return {"status": "ok"}
+    finally:
+        conn.close()
+
+
+@mcp.tool
+def enable_rule(id: str) -> dict:
+    """Re-enable a previously disabled classification rule.
+
+    Returns
+    -------
+    dict
+        ``{"status": "ok"}`` or ``{"status": "error", "message": "..."}``
+    """
+    conn = get_db(server.paths.DB_PATH)
+    try:
+        cursor = conn.execute("UPDATE classification_rules SET enabled = 1 WHERE id = ?", (id,))
+        conn.commit()
+        if cursor.rowcount == 0:
+            return {"status": "error", "message": f"Rule not found: {id}"}
+        return {"status": "ok"}
+    finally:
+        conn.close()
+
+
+@mcp.tool
+def delete_rule(id: str) -> dict:
+    """Delete a user-created classification rule.
+
+    Default rules (``is_default=1``) cannot be deleted — use
+    :func:`disable_rule` to suppress them instead.
+
+    Returns
+    -------
+    dict
+        ``{"status": "ok"}`` or
+        ``{"status": "error", "message": "Cannot delete default rule"}``
+    """
+    conn = get_db(server.paths.DB_PATH)
+    try:
+        row = conn.execute(
+            "SELECT is_default FROM classification_rules WHERE id = ?", (id,)
+        ).fetchone()
+        if row is None:
+            return {"status": "error", "message": f"Rule not found: {id}"}
+        if row["is_default"]:
+            return {"status": "error", "message": "Cannot delete default rule"}
+        conn.execute("DELETE FROM classification_rules WHERE id = ?", (id,))
+        conn.commit()
+        return {"status": "ok"}
+    finally:
+        conn.close()
+
+
+# ---------------------------------------------------------------------------
 # UI URL tool
 # ---------------------------------------------------------------------------
 

@@ -159,6 +159,24 @@ Every transaction goes through a three-tier classifier:
 After 3 successful classifications of the same merchant, it becomes a
 Tier 1 rule automatically. The longer you use it, the less it asks.
 
+### Classification Rules
+
+Friday ships with **6 built-in (default) classification rules** that run before
+the LLM sees a transaction.  They handle the most common patterns automatically:
+
+| Priority | Rule | What it does |
+|----------|------|--------------|
+| 1 | **Pending skip** | Skips any transaction still marked pending |
+| 10 | **Internal transfer** | Flags same-amount cross-account moves within 3 days as Transfer |
+| 20 | **Investment contribution** | Marks outflows to Wealthsimple, Questrade, etc. as Transfer/Savings |
+| 30 | **Credit card payment** | Identifies chequing→credit payments as Transfer (charges already tracked) |
+| 40 | **Salary / payroll** | Marks bank-tagged payroll transactions as Income |
+| 50 | **Bank fees** | Marks monthly account fees as Bank Fees (spending) |
+
+Default rules can be **disabled** but not deleted.  You can add your own rules
+(priority 100+) and reorder them via MCP tools: `list_rules`, `add_rule`,
+`update_rule`, `reorder_rules`, `disable_rule`, `enable_rule`, `delete_rule`.
+
 ---
 
 ## With OpenClaw (and any other MCP client)
