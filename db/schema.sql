@@ -88,11 +88,12 @@ CREATE TABLE IF NOT EXISTS app_config (
 );
 
 -- UI session cookies (server-side store, survives restarts)
+-- Sessions are permanent until explicit logout (no idle expiry per d4403c0).
 CREATE TABLE IF NOT EXISTS sessions (
   id TEXT PRIMARY KEY,         -- session token (random 32 bytes hex)
   created_at INTEGER NOT NULL,
   last_seen_at INTEGER NOT NULL,
-  expires_at INTEGER NOT NULL,
+  expires_at INTEGER NOT NULL,  -- TODO: unused; kept for backward compat with existing DBs
   user_agent TEXT
 );
 
@@ -118,9 +119,4 @@ CREATE TABLE IF NOT EXISTS auto_promoted_rules_log (
   created_at INTEGER NOT NULL
 );
 
--- Login attempt log for rate limiting
-CREATE TABLE IF NOT EXISTS login_attempts (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  attempted_at INTEGER NOT NULL,
-  success INTEGER NOT NULL     -- 0 = failed, 1 = success
-);
+-- login_attempts table removed (rate limiting dropped per d4403c0 — single-user local app)
