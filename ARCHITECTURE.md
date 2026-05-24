@@ -440,20 +440,23 @@ engine without any user involvement:
 This is the only adapter with no human on the other end. It keeps the
 system working while you're not looking.
 
-### Pages (v0.1)
+### Pages (v0.1+)
 
 ```
-  /              →  if no password set: /setup; else /profile
+  /              →  if no password set: /setup; else /dashboard
   /setup         →  first-run wizard (one-time, locked after completion)
   /login         →  password login
-  /profile       →  settings, password, sync/export actions, Linked Accounts list
+  /dashboard     →  main landing: last synced, Sync Now, Export to Excel, future charts
+  /accounts      →  bank accounts management (stub — #158 will implement)
+  /settings      →  app + profile settings (stub — #159 will implement)
+  /profile       →  notification pref, Linked Accounts, account descriptions
   /export/excel  →  GET — stream .xlsx workbook as browser download (auth required)
   /ledgers       →  minimal ledger / line-item editor
   /link          →  Plaid Link flow (used by setup wizard, profile, MCP links)
 ```
 
-**Not in v0.1:** transaction review, classification rules editor, dashboard
-with charts. Those still live in MCP (or are future tickets).
+**Not yet implemented:** full Accounts page (#158), full Settings page (#159),
+transaction review, classification rules editor, charts.
 
 ### What each page does
 
@@ -461,28 +464,34 @@ with charts. Those still live in MCP (or are future tickets).
 1. Welcome + set password
 2. Pick notification preference (OpenClaw chat / macOS notifications / in-UI)
 3. Connect first bank via Plaid Link
-4. Done — link to `/profile`
+4. Done — redirects to `/dashboard`
 
 After completion, `/setup` returns 404. Re-running setup means resetting
 the DB (a future operation, not a v0.1 feature).
 
 **Login** (`/login`) — just the password form
-- POST validates, sets HttpOnly + SameSite=Strict session cookie, redirects to `/profile`
+- POST validates, sets HttpOnly + SameSite=Strict session cookie, redirects to `/dashboard`
 - Rate-limited (5 failed attempts in 5 min → lockout)
 - Has a **Forgot password** link → recovery-file flow (#60)
 
-**Profile** (`/profile`) — the main page
-- **Account:** display name (editable)
+**Dashboard** (`/dashboard`) — main landing page after login
+- **Last synced:** timestamp from sync_cursors table
+- **Sync Now** button → triggers sync
+- **Export to Excel** button → links to `/export/excel`
+- **Coming soon** placeholder for charts
+
+**Profile** (`/profile`) — settings and linked accounts
 - **Notifications:** chosen channel (radio: OpenClaw chat / macOS notifications / in-UI only)
-- **Classifier:** LLM confidence threshold (slider 0.5–0.95, default 0.75)
-- **Security:** change password (asks for old + new), **Log out** button
-- **System (read-only):** Plaid env, DB path, daemon uptime, last sync time
-- **Quick actions:** **Sync now** button, **Export to Excel** button
+- **Quick actions:** Sync now, Export Excel, View Ledgers
 - **Linked Accounts** (compact list):
   - One row per connected bank: name · status pill (🟢 / 🟡 / 🔴) ·
     last sync · **Reconnect** (when needed) · **Disconnect**
   - **+ Connect a bank** button at the bottom of the section
-  - Minimal layout — no logos, no expandable per-account breakdown
+  - Per-account descriptions for the AI classifier
+
+**Accounts** (`/accounts`) — stub page (#158 will implement full accounts management)
+
+**Settings** (`/settings`) — stub page (#159 will implement profile/app settings)
 
 **Ledgers** (`/ledgers`) — minimal structure editor
 - One row per ledger (default: Personal). Click a ledger to view items.
@@ -538,7 +547,7 @@ you set on first launch.
 - **Password storage:** argon2id hash in `app_config.ui_password_hash`.
   Never sent back to the browser.
 - **Login flow:** GET `/login` → POST with password → server validates →
-  sets HttpOnly + SameSite=Strict session cookie → redirects to `/profile`.
+  sets HttpOnly + SameSite=Strict session cookie → redirects to `/dashboard`.
 - **Session lifetime:** permanent until you explicitly log out. No idle
   timeout. The daemon syncs in the background whether or not you have a
   browser open — the session state is irrelevant to syncing.

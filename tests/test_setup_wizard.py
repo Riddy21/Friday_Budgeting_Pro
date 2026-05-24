@@ -315,7 +315,7 @@ class TestSetupStep4:
             }
             r = client.post("/setup/4", data={})
         assert r.status_code == 302
-        assert r.headers["location"] == "/profile"
+        assert r.headers["location"] == "/dashboard"
 
     def test_session_allows_profile_access_after_setup(self, client):
         """Session set during step 1 should let the client reach /profile."""

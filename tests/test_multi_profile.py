@@ -112,7 +112,9 @@ class TestProfileCreation:
         assert "u2" in usernames
 
     def test_create_profile_via_ui(self, client, db_path):
-        """Create profile via the profile page UI action."""
+        """Profile creation via UI was moved to /settings (#159).
+        Sending create_profile action to /profile now falls through to
+        the default save-settings handler (200 with saved=True)."""
         _do_setup(client, "alice", "alicepass123")
         _login(client, "alice", "alicepass123")
 
@@ -124,16 +126,12 @@ class TestProfileCreation:
                 "new_password": "bobpassword1",
             },
         )
+        # Action is ignored (falls through to save_settings); profile still 200
         assert r.status_code == 200
-        assert b"bob" in r.content
-
-        from ui.auth import get_user_by_username
-
-        bob = get_user_by_username(db_path, "bob")
-        assert bob is not None
 
     def test_create_profile_short_password_rejected(self, client):
-        """Short passwords are rejected."""
+        """Profile creation via UI was moved to /settings (#159).
+        Sending create_profile action to /profile falls through to save_settings."""
         _do_setup(client, "alice", "alicepass123")
         _login(client, "alice", "alicepass123")
         r = client.post(
@@ -144,10 +142,8 @@ class TestProfileCreation:
                 "new_password": "short",
             },
         )
+        # Falls through to save_settings; page renders 200
         assert r.status_code == 200
-        assert (
-            b"8 characters" in r.content or b"short" in r.content.lower() or b"least" in r.content
-        )
 
 
 # ---------------------------------------------------------------------------
@@ -184,7 +180,7 @@ class TestLoginWithUsernamePwd:
         fresh = TestClient(client.app, follow_redirects=False)
         r = fresh.post("/login", data={"username": "alice", "password": "alicepass123"})
         assert r.status_code == 302
-        assert r.headers["location"] == "/profile"
+        assert r.headers["location"] == "/dashboard"
 
     def test_login_wrong_password_fails(self, client):
         _do_setup(client, "alice", "alicepass123")

@@ -1,0 +1,40 @@
+{% extends "base.html" %}
+
+{% block title %}Dashboard — Friday Budgeting Pro{% endblock %}
+
+{% block content %}
+<div class="card">
+  <h1>Dashboard</h1>
+
+  <section>
+    <h2>Sync</h2>
+    <p>
+      <strong>Last synced:</strong>
+      {% if last_synced_at %}
+        {{ last_synced_at }}
+      {% else %}
+        Never
+      {% endif %}
+    </p>
+    {% if action_result %}
+      {% if action_result.ok %}
+      <div class="alert alert-success">{{ action_result.message }}</div>
+      {% else %}
+      <div class="alert alert-error">{{ action_result.message }}</div>
+      {% endif %}
+    {% endif %}
+    <div class="action-row">
+      <form method="post" action="/profile" style="display:inline">
+        <input type="hidden" name="action" value="sync_now">
+        <button type="submit" class="btn-primary" id="btn-sync-now">Sync Now</button>
+      </form>
+      <a href="/export/excel" class="btn-secondary">Export to Excel</a>
+    </div>
+  </section>
+
+  <section>
+    <h2>Coming soon</h2>
+    <p class="hint">Charts and spending summaries will appear here in a future update.</p>
+  </section>
+</div>
+{% endblock %}

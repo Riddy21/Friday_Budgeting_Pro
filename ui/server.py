@@ -56,7 +56,6 @@ from ui.auth import (
     create_session,
     create_user,
     delete_session,
-    delete_user,
     get_password_hash,
     get_session_user_id,
     get_user_by_id,
@@ -316,7 +315,7 @@ def index(request: Request):
         return _redirect("/setup")
     if not _is_authenticated(request):
         return _redirect("/login")
-    return _redirect("/profile")
+    return _redirect("/dashboard")
 
 
 # ── /setup ───────────────────────────────────────────────────────────────────
@@ -459,7 +458,7 @@ async def setup_post(request: Request, step: int):
         import server.main as _sm
 
         _sm.apply_initial_setup(banks_to_link=[], extra_ledgers=[], hints=[])
-        redir = _redirect("/profile")
+        redir = _redirect("/dashboard")
         st = state.get("session_token")
         if st:
             redir.set_cookie(
@@ -555,7 +554,7 @@ async def login_post(request: Request):
     ua = request.headers.get("user-agent")
     token = create_session(_db_path(), user_agent=ua, user_id=user["id"])
 
-    response = _redirect("/profile")
+    response = _redirect("/dashboard")
     response.set_cookie(SESSION_COOKIE, token, httponly=True, samesite="strict")
     response.delete_cookie(_SETUP_COMPLETE_COOKIE)
     return response
@@ -720,6 +719,77 @@ async def reset_post(request: Request):
     return _redirect("/login?reset=1")
 
 
+# ── /dashboard ──────────────────────────────────────────────────────────────
+
+
+def _get_last_synced_at() -> Optional[str]:
+    """Return MAX(last_synced_at) from sync_cursors as a human-readable string,
+    or None if the table is empty or the DB has no sync history."""
+    import datetime
+
+    conn = get_db(_db_path())
+    try:
+        row = conn.execute("SELECT MAX(last_synced_at) FROM sync_cursors").fetchone()
+        ts = row[0] if row else None
+    except Exception:
+        ts = None
+    finally:
+        conn.close()
+    if not ts:
+        return None
+    try:
+        return datetime.datetime.fromtimestamp(int(ts)).strftime("%Y-%m-%d %H:%M:%S")
+    except Exception:
+        return str(ts)
+
+
+@app.get("/dashboard", response_class=HTMLResponse)
+def dashboard_get(request: Request):
+    """Main dashboard page.  Requires authentication."""
+    if not _is_authenticated(request):
+        return _redirect("/login")
+    last_synced = _get_last_synced_at()
+    return templates.TemplateResponse(
+        request,
+        "dashboard.html",
+        {
+            "current_page": "dashboard",
+            "last_synced_at": last_synced,
+            "action_result": None,
+        },
+    )
+
+
+# ── /accounts (stub — #158 will implement) ────────────────────────────────────
+
+
+@app.get("/accounts", response_class=HTMLResponse)
+def accounts_get(request: Request):
+    """Accounts stub page.  Requires authentication.  Full implementation: #158."""
+    if not _is_authenticated(request):
+        return _redirect("/login")
+    return templates.TemplateResponse(
+        request,
+        "accounts.html",
+        {"current_page": "accounts"},
+    )
+
+
+# ── /settings (stub — #159 will implement) ────────────────────────────────────
+
+
+@app.get("/settings", response_class=HTMLResponse)
+def settings_get(request: Request):
+    """Settings stub page.  Requires authentication.  Full implementation: #159."""
+    if not _is_authenticated(request):
+        return _redirect("/login")
+    return templates.TemplateResponse(
+        request,
+        "settings.html",
+        {"current_page": "settings"},
+    )
+
+
 # ── /profile ─────────────────────────────────────────────────────────────────
 
 
@@ -780,19 +850,16 @@ def profile_get(request: Request):
         pref = _get_notification_pref()
         connections = _get_connections(uid)
         accounts = _get_accounts(uid)
-        profiles = list_users(_db_path())
-        current_user = get_user_by_id(_db_path(), uid) if uid else None
         return templates.TemplateResponse(
             request,
             "profile.html",
             {
+                "current_page": "profile",
                 "notification_pref": pref,
                 "saved": False,
                 "connections": connections,
                 "accounts": accounts,
                 "action_result": None,
-                "profiles": profiles,
-                "current_user": current_user,
             },
         )
     st = request.cookies.get(_SETUP_COMPLETE_COOKIE)
@@ -810,19 +877,16 @@ def profile_get(request: Request):
             conn_db.close()
         connections = _get_connections(uid)
         accounts = _get_accounts(uid)
-        profiles = list_users(_db_path())
-        current_user = get_user_by_id(_db_path(), uid) if uid else None
         resp = templates.TemplateResponse(
             request,
             "profile.html",
             {
+                "current_page": "profile",
                 "notification_pref": pref,
                 "saved": False,
                 "connections": connections,
                 "accounts": accounts,
                 "action_result": None,
-                "profiles": profiles,
-                "current_user": current_user,
             },
         )
         resp.set_cookie(SESSION_COOKIE, st, httponly=True, samesite="strict")
@@ -844,8 +908,6 @@ async def profile_post(request: Request):
       - export_now: trigger server.main.export_excel()
       - disconnect_bank: delete bank_connection by bank_id
       - reconnect_bank: call server.main.refresh_connection(id=bank_id)
-      - create_profile: create a new local profile
-      - delete_profile: delete a local profile and all its data
     """
     if not _is_authenticated(request):
         return _redirect("/login")
@@ -855,8 +917,6 @@ async def profile_post(request: Request):
     pref = _get_notification_pref()
     connections = _get_connections(uid)
     accounts = _get_accounts(uid)
-    profiles = list_users(_db_path())
-    current_user = get_user_by_id(_db_path(), uid) if uid else None
     action_result: dict | None = None
 
     if action == "sync_now":
@@ -906,40 +966,6 @@ async def profile_post(request: Request):
             except Exception as exc:
                 action_result = {"ok": False, "message": f"Reconnect failed: {exc}"}
 
-    elif action == "create_profile":
-        new_username = (form.get("new_username") or "").strip()
-        new_password = (form.get("new_password") or "").strip()
-        if not new_username:
-            action_result = {"ok": False, "message": "Username is required."}
-        elif len(new_password) < 8:
-            action_result = {"ok": False, "message": "Password must be at least 8 characters."}
-        else:
-            try:
-                create_user(_db_path(), new_username, new_password)
-                profiles = list_users(_db_path())  # refresh
-                action_result = {"ok": True, "message": f"Profile '{new_username}' created."}
-            except ValueError as exc:
-                action_result = {"ok": False, "message": str(exc)}
-
-    elif action == "delete_profile":
-        del_user_id = (form.get("del_user_id") or "").strip()
-        if not del_user_id:
-            action_result = {"ok": False, "message": "No profile specified."}
-        elif del_user_id == uid:
-            action_result = {
-                "ok": False,
-                "message": "Cannot delete the currently active profile. Log in as another profile first.",
-            }
-        elif len(list_users(_db_path())) <= 1:
-            action_result = {"ok": False, "message": "Cannot delete the only profile."}
-        else:
-            try:
-                delete_user(_db_path(), del_user_id)
-                profiles = list_users(_db_path())  # refresh
-                action_result = {"ok": True, "message": "Profile deleted."}
-            except Exception as exc:
-                action_result = {"ok": False, "message": f"Delete failed: {exc}"}
-
     else:
         # Default: save notification_pref
         pref = form.get("notification_pref") or "openclaw"
@@ -948,13 +974,12 @@ async def profile_post(request: Request):
             request,
             "profile.html",
             {
+                "current_page": "profile",
                 "notification_pref": pref,
                 "saved": True,
                 "connections": connections,
                 "accounts": accounts,
                 "action_result": None,
-                "profiles": profiles,
-                "current_user": current_user,
             },
         )
 
@@ -962,13 +987,12 @@ async def profile_post(request: Request):
         request,
         "profile.html",
         {
+            "current_page": "profile",
             "notification_pref": pref,
             "saved": False,
             "connections": connections,
             "accounts": accounts,
             "action_result": action_result,
-            "profiles": profiles,
-            "current_user": current_user,
         },
     )
 
@@ -1046,7 +1070,7 @@ def ledgers_get(request: Request):
     return templates.TemplateResponse(
         request,
         "ledgers.html",
-        {"ledgers": ledgers},
+        {"current_page": "ledgers", "ledgers": ledgers},
     )
 
 

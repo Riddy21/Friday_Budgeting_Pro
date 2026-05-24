@@ -2,16 +2,6 @@
 
 {% block title %}Profile — Friday Budgeting Pro{% endblock %}
 
-{% block nav %}
-<nav>
-  <a href="/ledgers">Ledgers</a>
-  {% if current_user %}<span class="hint" style="margin:0 0.5rem">{{ current_user.username }}</span>{% endif %}
-  <form method="post" action="/logout" style="display:inline">
-    <button type="submit" class="btn-link">Sign out</button>
-  </form>
-</nav>
-{% endblock %}
-
 {% block content %}
 <div class="card">
   <h1>Profile</h1>
@@ -64,53 +54,6 @@
       </form>
       <a href="/export/excel" class="btn-secondary">Export Excel</a>
     </div>
-  </section>
-
-  <!-- Local Profiles (#131) -->
-  <section id="profiles">
-    <h2>Local Profiles</h2>
-    {% if action_result and action_result.ok is defined %}
-      {% if action_result.ok %}
-      <div class="alert alert-success">{{ action_result.message }}</div>
-      {% else %}
-      <div class="alert alert-error">{{ action_result.message }}</div>
-      {% endif %}
-    {% endif %}
-
-    {% if profiles %}
-    <ul style="list-style:none;padding:0;margin-bottom:1rem">
-      {% for p in profiles %}
-      <li style="display:flex;align-items:center;gap:0.75rem;padding:0.35rem 0;border-bottom:1px solid #eee">
-        <span style="min-width:12rem;font-weight:{% if current_user and p.id == current_user.id %}600{% else %}400{% endif %}">
-          {{ p.username }}
-          {% if current_user and p.id == current_user.id %}<small class="hint">(you)</small>{% endif %}
-        </span>
-        {% if current_user and p.id != current_user.id %}
-        <a href="/login?username={{ p.username }}" class="btn-secondary" style="font-size:0.85em">Switch</a>
-        <form method="post" action="/profile" style="display:inline">
-          <input type="hidden" name="action" value="delete_profile">
-          <input type="hidden" name="del_user_id" value="{{ p.id }}">
-          <button type="submit" class="btn-danger" style="font-size:0.85em"
-            onclick="return confirm('Delete profile {{ p.username }} and ALL its data? This cannot be undone.')">Delete</button>
-        </form>
-        {% endif %}
-      </li>
-      {% endfor %}
-    </ul>
-    {% endif %}
-
-    <!-- Create new profile -->
-    <details style="margin-top:0.5rem">
-      <summary style="cursor:pointer;font-size:0.95em">+ Create new profile</summary>
-      <form method="post" action="/profile" style="margin-top:0.75rem">
-        <input type="hidden" name="action" value="create_profile">
-        <label for="new_username">Username</label>
-        <input id="new_username" name="new_username" type="text" placeholder="e.g. work" required style="max-width:16rem">
-        <label for="new_password">Password (min 8 chars)</label>
-        <input id="new_password" name="new_password" type="password" placeholder="Password" required style="max-width:16rem">
-        <button type="submit" class="btn-secondary" style="margin-top:0.5rem">Create profile</button>
-      </form>
-    </details>
   </section>
 
   <!-- Linked Accounts (#47) -->

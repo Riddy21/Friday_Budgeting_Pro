@@ -61,6 +61,12 @@ nav a, nav .btn-link {
   font-size: 14px;
 }
 
+nav a.active {
+  font-weight: 600;
+  border-bottom: 2px solid var(--accent);
+  padding-bottom: 2px;
+}
+
 main {
   max-width: 860px;
   margin: 32px auto;

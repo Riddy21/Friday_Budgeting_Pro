@@ -62,14 +62,14 @@ def _complete_setup(client: TestClient, password: str = "testpassword123") -> No
 
     r = client.post("/setup/4", data={})
     assert r.status_code == 302, f"Setup step 4 failed: {r.status_code}"
-    assert r.headers["location"] == "/profile"
+    assert r.headers["location"] == "/dashboard"
 
 
 def _login(client: TestClient, password: str = "testpassword123") -> TestClient:
     """POST /login and return the authed client (cookie stored automatically)."""
     r = client.post("/login", data={"password": password})
     assert r.status_code == 302, f"Login failed: {r.status_code}"
-    assert r.headers["location"] == "/profile"
+    assert r.headers["location"] == "/dashboard"
     return client
 
 
@@ -386,7 +386,7 @@ class TestSetupWizardCompletesWithoutMcp:
             r = cl.post("/setup/4", data={})
 
         assert r.status_code == 302, f"Setup step 4 failed: {r.status_code}"
-        assert r.headers["location"] == "/profile"
+        assert r.headers["location"] == "/dashboard"
 
         # Verify a user was created in the DB — the wizard persisted state.
         conn = sqlite3.connect(str(db_path))
