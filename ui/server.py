@@ -62,6 +62,12 @@ from ui.auth import (
     verify_password,
 )
 
+# ── Recovery token store (in-memory, 10-min TTL) ──────────────────────────
+# Maps token -> (user_id, expiry_float).  In-memory is fine for a local app;
+# tokens survive daemon restart only if users don't restart between steps.
+_recovery_tokens: dict[str, tuple[str, float]] = {}
+_RECOVERY_TOKEN_TTL = 600  # 10 minutes
+
 # ── App setup ───────────────────────────────────────────────────────────────
 
 app = FastAPI(title="Friday Budgeting Pro UI", version="0.1.0")
@@ -577,40 +583,60 @@ def logout(request: Request):
 
 @app.get("/forgot", response_class=HTMLResponse)
 def forgot_get(request: Request):
-    """Placeholder recovery page (full flow in #60)."""
+    """Render the forgot-password form (username input)."""
     return templates.TemplateResponse(
         request,
         "forgot.html",
-        {"sent": False},
+        {"sent": False, "error": None},
     )
 
 
 @app.post("/forgot", response_class=HTMLResponse)
-def forgot_post(request: Request):
-    """Write a recovery token file placeholder (#60).
+async def forgot_post(request: Request):
+    """Generate a recovery token and write it to ~/.friday-bp/recovery.txt.
 
-    Writes ~/.friday-bp/recovery.txt with a random token.  The full recovery
-    flow (token validation, new password entry) lands with issue #60.
+    Accepts: username (form field)
+    Behaviour:
+      - Looks up user by username in the users table
+      - Generates a 32-byte random hex token with 10-minute TTL
+      - Stores token in the in-memory _recovery_tokens dict
+      - Writes token to ~/.friday-bp/recovery.txt with mode 0600
+      - Returns the same success page whether or not the username exists
+        (prevents username enumeration)
     """
-    token = secrets.token_hex(32)
-    recovery_path = _paths.APP_DIR / "recovery.txt"
-    try:
-        _paths.APP_DIR.mkdir(mode=0o700, parents=True, exist_ok=True)
-        recovery_path.write_text(
-            f"Friday Budgeting Pro — password recovery token\n"
-            f"Token: {token}\n"
-            f"Generated: {time.strftime('%Y-%m-%d %H:%M:%S')}\n\n"
-            f"Visit http://127.0.0.1:6789/reset and enter this token.\n"
-            f"(Full recovery flow ships with issue #60.)\n"
-        )
-        os.chmod(recovery_path, 0o600)
-    except Exception:
-        pass  # Non-fatal in this PR; #60 adds proper error handling.
+    form = await request.form()
+    username = (form.get("username") or "").strip()
 
+    user = get_user_by_username(_db_path(), username) if username else None
+
+    if user:
+        token = secrets.token_hex(32)
+        expiry = time.time() + _RECOVERY_TOKEN_TTL
+        _recovery_tokens[token] = (user["id"], expiry)
+
+        recovery_path = _paths.APP_DIR / "recovery.txt"
+        try:
+            _paths.APP_DIR.mkdir(mode=0o700, parents=True, exist_ok=True)
+            # Write with O_CREAT|O_WRONLY|O_TRUNC so mode is applied atomically
+            fd = os.open(
+                str(recovery_path),
+                os.O_CREAT | os.O_WRONLY | os.O_TRUNC,
+                0o600,
+            )
+            try:
+                os.write(fd, token.encode())
+            finally:
+                os.close(fd)
+            # Ensure mode is correct even if the file already existed
+            os.chmod(recovery_path, 0o600)
+        except Exception:
+            pass
+
+    # Always return success page to avoid leaking which usernames exist.
     return templates.TemplateResponse(
         request,
         "forgot.html",
-        {"sent": True},
+        {"sent": True, "error": None},
     )
 
 
@@ -619,26 +645,79 @@ def forgot_post(request: Request):
 
 @app.get("/reset", response_class=HTMLResponse)
 def reset_get(request: Request):
-    """Placeholder reset page (#60)."""
+    """Render the password-reset form (token + new password)."""
     return templates.TemplateResponse(
         request,
         "reset.html",
-        {"error": None},
+        {"error": None, "success": False},
     )
 
 
 @app.post("/reset", response_class=HTMLResponse)
 async def reset_post(request: Request):
-    """Placeholder reset handler (#60).
+    """Validate recovery token and update the user's password.
 
-    TODO (#60): Validate token from recovery.txt, update password hash,
-    delete recovery.txt, redirect to /login.
+    Accepts: token, new_password (form fields)
+    On success:
+      - Hashes new_password with argon2id via update_user_password
+      - Deletes recovery.txt
+      - Invalidates all sessions for that user (forces re-login)
+      - Redirects to /login?reset=1
+    On failure:
+      - Re-renders reset.html with an error message
     """
-    return templates.TemplateResponse(
-        request,
-        "reset.html",
-        {"error": "Password reset is not yet implemented. See issue #60."},
-    )
+    form = await request.form()
+    token = (form.get("token") or "").strip()
+    new_password = form.get("new_password") or ""
+
+    if len(new_password) < 8:
+        return templates.TemplateResponse(
+            request,
+            "reset.html",
+            {"error": "Password must be at least 8 characters.", "success": False},
+        )
+
+    entry = _recovery_tokens.get(token)
+    if entry is None:
+        return templates.TemplateResponse(
+            request,
+            "reset.html",
+            {"error": "Invalid or expired recovery token.", "success": False},
+        )
+
+    user_id, expiry = entry
+    if time.time() > expiry:
+        # Clean up the expired token
+        _recovery_tokens.pop(token, None)
+        return templates.TemplateResponse(
+            request,
+            "reset.html",
+            {"error": "Recovery token has expired. Please request a new one.", "success": False},
+        )
+
+    # Update the password
+    update_user_password(_db_path(), user_id, new_password)
+
+    # Delete recovery.txt
+    recovery_path = _paths.APP_DIR / "recovery.txt"
+    try:
+        recovery_path.unlink(missing_ok=True)
+    except Exception:
+        pass
+
+    # Invalidate all sessions for this user (force re-login after reset)
+    conn_db = get_db(_db_path())
+    try:
+        conn_db.execute("DELETE FROM sessions WHERE user_id = ?", (user_id,))
+        conn_db.commit()
+    finally:
+        conn_db.close()
+
+    # Remove token from in-memory store
+    _recovery_tokens.pop(token, None)
+
+    # Redirect to login with a success flash
+    return _redirect("/login?reset=1")
 
 
 # ── /profile ─────────────────────────────────────────────────────────────────
