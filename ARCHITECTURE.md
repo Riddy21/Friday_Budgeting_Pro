@@ -183,110 +183,68 @@ Done. No other setup.
 
 ## Data Model (Minimal)
 
-Stripped down to what's actually needed for personal use:
+Full schema lives in `db/schema.sql` (source of truth). Summary:
 
-```sql
--- Plaid bank connections
-CREATE TABLE bank_connections (
-  id TEXT PRIMARY KEY,
-  plaid_item_id TEXT UNIQUE,
-  plaid_access_token_encrypted TEXT NOT NULL,
-  institution_name TEXT,
-  status TEXT DEFAULT 'active',  -- active | needs_reauth
-  last_synced_at INTEGER
-);
+### Key design principles
+- `transactions.amount` = original currency, never modified
+- `transactions.amount_home` = converted to home currency at sync time
+- `transaction_entries.entry_type` drives totals: `spending | income | transfer | savings | skip`
+- All timestamps are UTC Unix seconds; display layer converts to user timezone
+- `classification_rules` (natural language, priority-ordered) replaces `routing_rules`
 
-CREATE TABLE bank_accounts (
-  id TEXT PRIMARY KEY,
-  connection_id TEXT REFERENCES bank_connections(id),
-  plaid_account_id TEXT UNIQUE,
-  name TEXT, mask TEXT, type TEXT, subtype TEXT
-);
+### Tables
 
--- Tracking structure (usually just one ledger called "Personal")
-CREATE TABLE ledgers (
-  id TEXT PRIMARY KEY,
-  name TEXT NOT NULL
-);
+| Table | Purpose |
+|-------|---------|
+| `users` | Local profiles (one active at a time) |
+| `sessions` | UI session cookies |
+| `bank_connections` | One row per Plaid Item (institution) |
+| `bank_accounts` | Individual accounts within a connection |
+| `ledgers` | Financial entities: personal \| property \| investment |
+| `line_items` | Categories within a ledger (income \| expense) |
+| `transactions` | Raw from Plaid — never modified after insert |
+| `transaction_entries` | Classification result: transaction → line item |
+| `classification_rules` | Natural language rules, priority-ordered, evaluated by LLM |
+| `classification_hints` | Supplementary LLM context (not priority-ordered) |
+| `routing_rules` | Legacy substring rules — kept for compat, no new writes |
+| `fx_rates` | Exchange rate cache (base/quote/rate, refresh if >24h old) |
+| `sync_cursors` | Plaid incremental sync cursors per connection |
+| `app_config` | Single-row: home_currency, timezone, password hash, notification channel |
+| `notifications` | In-app notification log |
+| `auto_promoted_rules_log` | Audit trail for auto-promoted routing rules |
 
-CREATE TABLE line_items (
-  id TEXT PRIMARY KEY,
-  ledger_id TEXT REFERENCES ledgers(id),
-  name TEXT NOT NULL,
-  item_type TEXT DEFAULT 'expense'  -- income | expense
-);
+### bank_accounts key fields
+- `currency` — native currency (from Plaid)
+- `balance_current`, `balance_available` — from last sync
+- `description` — user-set context for classifier
+- `default_ledger_id` — route transactions from this account to this ledger by default
 
--- Raw transactions from Plaid
-CREATE TABLE transactions (
-  id TEXT PRIMARY KEY,
-  bank_account_id TEXT REFERENCES bank_accounts(id),
-  plaid_transaction_id TEXT UNIQUE,
-  date TEXT NOT NULL,
-  merchant TEXT,
-  amount REAL NOT NULL,
-  plaid_category TEXT,
-  pending INTEGER DEFAULT 0
-);
+### ledgers key fields
+- `type` — `personal | property | investment`
+- `description` — optional label
 
--- The classified form (supports splits)
-CREATE TABLE transaction_entries (
-  id TEXT PRIMARY KEY,
-  transaction_id TEXT REFERENCES transactions(id),
-  ledger_id TEXT REFERENCES ledgers(id),
-  line_item_id TEXT REFERENCES line_items(id),
-  amount REAL NOT NULL,
-  source TEXT,           -- rule | llm | manual
-  confidence REAL,
-  reviewed INTEGER DEFAULT 0
-);
+### transaction_entries key fields
+- `entry_type` — `spending | income | transfer | savings | skip`
+- `source` — `rule | llm | manual | manual_retroactive`
+- `uncertain` — 1 if classifier confidence < threshold
+- `reasoning` — LLM explanation
+- `corrected_from_line_item_id` + `corrected_at` — audit trail for corrections
 
--- Tier 1: deterministic rules (auto-created over time)
-CREATE TABLE routing_rules (
-  id TEXT PRIMARY KEY,
-  merchant_pattern TEXT,
-  line_item_id TEXT REFERENCES line_items(id)
-);
+### classification_rules key fields
+- `description` — natural language rule (what it matches and does)
+- `rule_type` — `transfer | savings | spending | income | skip`
+- `priority` — lower = evaluated first (default rules: 1–50, user rules: 100+)
+- `is_default` — 1 = shipped with app, can disable but not delete
 
--- Tier 2: natural-language hints fed to the LLM
-CREATE TABLE classification_hints (
-  id TEXT PRIMARY KEY,
-  text TEXT NOT NULL
-);
-
--- Plaid sync cursors
-CREATE TABLE sync_cursors (
-  connection_id TEXT PRIMARY KEY REFERENCES bank_connections(id),
-  cursor TEXT,
-  last_synced_at INTEGER
-);
-
--- Users (local profiles — multiple allowed, one active at a time)
-CREATE TABLE users (
-  id TEXT PRIMARY KEY,             -- UUID
-  username TEXT UNIQUE NOT NULL,
-  password_hash TEXT NOT NULL,     -- argon2id hash
-  created_at INTEGER NOT NULL
-);
-
--- UI session cookies (server-side store, survives restarts)
-CREATE TABLE sessions (
-  id TEXT PRIMARY KEY,             -- session token (random 32 bytes hex)
-  created_at INTEGER NOT NULL,
-  last_seen_at INTEGER NOT NULL,
-  expires_at INTEGER NOT NULL,
-  user_agent TEXT
-);
-
--- Login attempt log for rate limiting
-CREATE TABLE login_attempts (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  attempted_at INTEGER NOT NULL,
-  success INTEGER NOT NULL         -- 0 = failed, 1 = success
-);
-```
-
-That's all of it. No `users` table (single user). No `budget_targets`,
-`classification_history`, `bank_account.currency` — drop them until needed.
+### Default classification rules (seeded on setup)
+| Priority | Name | Type |
+|----------|------|------|
+| 1 | Pending skip | skip |
+| 10 | Internal transfer | transfer |
+| 20 | Investment contribution | savings |
+| 30 | Credit card payment | transfer |
+| 40 | Salary / payroll | income |
+| 50 | Bank fees | spending |
 
 ---
 
