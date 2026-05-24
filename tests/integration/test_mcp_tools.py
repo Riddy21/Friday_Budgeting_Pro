@@ -88,10 +88,11 @@ def test_setup_status_fresh(db_path, authed_user):
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.xfail(strict=False, reason="list_ledgers not yet implemented (#121)")
-def test_list_ledgers(db_path, authed_user):
+def test_list_ledgers(db_path, authed_user, monkeypatch):
     """list_ledgers() returns a dict with a 'ledgers' key containing Personal."""
     from server.main import apply_initial_setup, list_ledgers
+
+    monkeypatch.setattr("server.main._register_openclaw_cron", lambda: False)
 
     # Seed the default Personal ledger via apply_initial_setup.
     apply_initial_setup(banks_to_link=[], extra_ledgers=[], hints=[])
