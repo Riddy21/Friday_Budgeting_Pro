@@ -36,6 +36,19 @@ jobs:
           python-version: "3.11"
       - run: python3 scripts/lint_security.py
 
+  integration:
+    runs-on: ubuntu-latest
+    needs: unit          # only run if unit tests pass
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: pip install -r requirements.txt
+      - run: python3 -m pytest tests/integration/ -q
+        env:
+          FRIDAY_BP_DB_PATH: /tmp/test-integration.db
+
   mcp-smoke:
     runs-on: ubuntu-latest
     steps:
