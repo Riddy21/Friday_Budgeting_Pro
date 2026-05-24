@@ -111,6 +111,35 @@ class TestSyncTransactions(unittest.TestCase):
         self.assertEqual(result["next_cursor"], "cursor-v2")
         self.assertEqual(result["modified"], [])
         self.assertEqual(result["removed"], [])
+        # accounts field should be present (may be empty list if not in response)
+        self.assertIn("accounts", result)
+
+    @patch("server.providers.plaid.plaid_api.PlaidApi")
+    def test_sync_returns_accounts(self, mock_api_cls):
+        """sync_transactions includes 'accounts' in the returned dict (#125)."""
+        api = _mock_plaid_api(mock_api_cls)
+        api.transactions_sync.return_value = {
+            "added": [],
+            "modified": [],
+            "removed": [],
+            "next_cursor": "cursor-v2",
+            "accounts": [
+                {
+                    "account_id": "acct-1",
+                    "name": "Chequing",
+                    "official_name": "TD Canada Trust Chequing",
+                    "type": "depository",
+                }
+            ],
+        }
+
+        with patch.dict(os.environ, _env(), clear=False):
+            from server.providers.plaid import PlaidProvider
+            result = PlaidProvider().sync_transactions("access-sandbox-token")
+
+        self.assertIn("accounts", result)
+        self.assertEqual(len(result["accounts"]), 1)
+        self.assertEqual(result["accounts"][0]["account_id"], "acct-1")
 
     @patch("server.providers.plaid.plaid_api.PlaidApi")
     def test_sync_with_cursor(self, mock_api_cls):

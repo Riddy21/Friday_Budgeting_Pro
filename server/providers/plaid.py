@@ -166,6 +166,7 @@ class PlaidProvider(BankProvider):
             "modified": response["modified"],
             "removed": response["removed"],
             "next_cursor": response["next_cursor"],
+            "accounts": response.get("accounts", []),
         }
 
     def get_item_status(self, access_token: str) -> dict:

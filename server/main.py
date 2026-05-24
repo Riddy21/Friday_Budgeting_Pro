@@ -527,6 +527,23 @@ def sync() -> dict:
                     modified_txns = result.get("modified", []) if isinstance(result, dict) else []
                     removed_txns = result.get("removed", []) if isinstance(result, dict) else []
                     next_cursor = result.get("next_cursor") if isinstance(result, dict) else None
+                    accounts_list = result.get("accounts", []) if isinstance(result, dict) else []
+
+                    # Build a lookup map: plaid_account_id -> {name, type}
+                    # Use official_name if present, else fall back to name.
+                    account_meta: dict[str, dict] = {}
+                    for acct in accounts_list:
+                        acct_id = _get(acct, "account_id")
+                        if acct_id:
+                            acct_name = _get(acct, "official_name") or _get(acct, "name")
+                            acct_type = _get(acct, "type")
+                            # type may come back as an enum object; coerce to string
+                            if acct_type is not None and not isinstance(acct_type, str):
+                                acct_type = str(acct_type)
+                            account_meta[acct_id] = {
+                                "name": acct_name,
+                                "type": acct_type,
+                            }
 
                     now = int(_time.time())
                     conn_added = 0
@@ -557,6 +574,24 @@ def sync() -> dict:
                                 (plaid_account_id,),
                             ).fetchone()
                             bank_account_id = ba_row["id"]
+
+                            # Populate name/type from account metadata (idempotent —
+                            # only overwrites when the incoming value is non-null so
+                            # a second sync won't blank out rows with good data).
+                            if plaid_account_id in account_meta:
+                                meta = account_meta[plaid_account_id]
+                                if meta["name"] is not None:
+                                    db_conn.execute(
+                                        "UPDATE bank_accounts SET name = ? "
+                                        "WHERE plaid_account_id = ? AND (name IS NULL OR name = '')",
+                                        (meta["name"], plaid_account_id),
+                                    )
+                                if meta["type"] is not None:
+                                    db_conn.execute(
+                                        "UPDATE bank_accounts SET type = ? "
+                                        "WHERE plaid_account_id = ? AND (type IS NULL OR type = '')",
+                                        (meta["type"], plaid_account_id),
+                                    )
 
                             txn_id = str(uuid.uuid4())
                             cur = db_conn.execute(
