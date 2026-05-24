@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>ai.openclaw.friday-budgeting-pro</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>@PYTHON@</string>
+        <string>-m</string>
+        <string>server.daemon</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>@HOME@/.openclaw/skills/friday-budgeting-pro</string>
+
+    <key>StandardOutPath</key>
+    <string>@HOME@/.friday-bp/daemon.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>@HOME@/.friday-bp/daemon.log</string>
+
+    <key>KeepAlive</key>
+    <true/>
+
+    <key>RunAtLoad</key>
+    <true/>
+</dict>
+</plist>
