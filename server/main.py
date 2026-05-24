@@ -391,8 +391,8 @@ def complete_link(public_token: str, plaid_env: str = "sandbox") -> dict:
     the access token via server.crypto, and inserts a new row into
     bank_connections.  Returns the new connection_id.
 
-    institution_name is left NULL for now — fetching it requires
-    Plaid /institutions/get_by_id which is out of scope; see issue #34.
+    institution_name is fetched from Plaid /institutions/get_by_id immediately
+    after token exchange so the connection row is always populated.
 
     Parameters
     ----------
@@ -405,6 +405,12 @@ def complete_link(public_token: str, plaid_env: str = "sandbox") -> dict:
     access_token = result["access_token"]
     item_id = result["item_id"]
 
+    # Fetch institution name; fall back to None if unavailable.
+    try:
+        institution_name = provider.get_institution_name(access_token)
+    except Exception:  # noqa: BLE001
+        institution_name = None
+
     encrypted_token = server.crypto.encrypt(access_token)
     connection_id = str(uuid.uuid4())
     uid = get_active_user_id(server.paths.DB_PATH)
@@ -414,16 +420,16 @@ def complete_link(public_token: str, plaid_env: str = "sandbox") -> dict:
         conn.execute(
             """
             INSERT INTO bank_connections
-                (id, plaid_item_id, plaid_access_token_encrypted, status, user_id, plaid_env)
-            VALUES (?, ?, ?, 'active', ?, ?)
+                (id, plaid_item_id, plaid_access_token_encrypted, institution_name, status, user_id, plaid_env)
+            VALUES (?, ?, ?, ?, 'active', ?, ?)
             """,
-            (connection_id, item_id, encrypted_token, uid, provider.env),
+            (connection_id, item_id, encrypted_token, institution_name, uid, provider.env),
         )
         conn.commit()
     finally:
         conn.close()
 
-    return {"connection_id": connection_id, "institution_name": None}
+    return {"connection_id": connection_id, "institution_name": institution_name}
 
 
 @mcp.tool
@@ -889,7 +895,14 @@ def sync() -> dict:
                                     (connection_id,),
                                 )
                             continue
-                        raise
+                        # Log and skip this connection so the others still sync.
+                        import logging as _logging
+                        _logging.getLogger(__name__).warning(
+                            "sync: skipping connection %s due to error: %s",
+                            connection_id,
+                            e,
+                        )
+                        continue
 
                     added_txns = result.get("added", []) if isinstance(result, dict) else []
                     modified_txns = result.get("modified", []) if isinstance(result, dict) else []
