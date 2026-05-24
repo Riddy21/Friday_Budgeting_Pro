@@ -158,6 +158,7 @@ class TestPlaidProviderEnvParam:
         env_without_plaid = {k: v for k, v in os.environ.items() if k != "PLAID_ENV"}
         with patch.dict(os.environ, env_without_plaid, clear=True):
             from server.providers.plaid import PlaidProvider as _PP
+
             p = _PP(env=None)
         assert p.env == "sandbox"
 

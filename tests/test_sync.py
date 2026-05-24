@@ -116,22 +116,24 @@ def env(tmp_path, monkeypatch):
         "line_item_id": line_item_id,
     }
 
+
 def _plaid_factory(sync_fn):
     """Return a PlaidProvider-compatible class that delegates sync_transactions to sync_fn.
 
     Patching ``server.main.PlaidProvider`` with this factory ensures the mock
     is used regardless of module reloads in other test files.
     """
+
     class _MockPlaidProvider:
         def __init__(self, env=None):
             import os as _os
+
             self.env = (env or _os.environ.get("PLAID_ENV", "sandbox")).lower()
 
         def sync_transactions(self, access_token, cursor=None):
             return sync_fn(access_token, cursor)
 
     return _MockPlaidProvider
-
 
 
 # ---------------------------------------------------------------------------
