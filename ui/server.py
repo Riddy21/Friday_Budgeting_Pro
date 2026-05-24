@@ -43,6 +43,8 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 import server.paths as _paths
+from server.plaid_client import create_link_token, exchange_public_token
+from server.crypto import encrypt
 from server.db import get_db, init_db
 from ui.auth import (
     SESSION_COOKIE,
@@ -497,12 +499,12 @@ def profile_get(request: Request):
     if _is_authenticated(request):
         pref = _get_notification_pref()
         return templates.TemplateResponse(request, "profile.html",
-            {"notification_pref": pref, "saved": False})
+            {"notification_pref": pref, "saved": False, "connections": _get_connections()})
     st = request.cookies.get(_SETUP_COMPLETE_COOKIE)
     if st and _check_raw_session(_db_path(), st):
         pref = _get_notification_pref()
         resp = templates.TemplateResponse(request, "profile.html",
-            {"notification_pref": pref, "saved": False})
+            {"notification_pref": pref, "saved": False, "connections": _get_connections()})
         resp.set_cookie(SESSION_COOKIE, st, httponly=True, samesite="strict")
         resp.delete_cookie(_SETUP_COMPLETE_COOKIE)
         return resp
@@ -527,7 +529,7 @@ async def profile_post(request: Request):
     return templates.TemplateResponse(
         request,
         "profile.html",
-        {"notification_pref": pref, "saved": True},
+        {"notification_pref": pref, "saved": True, "connections": _get_connections()},
     )
 
 
@@ -551,6 +553,68 @@ def ledgers_get(request: Request):
 
 
 # ── /link ─────────────────────────────────────────────────────────────────────
+
+
+def _get_connections() -> list[dict]:
+    conn = get_db(_db_path())
+    try:
+        rows = conn.execute(
+            "SELECT id, institution_name, status, last_synced_at FROM bank_connections ORDER BY rowid"
+        ).fetchall()
+        return [dict(r) for r in rows]
+    except Exception:
+        return []
+    finally:
+        conn.close()
+
+
+@app.get("/link/start")
+def link_start(request: Request):
+    if not _is_authenticated(request):
+        return _redirect("/login")
+    try:
+        token = create_link_token()
+        return _redirect(f"/link?token={token}")
+    except Exception as exc:
+        return HTMLResponse(f"<h2>Could not start Plaid Link</h2><pre>{exc}</pre><p><a href='/profile'>Back</a></p>", status_code=500)
+
+
+@app.post("/link/complete")
+async def link_complete(request: Request):
+    if not _is_authenticated(request):
+        return _redirect("/login")
+    form = await request.form()
+    public_token = form.get("public_token", "")
+    if not public_token:
+        return HTMLResponse("<h2>Missing token</h2>", status_code=400)
+    try:
+        import uuid as _uuid
+        result = exchange_public_token(public_token)
+        conn = get_db(_db_path())
+        try:
+            conn.execute(
+                "INSERT OR IGNORE INTO bank_connections (id, plaid_item_id, plaid_access_token_encrypted, institution_name, status) VALUES (?, ?, ?, ?, 'active')",
+                (str(_uuid.uuid4()), result["item_id"], encrypt(result["access_token"]), "Connected Bank"),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+        return HTMLResponse("<html><head><meta http-equiv='refresh' content='2;url=/profile'></head><body style='font-family:sans-serif;text-align:center;padding:60px'><h2>&#x2705; Bank connected!</h2><p>Redirecting...</p></body></html>")
+    except Exception as exc:
+        return HTMLResponse(f"<h2>Failed</h2><pre>{exc}</pre><p><a href='/profile'>Back</a></p>", status_code=500)
+
+
+@app.post("/link/disconnect/{connection_id}")
+async def link_disconnect(request: Request, connection_id: str):
+    if not _is_authenticated(request):
+        return _redirect("/login")
+    conn = get_db(_db_path())
+    try:
+        conn.execute("DELETE FROM bank_connections WHERE id=?", (connection_id,))
+        conn.commit()
+    finally:
+        conn.close()
+    return _redirect("/profile")
 
 @app.get("/link", response_class=HTMLResponse)
 def link_get(request: Request, token: Optional[str] = None):
