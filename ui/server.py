@@ -183,12 +183,16 @@ def _get_ledgers() -> list[dict]:
         ledgers = []
         for lr in ledger_rows:
             items = conn.execute(
-                "SELECT name, item_type FROM line_items WHERE ledger_id = ? ORDER BY name",
+                "SELECT id, name, item_type FROM line_items WHERE ledger_id = ? ORDER BY name",
                 (lr["id"],),
             ).fetchall()
             ledgers.append({
+                "id": lr["id"],
                 "name": lr["name"],
-                "line_items": [{"name": i["name"], "item_type": i["item_type"]} for i in items],
+                "line_items": [
+                    {"id": i["id"], "name": i["name"], "item_type": i["item_type"]}
+                    for i in items
+                ],
             })
         return ledgers
     finally:
@@ -644,6 +648,169 @@ def ledgers_get(request: Request):
         "ledgers.html",
         {"ledgers": ledgers},
     )
+
+
+# -- /ledgers CRUD (issue #48) -------------------------------------------------
+
+import uuid as _uuid
+
+
+@app.post("/ledgers")
+async def ledgers_create(request: Request):
+    """Create a new ledger. JSON body: {name: str}."""
+    if not _is_authenticated(request):
+        return JSONResponse({"error": "Unauthorized"}, status_code=401)
+    body = await request.json()
+    name = (body.get("name") or "").strip()
+    if not name:
+        return JSONResponse({"error": "name is required"}, status_code=400)
+    ledger_id = str(_uuid.uuid4())
+    conn = get_db(_db_path())
+    try:
+        conn.execute(
+            "INSERT INTO ledgers (id, name) VALUES (?, ?)",
+            (ledger_id, name),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    return JSONResponse({"id": ledger_id, "name": name}, status_code=201)
+
+
+@app.delete("/ledgers/{ledger_id}")
+def ledgers_delete(request: Request, ledger_id: str):
+    """Delete a ledger. Returns 409 if it is the only ledger."""
+    if not _is_authenticated(request):
+        return JSONResponse({"error": "Unauthorized"}, status_code=401)
+    conn = get_db(_db_path())
+    try:
+        count = conn.execute("SELECT COUNT(*) FROM ledgers").fetchone()[0]
+        if count <= 1:
+            return JSONResponse(
+                {"error": "Cannot delete the only ledger"}, status_code=409
+            )
+        conn.execute("DELETE FROM line_items WHERE ledger_id = ?", (ledger_id,))
+        conn.execute("DELETE FROM ledgers WHERE id = ?", (ledger_id,))
+        conn.commit()
+    finally:
+        conn.close()
+    return JSONResponse({"deleted": ledger_id})
+
+
+@app.patch("/ledgers/{ledger_id}")
+async def ledgers_rename(request: Request, ledger_id: str):
+    """Rename a ledger. JSON body: {name: str}."""
+    if not _is_authenticated(request):
+        return JSONResponse({"error": "Unauthorized"}, status_code=401)
+    body = await request.json()
+    name = (body.get("name") or "").strip()
+    if not name:
+        return JSONResponse({"error": "name is required"}, status_code=400)
+    conn = get_db(_db_path())
+    try:
+        row = conn.execute("SELECT id FROM ledgers WHERE id = ?", (ledger_id,)).fetchone()
+        if row is None:
+            return JSONResponse({"error": "Ledger not found"}, status_code=404)
+        conn.execute("UPDATE ledgers SET name = ? WHERE id = ?", (name, ledger_id))
+        conn.commit()
+    finally:
+        conn.close()
+    return JSONResponse({"id": ledger_id, "name": name})
+
+
+@app.post("/ledgers/{ledger_id}/items")
+async def ledger_items_create(request: Request, ledger_id: str):
+    """Add a line item. JSON body: {name: str, section: 'income'|'expenses'}."""
+    if not _is_authenticated(request):
+        return JSONResponse({"error": "Unauthorized"}, status_code=401)
+    body = await request.json()
+    name = (body.get("name") or "").strip()
+    section = (body.get("section") or "expenses").strip().lower()
+    if not name:
+        return JSONResponse({"error": "name is required"}, status_code=400)
+    # Map 'expenses' -> 'expense', 'income' -> 'income'
+    item_type = "income" if section == "income" else "expense"
+    conn = get_db(_db_path())
+    try:
+        row = conn.execute("SELECT id FROM ledgers WHERE id = ?", (ledger_id,)).fetchone()
+        if row is None:
+            return JSONResponse({"error": "Ledger not found"}, status_code=404)
+        item_id = str(_uuid.uuid4())
+        conn.execute(
+            "INSERT INTO line_items (id, ledger_id, name, item_type) VALUES (?, ?, ?, ?)",
+            (item_id, ledger_id, name, item_type),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    return JSONResponse(
+        {"id": item_id, "ledger_id": ledger_id, "name": name, "item_type": item_type},
+        status_code=201,
+    )
+
+
+@app.patch("/ledgers/{ledger_id}/items/{item_id}")
+async def ledger_items_rename(request: Request, ledger_id: str, item_id: str):
+    """Rename a line item. JSON body: {name: str}."""
+    if not _is_authenticated(request):
+        return JSONResponse({"error": "Unauthorized"}, status_code=401)
+    body = await request.json()
+    name = (body.get("name") or "").strip()
+    if not name:
+        return JSONResponse({"error": "name is required"}, status_code=400)
+    conn = get_db(_db_path())
+    try:
+        row = conn.execute(
+            "SELECT id FROM line_items WHERE id = ? AND ledger_id = ?",
+            (item_id, ledger_id),
+        ).fetchone()
+        if row is None:
+            return JSONResponse({"error": "Item not found"}, status_code=404)
+        conn.execute("UPDATE line_items SET name = ? WHERE id = ?", (name, item_id))
+        conn.commit()
+    finally:
+        conn.close()
+    return JSONResponse({"id": item_id, "name": name})
+
+
+@app.delete("/ledgers/{ledger_id}/items/{item_id}")
+def ledger_items_delete(request: Request, ledger_id: str, item_id: str):
+    """Delete a line item.  Returns 409 if transaction_entries are attached
+    unless ?confirm=true is supplied."""
+    if not _is_authenticated(request):
+        return JSONResponse({"error": "Unauthorized"}, status_code=401)
+    confirm = request.query_params.get("confirm", "").lower() == "true"
+    conn = get_db(_db_path())
+    try:
+        row = conn.execute(
+            "SELECT id FROM line_items WHERE id = ? AND ledger_id = ?",
+            (item_id, ledger_id),
+        ).fetchone()
+        if row is None:
+            return JSONResponse({"error": "Item not found"}, status_code=404)
+        # Check for attached entries
+        entry_count = conn.execute(
+            "SELECT COUNT(*) FROM transaction_entries WHERE line_item_id = ?",
+            (item_id,),
+        ).fetchone()[0]
+        if entry_count > 0 and not confirm:
+            return JSONResponse(
+                {
+                    "error": "Item has attached transaction entries",
+                    "entry_count": entry_count,
+                    "hint": "Add ?confirm=true to force delete",
+                },
+                status_code=409,
+            )
+        if entry_count > 0 and confirm:
+            conn.execute(
+                "DELETE FROM transaction_entries WHERE line_item_id = ?", (item_id,)
+            )
+        conn.execute("DELETE FROM line_items WHERE id = ?", (item_id,))
+        conn.commit()
+    finally:
+        conn.close()
+    return JSONResponse({"deleted": item_id})
 
 
 # ── /link ─────────────────────────────────────────────────────────────────────

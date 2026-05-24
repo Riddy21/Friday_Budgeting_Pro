@@ -13,39 +13,307 @@
 
 {% block content %}
 <div class="card">
-  <h1>Ledgers</h1>
-  <p class="hint">Read-only view. A minimal ledger editor is coming in issue
-     <strong>#48</strong>.</p>
+  <div style="display:flex;justify-content:space-between;align-items:baseline;">
+    <h1>Ledgers</h1>
+    <button class="btn-primary" id="btn-add-ledger">+ Add Ledger</button>
+  </div>
 
-  {% if ledgers %}
-    {% for ledger in ledgers %}
-    <section class="ledger-block">
-      <h2>{{ ledger.name }}</h2>
-      {% if ledger.line_items %}
-      <table>
-        <thead>
-          <tr>
-            <th>Line item</th>
-            <th>Type</th>
-          </tr>
-        </thead>
-        <tbody>
-          {% for item in ledger.line_items %}
-          <tr>
-            <td>{{ item.name }}</td>
-            <td><span class="badge badge-{{ item.item_type }}">{{ item.item_type }}</span></td>
-          </tr>
-          {% endfor %}
-        </tbody>
-      </table>
-      {% else %}
-      <p class="hint">No line items yet.</p>
-      {% endif %}
-    </section>
-    {% endfor %}
-  {% else %}
-  <p>No ledgers found. Set up a ledger via OpenClaw chat or complete the
-     <a href="/setup">setup wizard</a>.</p>
-  {% endif %}
+  <div id="add-ledger-form" style="display:none;margin-bottom:1em;">
+    <input type="text" id="new-ledger-name" placeholder="Ledger name" style="margin-right:.5em;">
+    <button class="btn-primary" id="btn-add-ledger-submit">Create</button>
+    <button class="btn-secondary" id="btn-add-ledger-cancel">Cancel</button>
+  </div>
+
+  <div id="error-banner" style="display:none;" class="alert alert-error"></div>
+
+  <div id="ledgers-list">
+    {% if ledgers %}
+      {% for ledger in ledgers %}
+      <section class="ledger-block" data-ledger-id="{{ ledger.id }}">
+        <div style="display:flex;justify-content:space-between;align-items:center;">
+          <h2>
+            <span class="ledger-name-display">{{ ledger.name }}</span>
+            <input class="ledger-name-input" type="text" value="{{ ledger.name }}"
+              style="display:none;font-size:inherit;font-weight:inherit;"
+              data-ledger-id="{{ ledger.id }}">
+          </h2>
+          <button class="btn-danger btn-delete-ledger" data-ledger-id="{{ ledger.id }}"
+            style="margin-left:1em;">x</button>
+        </div>
+
+        <div class="item-section" data-section="income">
+          <h3>Income</h3>
+          <table>
+            <tbody class="items-tbody" data-section="income">
+              {% for item in ledger.line_items %}
+              {% if item.item_type == "income" %}
+              <tr data-item-id="{{ item.id }}">
+                <td>
+                  <span class="item-name-display">{{ item.name }}</span>
+                  <input class="item-name-input" type="text" value="{{ item.name }}"
+                    style="display:none;" data-item-id="{{ item.id }}"
+                    data-ledger-id="{{ ledger.id }}">
+                </td>
+                <td>
+                  <button class="btn-danger btn-delete-item" data-item-id="{{ item.id }}"
+                    data-ledger-id="{{ ledger.id }}">x</button>
+                </td>
+              </tr>
+              {% endif %}
+              {% endfor %}
+            </tbody>
+          </table>
+          <div class="add-item-row">
+            <input type="text" class="add-item-input" placeholder="Add item..."
+              data-ledger-id="{{ ledger.id }}" data-section="income">
+          </div>
+        </div>
+
+        <div class="item-section" data-section="expenses">
+          <h3>Expenses</h3>
+          <table>
+            <tbody class="items-tbody" data-section="expenses">
+              {% for item in ledger.line_items %}
+              {% if item.item_type == "expense" %}
+              <tr data-item-id="{{ item.id }}">
+                <td>
+                  <span class="item-name-display">{{ item.name }}</span>
+                  <input class="item-name-input" type="text" value="{{ item.name }}"
+                    style="display:none;" data-item-id="{{ item.id }}"
+                    data-ledger-id="{{ ledger.id }}">
+                </td>
+                <td>
+                  <button class="btn-danger btn-delete-item" data-item-id="{{ item.id }}"
+                    data-ledger-id="{{ ledger.id }}">x</button>
+                </td>
+              </tr>
+              {% endif %}
+              {% endfor %}
+            </tbody>
+          </table>
+          <div class="add-item-row">
+            <input type="text" class="add-item-input" placeholder="Add item..."
+              data-ledger-id="{{ ledger.id }}" data-section="expenses">
+          </div>
+        </div>
+      </section>
+      {% endfor %}
+    {% else %}
+    <p id="no-ledgers-msg">No ledgers yet. Click <strong>+ Add Ledger</strong> to create one.</p>
+    {% endif %}
+  </div>
 </div>
+
+<script>
+(function () {
+  "use strict";
+
+  function showError(msg) {
+    var b = document.getElementById("error-banner");
+    b.textContent = msg;
+    b.style.display = "";
+    setTimeout(function () { b.style.display = "none"; }, 5000);
+  }
+
+  document.getElementById("btn-add-ledger").addEventListener("click", function () {
+    document.getElementById("add-ledger-form").style.display = "";
+    document.getElementById("new-ledger-name").focus();
+  });
+
+  document.getElementById("btn-add-ledger-cancel").addEventListener("click", function () {
+    document.getElementById("add-ledger-form").style.display = "none";
+    document.getElementById("new-ledger-name").value = "";
+  });
+
+  document.getElementById("btn-add-ledger-submit").addEventListener("click", function () {
+    var name = document.getElementById("new-ledger-name").value.trim();
+    if (!name) return;
+    fetch("/ledgers", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({name: name})
+    }).then(function (r) {
+      if (!r.ok) return r.json().then(function (d) { showError(d.error || "Error"); });
+      return r.json().then(function (data) {
+        document.getElementById("add-ledger-form").style.display = "none";
+        document.getElementById("new-ledger-name").value = "";
+        var msg = document.getElementById("no-ledgers-msg");
+        if (msg) msg.remove();
+        document.getElementById("ledgers-list").appendChild(buildLedgerSection(data.id, data.name));
+      });
+    }).catch(function (e) { showError(e.message); });
+  });
+
+  document.addEventListener("click", function (e) {
+    if (!e.target.classList.contains("btn-delete-ledger")) return;
+    var ledgerId = e.target.dataset.ledgerId;
+    if (!confirm("Delete this ledger and all its line items?")) return;
+    fetch("/ledgers/" + ledgerId, {method: "DELETE"}).then(function (r) {
+      if (r.status === 409) return r.json().then(function (d) { showError(d.error || "Cannot delete."); });
+      if (!r.ok) return r.json().then(function (d) { showError(d.error || "Error"); });
+      var section = document.querySelector("section[data-ledger-id='" + ledgerId + "']");
+      if (section) section.remove();
+    }).catch(function (e) { showError(e.message); });
+  });
+
+  document.addEventListener("click", function (e) {
+    if (!e.target.classList.contains("ledger-name-display")) return;
+    var section = e.target.closest("section[data-ledger-id]");
+    var ledgerId = section.dataset.ledgerId;
+    var display = e.target;
+    var input = section.querySelector("input.ledger-name-input[data-ledger-id='" + ledgerId + "']");
+    display.style.display = "none";
+    input.style.display = "";
+    input.focus();
+    input.select();
+  });
+
+  document.addEventListener("blur", function (e) {
+    if (!e.target.classList.contains("ledger-name-input")) return;
+    var input = e.target;
+    var ledgerId = input.dataset.ledgerId;
+    var name = input.value.trim();
+    var section = document.querySelector("section[data-ledger-id='" + ledgerId + "']");
+    var display = section.querySelector("span.ledger-name-display");
+    if (!name) { input.style.display = "none"; display.style.display = ""; return; }
+    fetch("/ledgers/" + ledgerId, {
+      method: "PATCH",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({name: name})
+    }).then(function (r) {
+      if (!r.ok) return r.json().then(function (d) { showError(d.error || "Rename failed"); });
+      display.textContent = name;
+      input.style.display = "none";
+      display.style.display = "";
+    }).catch(function (e) { showError(e.message); });
+  }, true);
+
+  document.addEventListener("keydown", function (e) {
+    if (e.key === "Enter" && e.target.classList.contains("ledger-name-input")) e.target.blur();
+  });
+
+  document.addEventListener("keydown", function (e) {
+    if (e.key !== "Enter" || !e.target.classList.contains("add-item-input")) return;
+    var input = e.target;
+    var ledgerId = input.dataset.ledgerId;
+    var section = input.dataset.section;
+    var name = input.value.trim();
+    if (!name) return;
+    fetch("/ledgers/" + ledgerId + "/items", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({name: name, section: section})
+    }).then(function (r) {
+      if (!r.ok) return r.json().then(function (d) { showError(d.error || "Error"); });
+      return r.json().then(function (data) {
+        input.value = "";
+        var tbody = input.closest(".item-section").querySelector("tbody.items-tbody");
+        tbody.appendChild(buildItemRow(data.id, data.name, ledgerId));
+      });
+    }).catch(function (e) { showError(e.message); });
+  });
+
+  document.addEventListener("click", function (e) {
+    if (!e.target.classList.contains("btn-delete-item")) return;
+    var itemId = e.target.dataset.itemId;
+    var ledgerId = e.target.dataset.ledgerId;
+    fetch("/ledgers/" + ledgerId + "/items/" + itemId, {method: "DELETE"})
+      .then(function (r) {
+        if (r.status === 409) {
+          return r.json().then(function (d) {
+            if (confirm(d.error + " (" + d.entry_count + " entries). Force delete?")) {
+              fetch("/ledgers/" + ledgerId + "/items/" + itemId + "?confirm=true", {method: "DELETE"})
+                .then(function (r2) {
+                  if (!r2.ok) return r2.json().then(function (d2) { showError(d2.error || "Error"); });
+                  removeItemRow(itemId);
+                });
+            }
+          });
+        }
+        if (!r.ok) return r.json().then(function (d) { showError(d.error || "Error"); });
+        removeItemRow(itemId);
+      }).catch(function (e) { showError(e.message); });
+  });
+
+  function removeItemRow(itemId) {
+    var row = document.querySelector("tr[data-item-id='" + itemId + "']");
+    if (row) row.remove();
+  }
+
+  document.addEventListener("click", function (e) {
+    if (!e.target.classList.contains("item-name-display")) return;
+    var row = e.target.closest("tr[data-item-id]");
+    var display = e.target;
+    var input = row.querySelector("input.item-name-input");
+    display.style.display = "none";
+    input.style.display = "";
+    input.focus();
+    input.select();
+  });
+
+  document.addEventListener("blur", function (e) {
+    if (!e.target.classList.contains("item-name-input")) return;
+    var input = e.target;
+    var itemId = input.dataset.itemId;
+    var ledgerId = input.dataset.ledgerId;
+    var name = input.value.trim();
+    var row = document.querySelector("tr[data-item-id='" + itemId + "']");
+    var display = row.querySelector("span.item-name-display");
+    if (!name) { input.style.display = "none"; display.style.display = ""; return; }
+    fetch("/ledgers/" + ledgerId + "/items/" + itemId, {
+      method: "PATCH",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({name: name})
+    }).then(function (r) {
+      if (!r.ok) return r.json().then(function (d) { showError(d.error || "Rename failed"); });
+      display.textContent = name;
+      input.value = name;
+      input.style.display = "none";
+      display.style.display = "";
+    }).catch(function (e) { showError(e.message); });
+  }, true);
+
+  document.addEventListener("keydown", function (e) {
+    if (e.key === "Enter" && e.target.classList.contains("item-name-input")) e.target.blur();
+  });
+
+  function buildItemRow(itemId, name, ledgerId) {
+    var tr = document.createElement("tr");
+    tr.dataset.itemId = itemId;
+    tr.innerHTML =
+      '<td><span class="item-name-display">' + esc(name) + '</span>' +
+      '<input class="item-name-input" type="text" value="' + esc(name) + '"' +
+      ' style="display:none;" data-item-id="' + itemId + '" data-ledger-id="' + ledgerId + '"></td>' +
+      '<td><button class="btn-danger btn-delete-item" data-item-id="' + itemId +
+      '" data-ledger-id="' + ledgerId + '">x</button></td>';
+    return tr;
+  }
+
+  function buildLedgerSection(ledgerId, name) {
+    var section = document.createElement("section");
+    section.className = "ledger-block";
+    section.dataset.ledgerId = ledgerId;
+    section.innerHTML =
+      '<div style="display:flex;justify-content:space-between;align-items:center;">' +
+      '<h2><span class="ledger-name-display">' + esc(name) + '</span>' +
+      '<input class="ledger-name-input" type="text" value="' + esc(name) + '"' +
+      ' style="display:none;font-size:inherit;font-weight:inherit;" data-ledger-id="' + ledgerId + '"></h2>' +
+      '<button class="btn-danger btn-delete-ledger" data-ledger-id="' + ledgerId + '" style="margin-left:1em;">x</button>' +
+      '</div>' + sub(ledgerId, "income", "Income") + sub(ledgerId, "expenses", "Expenses");
+    return section;
+  }
+
+  function sub(ledgerId, key, label) {
+    return '<div class="item-section" data-section="' + key + '">' +
+      '<h3>' + label + '</h3>' +
+      '<table><tbody class="items-tbody" data-section="' + key + '"></tbody></table>' +
+      '<div class="add-item-row"><input type="text" class="add-item-input" placeholder="Add item..."' +
+      ' data-ledger-id="' + ledgerId + '" data-section="' + key + '"></div></div>';
+  }
+
+  function esc(s) {
+    return String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");
+  }
+})();
+</script>
 {% endblock %}
