@@ -60,6 +60,9 @@ def init_db(path: str | Path) -> None:
         _add_col_if_missing(
             conn, "bank_connections", "plaid_env", "TEXT NOT NULL DEFAULT 'sandbox'"
         )
+
+        # Migration: last_alerted_at (#35 — proactive re-auth alerts)
+        _add_col_if_missing(conn, "bank_connections", "last_alerted_at", "INTEGER")
         _add_col_if_missing(conn, "ledgers", "user_id", "TEXT")
         _add_col_if_missing(conn, "classification_hints", "user_id", "TEXT")
         _add_col_if_missing(conn, "sessions", "user_id", "TEXT")
