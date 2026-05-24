@@ -1,6 +1,14 @@
 -- Friday Budgeting Pro — SQLite schema
 -- Single-user, local-only personal finance database.
 
+-- Users (local profiles — multiple allowed, one active at a time)
+CREATE TABLE IF NOT EXISTS users (
+  id TEXT PRIMARY KEY,             -- UUID
+  username TEXT UNIQUE NOT NULL,
+  password_hash TEXT NOT NULL,     -- argon2id hash
+  created_at INTEGER NOT NULL
+);
+
 -- Plaid bank connections
 CREATE TABLE IF NOT EXISTS bank_connections (
   id TEXT PRIMARY KEY,
@@ -8,7 +16,8 @@ CREATE TABLE IF NOT EXISTS bank_connections (
   plaid_access_token_encrypted TEXT NOT NULL,
   institution_name TEXT,
   status TEXT DEFAULT 'active',  -- active | needs_reauth
-  last_synced_at INTEGER
+  last_synced_at INTEGER,
+  user_id TEXT REFERENCES users(id)
 );
 
 CREATE TABLE IF NOT EXISTS bank_accounts (
@@ -24,7 +33,8 @@ CREATE TABLE IF NOT EXISTS bank_accounts (
 -- Tracking structure (usually just one ledger called "Personal")
 CREATE TABLE IF NOT EXISTS ledgers (
   id TEXT PRIMARY KEY,
-  name TEXT NOT NULL
+  name TEXT NOT NULL,
+  user_id TEXT REFERENCES users(id)
 );
 
 CREATE TABLE IF NOT EXISTS line_items (
@@ -67,7 +77,8 @@ CREATE TABLE IF NOT EXISTS routing_rules (
 -- Tier 2: natural-language hints fed to the LLM
 CREATE TABLE IF NOT EXISTS classification_hints (
   id TEXT PRIMARY KEY,
-  text TEXT NOT NULL
+  text TEXT NOT NULL,
+  user_id TEXT REFERENCES users(id)
 );
 
 -- Plaid sync cursors
@@ -95,7 +106,8 @@ CREATE TABLE IF NOT EXISTS sessions (
   created_at INTEGER NOT NULL,
   last_seen_at INTEGER NOT NULL,
   expires_at INTEGER NOT NULL,  -- TODO: unused; kept for backward compat with existing DBs
-  user_agent TEXT
+  user_agent TEXT,
+  user_id TEXT REFERENCES users(id)
 );
 
 -- Notification log — every send() call writes a row; the UI reads this for banners

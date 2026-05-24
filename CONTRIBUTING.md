@@ -54,7 +54,7 @@ This doc is the operating manual for agent contributors.
 ## Anti-Patterns (Don't Do These)
 
 - ❌ Refactoring code outside your ticket
-- ❌ Adding multi-user logic ("for future flexibility")
+- ❌ Adding multi-user logic ("for future flexibility") — multi-profile is ✅ (see issue #131); concurrent sessions are ❌
 - ❌ Building a CLI on top of MCP tools
 - ❌ Adding a web UI element beyond the existing Plaid Link page
 - ❌ Pulling in ORMs, async frameworks, or "nice to have" libraries

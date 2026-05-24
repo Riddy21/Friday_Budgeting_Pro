@@ -11,12 +11,30 @@
   {% endif %}
 
   <form method="post" action="/login">
+    <label for="username">Username</label>
+    <input id="username" name="username" type="text" required
+           autofocus autocomplete="username"
+           value="{{ prefill_username or '' }}"
+           placeholder="Your profile username" />
+
     <label for="password">Password</label>
     <input id="password" name="password" type="password" required
-           autofocus autocomplete="current-password"
+           autocomplete="current-password"
            placeholder="Your Friday password" />
+
     <button type="submit" class="btn-primary">Sign in</button>
   </form>
+
+  {% if profiles and profiles|length > 1 %}
+  <div style="margin-top:1rem">
+    <p class="hint">Switch profile:</p>
+    <div style="display:flex;flex-wrap:wrap;gap:0.5rem">
+      {% for p in profiles %}
+      <a href="/login?username={{ p.username }}" class="btn-secondary" style="font-size:0.9em">{{ p.username }}</a>
+      {% endfor %}
+    </div>
+  </div>
+  {% endif %}
 
   <p class="hint"><a href="/forgot">Forgot your password?</a></p>
 </div>

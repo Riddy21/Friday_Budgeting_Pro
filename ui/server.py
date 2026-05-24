@@ -48,10 +48,19 @@ from ui.auth import (
     SESSION_COOKIE,
     check_session,
     create_session,
+    create_user,
     delete_session,
+    delete_user,
+    get_active_user_id,
     get_password_hash,
+    get_session_user_id,
+    get_user_by_id,
+    get_user_by_username,
+    has_any_user,
     hash_password,
+    list_users,
     set_password_hash,
+    update_user_password,
     verify_password,
 )
 
@@ -77,11 +86,17 @@ def _db_path() -> Path:
 
 
 def _password_is_set() -> bool:
-    return bool(get_password_hash(_db_path()))
+    """Legacy check: True if any user exists (or app_config has a password hash)."""
+    return has_any_user(_db_path()) or bool(get_password_hash(_db_path()))
 
 
 def _is_authenticated(request: Request) -> bool:
     return check_session(request, _db_path())
+
+
+def _current_user_id(request: Request) -> Optional[str]:
+    """Return the user_id from the current session, or None."""
+    return get_session_user_id(request, _db_path())
 
 
 def _check_raw_session(db_path, token: str) -> bool:
@@ -120,11 +135,29 @@ _PREF_TO_CHANNEL = {"openclaw": "openclaw_chat", "ui": "in_ui", "macos": "macos"
                     "openclaw_chat": "openclaw_chat", "in_ui": "in_ui"}
 
 
-def _get_username() -> str:
+def _get_username(user_id: Optional[str] = None) -> str:
+    """Return the username for *user_id* (or first user if not specified)."""
     conn = get_db(_db_path())
     try:
-        row = conn.execute("SELECT username FROM app_config WHERE id=1").fetchone()
-        return row["username"] if row and row["username"] else "User"
+        if user_id:
+            row = conn.execute(
+                "SELECT username FROM users WHERE id = ?", (user_id,)
+            ).fetchone()
+            if row and row["username"]:
+                return row["username"]
+        # Fallback: first user or app_config
+        row2 = conn.execute(
+            "SELECT username FROM users ORDER BY created_at LIMIT 1"
+        ).fetchone()
+        if row2 and row2["username"]:
+            return row2["username"]
+        try:
+            row3 = conn.execute("SELECT username FROM app_config WHERE id=1").fetchone()
+            if row3 and row3["username"]:
+                return row3["username"]
+        except Exception:
+            pass
+        return "User"
     except Exception:
         return "User"
     finally:
@@ -173,13 +206,20 @@ def _set_notification_channel(channel: str) -> None:
 def _set_notification_pref(pref: str) -> None:
     _set_notification_channel(_PREF_TO_CHANNEL.get(pref, pref))
 
-def _get_ledgers() -> list[dict]:
+def _get_ledgers(user_id: Optional[str] = None) -> list[dict]:
     """Query ledgers + line_items from the DB and return a list of dicts."""
     conn = get_db(_db_path())
     try:
-        ledger_rows = conn.execute(
-            "SELECT id, name FROM ledgers ORDER BY name"
-        ).fetchall()
+        if user_id:
+            # Include rows owned by user_id AND unowned rows (NULL user_id = legacy/migration)
+            ledger_rows = conn.execute(
+                "SELECT id, name FROM ledgers WHERE user_id = ? OR user_id IS NULL ORDER BY name",
+                (user_id,),
+            ).fetchall()
+        else:
+            ledger_rows = conn.execute(
+                "SELECT id, name FROM ledgers ORDER BY name"
+            ).fetchall()
         ledgers = []
         for lr in ledger_rows:
             items = conn.execute(
@@ -295,7 +335,7 @@ async def setup_post(request: Request, step: int):
         return HTMLResponse(status_code=404, content="Setup already complete.")
     form = await request.form()
     if step == 1:
-        username = (form.get("username") or "").strip()
+        username = (form.get("username") or "").strip() or "default"
         pw = (form.get("password") or "").strip()
         cf = (form.get("password_confirm") or "").strip()
         dch = "openclaw_chat" if _openclaw_home_exists() else "macos"
@@ -311,18 +351,57 @@ async def setup_post(request: Request, step: int):
                 {"step": 1, "error": err, "default_channel": dch})
             _update_wizard(resp, tok, {"step": 1, "wizard_active": False, "error": err})
             return resp
-        set_password_hash(_db_path(), hash_password(pw))
-        # Save username
-        _conn = get_db(_db_path())
+
+        # Create user in users table (or update existing default user's password).
+        password_hash = hash_password(pw)
+        existing_user = get_user_by_username(_db_path(), username)
+        if existing_user:
+            # Update existing user's password
+            from ui.auth import update_user_password
+            update_user_password(_db_path(), existing_user["id"], pw)
+            new_user_id = existing_user["id"]
+        else:
+            # Check if there's a default user to update (migration scenario)
+            _conn = get_db(_db_path())
+            try:
+                default_row = _conn.execute(
+                    "SELECT id FROM users WHERE id = 'default-user-id'"
+                ).fetchone()
+            finally:
+                _conn.close()
+            if default_row:
+                # Update the migrated default user
+                _conn2 = get_db(_db_path())
+                try:
+                    _conn2.execute(
+                        "UPDATE users SET username = ?, password_hash = ? WHERE id = 'default-user-id'",
+                        (username, password_hash),
+                    )
+                    _conn2.commit()
+                finally:
+                    _conn2.close()
+                new_user_id = "default-user-id"
+            else:
+                new_user_id = create_user(_db_path(), username, pw)
+
+        # Also save to app_config for legacy compat.
+        set_password_hash(_db_path(), password_hash)
+        _conn3 = get_db(_db_path())
         try:
-            try: _conn.execute("ALTER TABLE app_config ADD COLUMN username TEXT")
+            try: _conn3.execute("ALTER TABLE app_config ADD COLUMN username TEXT")
             except: pass
-            _conn.execute("INSERT INTO app_config (id, username) VALUES (1, ?) ON CONFLICT(id) DO UPDATE SET username=excluded.username", (username or "User",))
-            _conn.commit()
-        finally: _conn.close()
+            _conn3.execute(
+                "INSERT INTO app_config (id, username) VALUES (1, ?) "
+                "ON CONFLICT(id) DO UPDATE SET username=excluded.username",
+                (username,),
+            )
+            _conn3.commit()
+        finally: _conn3.close()
+
         ua = request.headers.get("user-agent")
-        stoken = create_session(_db_path(), user_agent=ua)
-        ns = {"step": 2, "wizard_active": True, "session_token": stoken, "error": None}
+        stoken = create_session(_db_path(), user_agent=ua, user_id=new_user_id)
+        ns = {"step": 2, "wizard_active": True, "session_token": stoken,
+              "user_id": new_user_id, "error": None}
         resp = templates.TemplateResponse(request, "setup.html",
             {"step": 2, "error": None, "default_channel": dch})
         _update_wizard(resp, tok, ns)
@@ -359,7 +438,7 @@ async def setup_post(request: Request, step: int):
         return redir
     return HTMLResponse(status_code=404, content="Unknown step.")
 
-def _ensure_ledger(name: str) -> None:
+def _ensure_ledger(name: str, user_id: Optional[str] = None) -> None:
     """Create a ledger row if one with this name doesn't already exist."""
     import uuid as _uuid
     conn = get_db(_db_path())
@@ -369,8 +448,8 @@ def _ensure_ledger(name: str) -> None:
         ).fetchone()
         if existing is None:
             conn.execute(
-                "INSERT INTO ledgers (id, name) VALUES (?, ?)",
-                (str(_uuid.uuid4()), name),
+                "INSERT INTO ledgers (id, name, user_id) VALUES (?, ?, ?)",
+                (str(_uuid.uuid4()), name, user_id),
             )
             conn.commit()
     finally:
@@ -381,17 +460,22 @@ def _ensure_ledger(name: str) -> None:
 
 @app.get("/login", response_class=HTMLResponse)
 def login_get(request: Request):
-    """Render login form.  If no password is set, redirect to /setup."""
+    """Render login form.  If no users exist, redirect to /setup."""
     if not _password_is_set():
         return _redirect("/setup")
-    username = _get_username()
-    return templates.TemplateResponse(request, "login.html", {"error": None, "username": username})
+    profiles = list_users(_db_path())
+    prefill_username = request.query_params.get("username", "")
+    return templates.TemplateResponse(
+        request, "login.html",
+        {"error": None, "profiles": profiles, "prefill_username": prefill_username},
+    )
 
 
 @app.post("/login")
 async def login_post(request: Request):
-    """Verify password; on success create session and redirect to /profile.
+    """Verify username+password; on success create session and redirect to /profile.
 
+    Username is optional when there is only one user (backward compat).
     On failure: re-render login.html with an error.
     No rate limiting — single-user local app (per d4403c0).
     """
@@ -399,16 +483,34 @@ async def login_post(request: Request):
         return _redirect("/setup")
 
     form = await request.form()
+    username = (form.get("username") or "").strip()
     password = (form.get("password") or "")
 
-    stored_hash = get_password_hash(_db_path())
-    success = stored_hash is not None and verify_password(password, stored_hash)
+    profiles = list_users(_db_path())
+
+    # If username not supplied, try to resolve it from the single-user case.
+    user = None
+    if username:
+        user = get_user_by_username(_db_path(), username)
+    elif len(profiles) == 1:
+        # Backward compat: single user, no username required
+        user = get_user_by_id(_db_path(), profiles[0]["id"])
+    elif len(profiles) == 0:
+        # Should never happen (guarded above), but be safe
+        return _redirect("/setup")
+    # else: multiple users, username required — user stays None → error below
+
+    success = (
+        user is not None
+        and verify_password(password, user["password_hash"])
+    )
 
     if not success:
         return templates.TemplateResponse(
             request,
             "login.html",
-            {"error": "Incorrect password."},
+            {"error": "Incorrect username or password.",
+             "profiles": profiles, "prefill_username": username},
             status_code=200,
         )
     # Clear any pending setup session.
@@ -416,9 +518,9 @@ async def login_post(request: Request):
     if st:
         delete_session(_db_path(), st)
 
-    # Create session.
+    # Create session with user_id.
     ua = request.headers.get("user-agent")
-    token = create_session(_db_path(), user_agent=ua)
+    token = create_session(_db_path(), user_agent=ua, user_id=user["id"])
 
     response = _redirect("/profile")
     response.set_cookie(SESSION_COOKIE, token, httponly=True, samesite="strict")
@@ -512,30 +614,48 @@ async def reset_post(request: Request):
 
 # ── /profile ─────────────────────────────────────────────────────────────────
 
-def _get_connections() -> list[dict]:
-    """Query bank_connections and return a list of dicts."""
+def _get_connections(user_id: Optional[str] = None) -> list[dict]:
+    """Query bank_connections for *user_id* and return a list of dicts."""
     conn = get_db(_db_path())
     try:
-        rows = conn.execute(
-            "SELECT id, institution_name, status, last_synced_at "
-            "FROM bank_connections ORDER BY rowid"
-        ).fetchall()
+        if user_id:
+            rows = conn.execute(
+                "SELECT id, institution_name, status, last_synced_at "
+                "FROM bank_connections WHERE user_id = ? ORDER BY rowid",
+                (user_id,),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT id, institution_name, status, last_synced_at "
+                "FROM bank_connections ORDER BY rowid"
+            ).fetchall()
         return [dict(r) for r in rows]
     finally:
         conn.close()
 
 
-def _get_accounts() -> list[dict]:
+def _get_accounts(user_id: Optional[str] = None) -> list[dict]:
     """Query bank_accounts joined with their connection and return list of dicts."""
     conn = get_db(_db_path())
     try:
-        rows = conn.execute(
-            "SELECT ba.id, ba.name, ba.mask, ba.type, ba.subtype, ba.description,"
-            "       bc.institution_name"
-            "  FROM bank_accounts ba"
-            "  JOIN bank_connections bc ON bc.id = ba.connection_id"
-            " ORDER BY bc.institution_name, ba.name"
-        ).fetchall()
+        if user_id:
+            rows = conn.execute(
+                "SELECT ba.id, ba.name, ba.mask, ba.type, ba.subtype, ba.description,"
+                "       bc.institution_name"
+                "  FROM bank_accounts ba"
+                "  JOIN bank_connections bc ON bc.id = ba.connection_id"
+                " WHERE bc.user_id = ?"
+                " ORDER BY bc.institution_name, ba.name",
+                (user_id,),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT ba.id, ba.name, ba.mask, ba.type, ba.subtype, ba.description,"
+                "       bc.institution_name"
+                "  FROM bank_accounts ba"
+                "  JOIN bank_connections bc ON bc.id = ba.connection_id"
+                " ORDER BY bc.institution_name, ba.name"
+            ).fetchall()
         return [dict(r) for r in rows]
     except Exception:
         return []
@@ -547,22 +667,39 @@ def _get_accounts() -> list[dict]:
 def profile_get(request: Request):
     """Settings page.  Requires authentication."""
     if _is_authenticated(request):
+        uid = _current_user_id(request)
         pref = _get_notification_pref()
-        connections = _get_connections()
-        accounts = _get_accounts()
+        connections = _get_connections(uid)
+        accounts = _get_accounts(uid)
+        profiles = list_users(_db_path())
+        current_user = get_user_by_id(_db_path(), uid) if uid else None
         return templates.TemplateResponse(request, "profile.html",
             {"notification_pref": pref, "saved": False,
              "connections": connections, "accounts": accounts,
-             "action_result": None})
+             "action_result": None, "profiles": profiles,
+             "current_user": current_user})
     st = request.cookies.get(_SETUP_COMPLETE_COOKIE)
     if st and _check_raw_session(_db_path(), st):
         pref = _get_notification_pref()
-        connections = _get_connections()
-        accounts = _get_accounts()
+        uid = None
+        conn_db = get_db(_db_path())
+        try:
+            row = conn_db.execute("SELECT user_id FROM sessions WHERE id = ?", (st,)).fetchone()
+            if row:
+                uid = row["user_id"]
+        except Exception:
+            pass
+        finally:
+            conn_db.close()
+        connections = _get_connections(uid)
+        accounts = _get_accounts(uid)
+        profiles = list_users(_db_path())
+        current_user = get_user_by_id(_db_path(), uid) if uid else None
         resp = templates.TemplateResponse(request, "profile.html",
             {"notification_pref": pref, "saved": False,
              "connections": connections, "accounts": accounts,
-             "action_result": None})
+             "action_result": None, "profiles": profiles,
+             "current_user": current_user})
         resp.set_cookie(SESSION_COOKIE, st, httponly=True, samesite="strict")
         resp.delete_cookie(_SETUP_COMPLETE_COOKIE)
         return resp
@@ -582,14 +719,19 @@ async def profile_post(request: Request):
       - export_now: trigger server.main.export_excel()
       - disconnect_bank: delete bank_connection by bank_id
       - reconnect_bank: call server.main.refresh_connection(id=bank_id)
+      - create_profile: create a new local profile
+      - delete_profile: delete a local profile and all its data
     """
     if not _is_authenticated(request):
         return _redirect("/login")
+    uid = _current_user_id(request)
     form = await request.form()
     action = (form.get("action") or "").strip()
     pref = _get_notification_pref()
-    connections = _get_connections()
-    accounts = _get_accounts()
+    connections = _get_connections(uid)
+    accounts = _get_accounts(uid)
+    profiles = list_users(_db_path())
+    current_user = get_user_by_id(_db_path(), uid) if uid else None
     action_result: dict | None = None
 
     if action == "sync_now":
@@ -635,6 +777,37 @@ async def profile_post(request: Request):
             except Exception as exc:
                 action_result = {"ok": False, "message": f"Reconnect failed: {exc}"}
 
+    elif action == "create_profile":
+        new_username = (form.get("new_username") or "").strip()
+        new_password = (form.get("new_password") or "").strip()
+        if not new_username:
+            action_result = {"ok": False, "message": "Username is required."}
+        elif len(new_password) < 8:
+            action_result = {"ok": False, "message": "Password must be at least 8 characters."}
+        else:
+            try:
+                create_user(_db_path(), new_username, new_password)
+                profiles = list_users(_db_path())  # refresh
+                action_result = {"ok": True, "message": f"Profile '{new_username}' created."}
+            except ValueError as exc:
+                action_result = {"ok": False, "message": str(exc)}
+
+    elif action == "delete_profile":
+        del_user_id = (form.get("del_user_id") or "").strip()
+        if not del_user_id:
+            action_result = {"ok": False, "message": "No profile specified."}
+        elif del_user_id == uid:
+            action_result = {"ok": False, "message": "Cannot delete the currently active profile. Log in as another profile first."}
+        elif len(list_users(_db_path())) <= 1:
+            action_result = {"ok": False, "message": "Cannot delete the only profile."}
+        else:
+            try:
+                delete_user(_db_path(), del_user_id)
+                profiles = list_users(_db_path())  # refresh
+                action_result = {"ok": True, "message": "Profile deleted."}
+            except Exception as exc:
+                action_result = {"ok": False, "message": f"Delete failed: {exc}"}
+
     else:
         # Default: save notification_pref
         pref = form.get("notification_pref") or "openclaw"
@@ -644,7 +817,8 @@ async def profile_post(request: Request):
             "profile.html",
             {"notification_pref": pref, "saved": True,
              "connections": connections, "accounts": accounts,
-             "action_result": None},
+             "action_result": None, "profiles": profiles,
+             "current_user": current_user},
         )
 
     return templates.TemplateResponse(
@@ -652,7 +826,8 @@ async def profile_post(request: Request):
         "profile.html",
         {"notification_pref": pref, "saved": False,
          "connections": connections, "accounts": accounts,
-         "action_result": action_result},
+         "action_result": action_result, "profiles": profiles,
+         "current_user": current_user},
     )
 
 
@@ -701,7 +876,8 @@ def ledgers_get(request: Request):
     """
     if not _is_authenticated(request):
         return _redirect("/login")
-    ledgers = _get_ledgers()
+    uid = _current_user_id(request)
+    ledgers = _get_ledgers(uid)
     return templates.TemplateResponse(
         request,
         "ledgers.html",
@@ -719,6 +895,7 @@ async def ledgers_create(request: Request):
     """Create a new ledger. JSON body: {name: str}."""
     if not _is_authenticated(request):
         return JSONResponse({"error": "Unauthorized"}, status_code=401)
+    uid = _current_user_id(request)
     body = await request.json()
     name = (body.get("name") or "").strip()
     if not name:
@@ -727,8 +904,8 @@ async def ledgers_create(request: Request):
     conn = get_db(_db_path())
     try:
         conn.execute(
-            "INSERT INTO ledgers (id, name) VALUES (?, ?)",
-            (ledger_id, name),
+            "INSERT INTO ledgers (id, name, user_id) VALUES (?, ?, ?)",
+            (ledger_id, name, uid),
         )
         conn.commit()
     finally:
