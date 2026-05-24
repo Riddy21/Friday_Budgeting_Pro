@@ -120,6 +120,17 @@ _PREF_TO_CHANNEL = {"openclaw": "openclaw_chat", "ui": "in_ui", "macos": "macos"
                     "openclaw_chat": "openclaw_chat", "in_ui": "in_ui"}
 
 
+def _get_username() -> str:
+    conn = get_db(_db_path())
+    try:
+        row = conn.execute("SELECT username FROM app_config WHERE id=1").fetchone()
+        return row["username"] if row and row["username"] else "User"
+    except Exception:
+        return "User"
+    finally:
+        conn.close()
+
+
 def _get_notification_channel() -> str:
     conn = get_db(_db_path())
     try:
@@ -280,6 +291,7 @@ async def setup_post(request: Request, step: int):
         return HTMLResponse(status_code=404, content="Setup already complete.")
     form = await request.form()
     if step == 1:
+        username = (form.get("username") or "").strip()
         pw = (form.get("password") or "").strip()
         cf = (form.get("password_confirm") or "").strip()
         dch = "openclaw_chat" if _openclaw_home_exists() else "macos"
@@ -296,6 +308,14 @@ async def setup_post(request: Request, step: int):
             _update_wizard(resp, tok, {"step": 1, "wizard_active": False, "error": err})
             return resp
         set_password_hash(_db_path(), hash_password(pw))
+        # Save username
+        _conn = get_db(_db_path())
+        try:
+            try: _conn.execute("ALTER TABLE app_config ADD COLUMN username TEXT")
+            except: pass
+            _conn.execute("INSERT INTO app_config (id, username) VALUES (1, ?) ON CONFLICT(id) DO UPDATE SET username=excluded.username", (username or "User",))
+            _conn.commit()
+        finally: _conn.close()
         ua = request.headers.get("user-agent")
         stoken = create_session(_db_path(), user_agent=ua)
         ns = {"step": 2, "wizard_active": True, "session_token": stoken, "error": None}
@@ -360,11 +380,8 @@ def login_get(request: Request):
     """Render login form.  If no password is set, redirect to /setup."""
     if not _password_is_set():
         return _redirect("/setup")
-    return templates.TemplateResponse(
-        request,
-        "login.html",
-        {"error": None},
-    )
+    username = _get_username()
+    return templates.TemplateResponse(request, "login.html", {"error": None, "username": username})
 
 
 @app.post("/login")
