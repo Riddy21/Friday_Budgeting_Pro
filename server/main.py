@@ -355,18 +355,25 @@ def apply_initial_setup(
 
 
 @mcp.tool
-def start_link() -> dict:
+def start_link(plaid_env: str = "sandbox") -> dict:
     """Return a URL to open Plaid Link.
 
     Calls PlaidProvider.create_link_token() and returns a URL pointing at
     the (future) UI link page (served by #14).
+
+    Parameters
+    ----------
+    plaid_env : str
+        Plaid environment for this link session: ``'sandbox'``,
+        ``'development'``, or ``'production'``.  Defaults to ``'sandbox'``.
     """
-    link_token = _plaid.create_link_token()
-    return {"url": f"http://127.0.0.1:6789/link?token={link_token}"}
+    provider = PlaidProvider(env=plaid_env)
+    link_token = provider.create_link_token()
+    return {"url": f"http://127.0.0.1:6789/link?token={link_token}", "plaid_env": provider.env}
 
 
 @mcp.tool
-def complete_link(public_token: str) -> dict:
+def complete_link(public_token: str, plaid_env: str = "sandbox") -> dict:
     """Exchange a Plaid public token and store the access token.
 
     Exchanges the public_token for a Plaid access_token + item_id, encrypts
@@ -375,8 +382,15 @@ def complete_link(public_token: str) -> dict:
 
     institution_name is left NULL for now — fetching it requires
     Plaid /institutions/get_by_id which is out of scope; see issue #34.
+
+    Parameters
+    ----------
+    plaid_env : str
+        Plaid environment that was used for the Link session.  Stored on the
+        connection row so every subsequent sync uses the correct environment.
     """
-    result = _plaid.exchange_public_token(public_token)
+    provider = PlaidProvider(env=plaid_env)
+    result = provider.exchange_public_token(public_token)
     access_token = result["access_token"]
     item_id = result["item_id"]
 
@@ -389,10 +403,10 @@ def complete_link(public_token: str) -> dict:
         conn.execute(
             """
             INSERT INTO bank_connections
-                (id, plaid_item_id, plaid_access_token_encrypted, status, user_id)
-            VALUES (?, ?, ?, 'active', ?)
+                (id, plaid_item_id, plaid_access_token_encrypted, status, user_id, plaid_env)
+            VALUES (?, ?, ?, 'active', ?, ?)
             """,
-            (connection_id, item_id, encrypted_token, uid),
+            (connection_id, item_id, encrypted_token, uid, provider.env),
         )
         conn.commit()
     finally:
@@ -582,7 +596,7 @@ def sync() -> dict:
                 )
 
                 active_conns = db_conn.execute(
-                    "SELECT id, plaid_access_token_encrypted "
+                    "SELECT id, plaid_access_token_encrypted, plaid_env "
                     "FROM bank_connections WHERE status = 'active'"
                 ).fetchall()
 
@@ -590,6 +604,16 @@ def sync() -> dict:
                     connection_id = bc["id"]
                     encrypted_token = bc["plaid_access_token_encrypted"]
                     access_token = server.crypto.decrypt(encrypted_token)
+                    conn_plaid_env = bc["plaid_env"] or "sandbox"
+
+                    # Per-connection provider locked to the stored env.
+                    conn_provider = PlaidProvider(env=conn_plaid_env)
+                    if conn_provider.env != conn_plaid_env:
+                        raise ValueError(
+                            f"Environment mismatch: connection {connection_id!r} "
+                            f"was linked in env '{conn_plaid_env}' but resolved "
+                            f"provider env is '{conn_provider.env}'"
+                        )
 
                     cursor_row = db_conn.execute(
                         "SELECT cursor FROM sync_cursors WHERE connection_id = ?",
@@ -598,7 +622,7 @@ def sync() -> dict:
                     cursor = cursor_row["cursor"] if cursor_row else None
 
                     try:
-                        result = _plaid.sync_transactions(access_token, cursor)
+                        result = conn_provider.sync_transactions(access_token, cursor)
                     except Exception as e:
                         if _is_reauth_error(e):
                             with db_txn(db_conn):
