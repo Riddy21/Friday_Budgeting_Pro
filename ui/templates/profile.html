@@ -1,0 +1,66 @@
+{% extends "base.html" %}
+
+{% block title %}Profile — Friday Budgeting Pro{% endblock %}
+
+{% block nav %}
+<nav>
+  <a href="/ledgers">Ledgers</a>
+  <form method="post" action="/logout" style="display:inline">
+    <button type="submit" class="btn-link">Sign out</button>
+  </form>
+</nav>
+{% endblock %}
+
+{% block content %}
+<div class="card">
+  <h1>Profile</h1>
+
+  {% if saved %}
+  <div class="alert alert-success">Settings saved.</div>
+  {% endif %}
+
+  <!-- Settings form -->
+  <section>
+    <h2>Settings</h2>
+    <form method="post" action="/profile">
+      <label for="notification_pref">Notification preference</label>
+      <select id="notification_pref" name="notification_pref">
+        <option value="openclaw"
+          {% if notification_pref == "openclaw" %}selected{% endif %}>
+          OpenClaw chat
+        </option>
+        <option value="macos"
+          {% if notification_pref == "macos" %}selected{% endif %}>
+          macOS Notification Center
+        </option>
+        <option value="ui"
+          {% if notification_pref == "ui" %}selected{% endif %}>
+          In-browser banner only
+        </option>
+      </select>
+      <button type="submit" class="btn-primary">Save settings</button>
+    </form>
+  </section>
+
+  <!-- Quick actions -->
+  <section>
+    <h2>Data</h2>
+    <div class="action-row">
+      <a href="/ledgers" class="btn-secondary">View Ledgers</a>
+      <!-- Sync / Export are MCP operations in v0.1; these are informational links. -->
+      <span class="hint">Sync and export are available via OpenClaw chat.</span>
+    </div>
+  </section>
+
+  <!-- Linked Accounts — TODO (#47): Full linked-accounts section with
+       Reconnect / Disconnect / + Connect a bank buttons. -->
+  <section id="linked-accounts">
+    <h2>Linked Accounts</h2>
+    <p class="hint">Linked account management coming in issue <strong>#47</strong>.
+       To connect a bank now, use the <code>start_link</code> MCP tool via
+       OpenClaw chat.</p>
+    <!-- TODO (#47): Render bank_connections list with status pills and
+         Reconnect / Disconnect / + Connect a bank buttons. -->
+  </section>
+</div>
+{% endblock %}

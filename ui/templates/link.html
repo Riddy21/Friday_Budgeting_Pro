@@ -1,0 +1,52 @@
+{% extends "base.html" %}
+
+{% block title %}Connect Bank — Friday Budgeting Pro{% endblock %}
+
+{% block content %}
+<div class="card card-narrow">
+  <h1>Connect a bank</h1>
+
+  {% if link_token %}
+  <p>Click the button below to open the secure Plaid Link popup and connect
+     your bank account.</p>
+
+  <button id="plaid-link-btn" class="btn-primary">Open Plaid Link</button>
+
+  <!-- Plaid Link JS — standard CDN embed -->
+  <script src="https://cdn.plaid.com/link/v2/stable/link-initialize.js"></script>
+  <script>
+    var handler = Plaid.create({
+      token: {{ link_token | tojson }},
+      onSuccess: function(public_token, metadata) {
+        // POST the public_token back so the server can exchange it.
+        var form = document.createElement('form');
+        form.method = 'POST';
+        form.action = '/link/complete';
+        var input = document.createElement('input');
+        input.type = 'hidden';
+        input.name = 'public_token';
+        input.value = public_token;
+        form.appendChild(input);
+        document.body.appendChild(form);
+        form.submit();
+      },
+      onExit: function(err, metadata) {
+        if (err) {
+          console.error('Plaid Link error:', err);
+        }
+      },
+    });
+
+    document.getElementById('plaid-link-btn').addEventListener('click', function() {
+      handler.open();
+    });
+  </script>
+  {% else %}
+  <p>No Plaid link token provided. Use OpenClaw chat to generate a link token
+     (<code>start_link</code> MCP tool), then visit
+     <code>/link?token=&lt;link_token&gt;</code>.</p>
+  {% endif %}
+
+  <p class="hint"><a href="/profile">Back to Profile</a></p>
+</div>
+{% endblock %}

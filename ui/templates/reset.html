@@ -1,0 +1,32 @@
+{% extends "base.html" %}
+
+{% block title %}Reset Password — Friday Budgeting Pro{% endblock %}
+
+{% block content %}
+<div class="card card-narrow">
+  <h1>Reset your password</h1>
+
+  <!-- TODO (#60): Full reset flow — validate token, set new password. -->
+  <p class="hint">This page is a placeholder. The complete reset flow lands with
+     issue <strong>#60</strong>.</p>
+
+  {% if error %}
+  <div class="alert alert-error">{{ error }}</div>
+  {% endif %}
+
+  <form method="post" action="/reset">
+    <label for="token">Recovery token</label>
+    <input id="token" name="token" type="text" required
+           placeholder="Paste the token from recovery.txt" />
+    <label for="password">New password</label>
+    <input id="password" name="password" type="password" required minlength="8"
+           autocomplete="new-password" placeholder="At least 8 characters" />
+    <label for="password_confirm">Confirm new password</label>
+    <input id="password_confirm" name="password_confirm" type="password" required
+           autocomplete="new-password" placeholder="Same password again" />
+    <button type="submit" class="btn-primary">Reset password</button>
+  </form>
+
+  <p class="hint"><a href="/login">Back to login</a></p>
+</div>
+{% endblock %}

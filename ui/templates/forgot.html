@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+
+{% block title %}Forgot Password — Friday Budgeting Pro{% endblock %}
+
+{% block content %}
+<div class="card card-narrow">
+  <h1>Forgot your password?</h1>
+
+  <!-- TODO (#60): Full account-recovery flow (email / file-based token). -->
+  <p>Friday will write a one-time recovery token to
+     <code>~/.friday-bp/recovery.txt</code>. Open that file and follow the
+     instructions inside.</p>
+
+  {% if sent %}
+  <div class="alert alert-success">Recovery token written to
+    <code>~/.friday-bp/recovery.txt</code>. Check that file now.</div>
+  {% else %}
+  <form method="post" action="/forgot">
+    <button type="submit" class="btn-primary">Send recovery token</button>
+  </form>
+  {% endif %}
+
+  <p class="hint"><a href="/login">Back to login</a></p>
+</div>
+{% endblock %}
