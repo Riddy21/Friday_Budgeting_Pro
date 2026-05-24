@@ -23,6 +23,12 @@ import openpyxl
 from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill
 
+from server.sync_lock import acquire_sync_lock, LockBusy
+
+
+class ExportBusy(Exception):
+    """Raised when export_to_file cannot acquire the sync lock within the timeout."""
+
 # ---------------------------------------------------------------------------
 # Style constants
 # ---------------------------------------------------------------------------
@@ -315,11 +321,16 @@ def export_to_file(
     conn: sqlite3.Connection,
     path: str | Path,
     years: list[int] | None = None,
+    lock_timeout: float = 30.0,
 ) -> Path:
     """Build the workbook and save it atomically to *path* with mode 0o600.
 
     Uses a write-to-tmp-then-rename pattern so that the target file is never
     in a partially-written state (atomic on macOS/Linux).
+
+    Acquires the sync lock before writing so that an in-progress sync cannot
+    race with the export.  The lock is held for the duration of the write and
+    rename, then released.
 
     Parameters
     ----------
@@ -329,26 +340,48 @@ def export_to_file(
         Destination file path.
     years:
         Passed through to build_workbook.
+    lock_timeout:
+        How long (in seconds) to wait for the sync lock before raising
+        :class:`ExportBusy`.  Default is 30 seconds.
 
     Returns
     -------
     Path to the written file.
+
+    Raises
+    ------
+    ExportBusy
+        When the sync lock cannot be acquired within *lock_timeout* seconds.
     """
     path = Path(path)
-    tmp_path = path.with_suffix(path.suffix + ".tmp")
+    pid = os.getpid()
+    tmp_path = path.with_suffix(path.suffix + f".tmp.{pid}")
 
-    wb = build_workbook(conn, years)
+    # Acquire the sync lock before touching any files so that a running sync
+    # cannot observe a partial write.
+    lock = acquire_sync_lock(timeout=lock_timeout)
+    if lock is None:
+        raise ExportBusy(
+            f"Could not acquire sync lock within {lock_timeout}s — "
+            "a sync may be in progress; try again shortly."
+        )
 
     try:
-        wb.save(str(tmp_path))
-        os.chmod(tmp_path, 0o600)
-        os.replace(str(tmp_path), str(path))
-    except Exception:
-        # Clean up temp file on failure
+        wb = build_workbook(conn, years)
+
         try:
-            tmp_path.unlink(missing_ok=True)
-        except OSError:
-            pass
-        raise
+            wb.save(str(tmp_path))
+            os.chmod(tmp_path, 0o600)
+            os.replace(str(tmp_path), str(path))
+        except Exception:
+            # Clean up temp file on failure; original file (if any) is untouched
+            # because we only call os.replace on success.
+            try:
+                tmp_path.unlink(missing_ok=True)
+            except OSError:
+                pass
+            raise
+    finally:
+        lock.close()
 
     return path
