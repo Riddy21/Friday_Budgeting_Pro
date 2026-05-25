@@ -783,6 +783,17 @@ def _build_ledger_drilldown(
             end = _dt(now.year + 1, 1, 1).strftime("%Y-%m-%d")
             date_filter_sql = " AND t.date >= ? AND t.date < ?"
             date_params = [start, end]
+        elif period == "last_3_months":
+            from datetime import timedelta as _td
+
+            end_dt = _dt(now.year, now.month, 1)  # start of this month
+            start_dt = end_dt - _td(days=90)
+            start = start_dt.strftime("%Y-%m-%d")
+            end = end_dt.strftime("%Y-%m-%d")
+            date_filter_sql = " AND t.date >= ? AND t.date < ?"
+            date_params = [start, end]
+        elif period == "all":
+            pass  # no filter — date_filter_sql stays empty
         # unknown period values → no filter (treat as None)
 
     # Fetch line items --------------------------------------------------

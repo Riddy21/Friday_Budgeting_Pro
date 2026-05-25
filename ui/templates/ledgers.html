@@ -19,11 +19,37 @@
   .txn-account { color: #888; padding-right: 0.5em; font-size: 0.9em; }
   .txn-amount { text-align: right; white-space: nowrap; }
   .txn-pending td { color: #aaa; font-style: italic; }
+  .period-selector { display: flex; gap: 0.25em; flex-wrap: wrap; margin-bottom: 1em; }
+  .period-selector a {
+    padding: 0.3em 0.75em;
+    border: 1px solid #ccc;
+    border-radius: 4px;
+    text-decoration: none;
+    color: #333;
+    font-size: 0.9em;
+    background: #f5f5f5;
+    transition: background 0.1s;
+  }
+  .period-selector a:hover { background: #e8e8e8; }
+  .period-selector a.active {
+    background: #1a73e8;
+    color: #fff;
+    border-color: #1a73e8;
+    font-weight: 600;
+  }
 </style>
 <div class="card">
   <div style="display:flex;justify-content:space-between;align-items:baseline;">
     <h1>Ledgers</h1>
     <button class="btn-primary" id="btn-add-ledger">+ Add Ledger</button>
+  </div>
+
+  <div class="period-selector" role="tablist" aria-label="Date range">
+    <a href="/ledgers?period=this_month" class="{% if period == 'this_month' %}active{% endif %}" aria-current="{% if period == 'this_month' %}page{% endif %}">This month</a>
+    <a href="/ledgers?period=last_month" class="{% if period == 'last_month' %}active{% endif %}" aria-current="{% if period == 'last_month' %}page{% endif %}">Last month</a>
+    <a href="/ledgers?period=last_3_months" class="{% if period == 'last_3_months' %}active{% endif %}" aria-current="{% if period == 'last_3_months' %}page{% endif %}">Last 3 months</a>
+    <a href="/ledgers?period=this_year" class="{% if period == 'this_year' %}active{% endif %}" aria-current="{% if period == 'this_year' %}page{% endif %}">This year</a>
+    <a href="/ledgers?period=all" class="{% if period == 'all' %}active{% endif %}" aria-current="{% if period == 'all' %}page{% endif %}">All time</a>
   </div>
 
   <div id="add-ledger-form" style="display:none;margin-bottom:1em;">

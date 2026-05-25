@@ -148,6 +148,11 @@ ledgers when you need them (e.g. for a rental property). Each line item shows
 its running total and transaction count; click to expand and see the individual
 transactions classified to it (populated once auto-categorisation is active).
 
+A **date range filter** at the top of the page lets you scope all totals to a
+preset period: *This month* (default), *Last month*, *Last 3 months*, *This year*,
+or *All time*. The selected period is reflected in the URL (`/ledgers?period=…`)
+so views are shareable and bookmarkable.
+
 Ledgers come in three types:
 - **Personal** (default) — standard household budget with line items like Salary, Groceries, Dining, etc.
 - **Property** — rental/investment property ledger with pre-seeded items: Rent income, Mortgage, Property tax, Maintenance & repairs, Insurance, Utilities.
