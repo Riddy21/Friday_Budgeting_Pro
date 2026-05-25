@@ -258,6 +258,16 @@ threat model.
 
 ---
 
+## Multi-Currency Support
+
+Friday Budgeting Pro stores and displays amounts in each account's native currency:
+
+- **Currency stored at sync time** — `bank_accounts.currency` and `transactions.currency` are populated from Plaid's `iso_currency_code` during every sync
+- **Prefix on every balance** — `C$` for CAD, `US$` for USD, `£` for GBP, `€` for EUR, ISO code for others
+- **FX conversion** — coming in a follow-up PR (amount_home, frankfurter.app rates, home-currency toggle)
+
+---
+
 ## What This Is Not (v0.1)
 
 - Not a full web app. The UI is deliberately small: setup and profile only.
