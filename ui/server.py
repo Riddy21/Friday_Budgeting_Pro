@@ -838,9 +838,7 @@ async def accounts_name_patch(request: Request, account_id: str):
         )
         conn.commit()
         if result.rowcount == 0:
-            return JSONResponse(
-                {"error": f"account {account_id!r} not found"}, status_code=404
-            )
+            return JSONResponse({"error": f"account {account_id!r} not found"}, status_code=404)
     finally:
         conn.close()
     return JSONResponse({"status": "ok", "account_id": account_id, "name": name})
@@ -859,10 +857,8 @@ def settings_get(request: Request):
     uid = _current_user_id(request)
     conn = get_db(_db_path())
     try:
-        row = conn.execute(
-            "SELECT home_currency FROM users WHERE id = ?", (uid,)
-        ).fetchone()
-        home_currency = (row["home_currency"] if row and row["home_currency"] else "CAD")
+        row = conn.execute("SELECT home_currency FROM users WHERE id = ?", (uid,)).fetchone()
+        home_currency = row["home_currency"] if row and row["home_currency"] else "CAD"
     finally:
         conn.close()
     saved = request.query_params.get("saved") == "1"
@@ -890,9 +886,7 @@ async def settings_post(request: Request):
         # Invalid value — reload with error, keep existing value
         conn = get_db(_db_path())
         try:
-            row = conn.execute(
-                "SELECT home_currency FROM users WHERE id = ?", (uid,)
-            ).fetchone()
+            row = conn.execute("SELECT home_currency FROM users WHERE id = ?", (uid,)).fetchone()
             current = row["home_currency"] if row and row["home_currency"] else "CAD"
         finally:
             conn.close()
@@ -909,9 +903,7 @@ async def settings_post(request: Request):
         )
     conn = get_db(_db_path())
     try:
-        conn.execute(
-            "UPDATE users SET home_currency = ? WHERE id = ?", (home_currency, uid)
-        )
+        conn.execute("UPDATE users SET home_currency = ? WHERE id = ?", (home_currency, uid))
         conn.commit()
     finally:
         conn.close()
