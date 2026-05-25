@@ -760,24 +760,60 @@ def dashboard_get(request: Request):
     )
 
 
-# ── /accounts (stub — #158 will implement) ────────────────────────────────────
+# ── /accounts ─────────────────────────────────────────────────────────────────
+
+
+def _get_accounts_grouped(user_id: Optional[str] = None) -> dict:
+    """Return bank accounts grouped by institution_name, with balances."""
+    conn = get_db(_db_path())
+    try:
+        if user_id:
+            rows = conn.execute(
+                "SELECT ba.id, ba.name, ba.mask, ba.type, ba.subtype,"
+                "       ba.balance_current, ba.balance_available, ba.description,"
+                "       bc.id AS connection_id, bc.institution_name"
+                "  FROM bank_accounts ba"
+                "  JOIN bank_connections bc ON bc.id = ba.connection_id"
+                " WHERE bc.user_id = ?"
+                " ORDER BY bc.institution_name, ba.name",
+                (user_id,),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT ba.id, ba.name, ba.mask, ba.type, ba.subtype,"
+                "       ba.balance_current, ba.balance_available, ba.description,"
+                "       bc.id AS connection_id, bc.institution_name"
+                "  FROM bank_accounts ba"
+                "  JOIN bank_connections bc ON bc.id = ba.connection_id"
+                " ORDER BY bc.institution_name, ba.name",
+            ).fetchall()
+        grouped: dict = {}
+        for r in rows:
+            inst = r["institution_name"] or "Unknown"
+            if inst not in grouped:
+                grouped[inst] = {"connection_id": r["connection_id"], "accounts": []}
+            grouped[inst]["accounts"].append(dict(r))
+        return grouped
+    except Exception:
+        return {}
+    finally:
+        conn.close()
 
 
 @app.get("/accounts", response_class=HTMLResponse)
 def accounts_get(request: Request):
-    """Accounts stub page.  Requires authentication.  Full implementation: #158."""
+    """Bank accounts page grouped by institution with balances."""
     if not _is_authenticated(request):
         return _redirect("/login")
+    uid = _current_user_id(request)
+    grouped_accounts = _get_accounts_grouped(uid)
     return templates.TemplateResponse(
         request,
         "accounts.html",
-        {"current_page": "accounts"},
+        {"current_page": "accounts", "grouped_accounts": grouped_accounts},
     )
 
 
-<<<<<<< Updated upstream
-# ── /settings (stub — #159 will implement) ────────────────────────────────────
-=======
 @app.patch("/accounts/{account_id}/name")
 async def accounts_name_patch(request: Request, account_id: str):
     """Update the display name for a bank account (inline rename).  Requires auth.
@@ -805,10 +841,7 @@ async def accounts_name_patch(request: Request, account_id: str):
     return JSONResponse({"status": "ok", "account_id": account_id, "name": name})
 
 
-# ── /settings (#159) ─────────────────────────────────────────────────────────
-
-_VALID_CURRENCIES = ["CAD", "USD", "EUR", "GBP"]
->>>>>>> Stashed changes
+# ── /settings (stub — #159 will implement) ────────────────────────────────────
 
 
 @app.get("/settings", response_class=HTMLResponse)
@@ -816,17 +849,6 @@ def settings_get(request: Request):
     """Settings stub page.  Requires authentication.  Full implementation: #159."""
     if not _is_authenticated(request):
         return _redirect("/login")
-<<<<<<< Updated upstream
-=======
-    uid = _current_user_id(request)
-    conn = get_db(_db_path())
-    try:
-        row = conn.execute("SELECT home_currency FROM users WHERE id = ?", (uid,)).fetchone()
-        home_currency = row["home_currency"] if row and row["home_currency"] else "CAD"
-    finally:
-        conn.close()
-    saved = request.query_params.get("saved") == "1"
->>>>>>> Stashed changes
     return templates.TemplateResponse(
         request,
         "settings.html",
@@ -834,45 +856,6 @@ def settings_get(request: Request):
     )
 
 
-<<<<<<< Updated upstream
-=======
-@app.post("/settings", response_class=HTMLResponse)
-async def settings_post(request: Request):
-    """Save settings.  Requires authentication."""
-    if not _is_authenticated(request):
-        return _redirect("/login")
-    uid = _current_user_id(request)
-    form = await request.form()
-    home_currency = (form.get("home_currency") or "").strip().upper()
-    if home_currency not in _VALID_CURRENCIES:
-        # Invalid value — reload with error, keep existing value
-        conn = get_db(_db_path())
-        try:
-            row = conn.execute("SELECT home_currency FROM users WHERE id = ?", (uid,)).fetchone()
-            current = row["home_currency"] if row and row["home_currency"] else "CAD"
-        finally:
-            conn.close()
-        return templates.TemplateResponse(
-            request,
-            "settings.html",
-            {
-                "current_page": "settings",
-                "home_currency": current,
-                "currencies": _VALID_CURRENCIES,
-                "saved": False,
-                "error": f"Invalid currency: {home_currency!r}. Choose one of {_VALID_CURRENCIES}.",
-            },
-        )
-    conn = get_db(_db_path())
-    try:
-        conn.execute("UPDATE users SET home_currency = ? WHERE id = ?", (home_currency, uid))
-        conn.commit()
-    finally:
-        conn.close()
-    return _redirect("/settings?saved=1")
-
-
->>>>>>> Stashed changes
 # ── /profile ─────────────────────────────────────────────────────────────────
 
 
