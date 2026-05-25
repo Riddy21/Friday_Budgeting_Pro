@@ -10,18 +10,17 @@ keep things fast.
 from __future__ import annotations
 
 import json
-import os
 import sys
 import uuid
 from pathlib import Path
 
 # Load .env before imports
 from dotenv import load_dotenv
+
 load_dotenv(Path(__file__).parent.parent / ".env")
 
 import server.paths as paths
 from server.db import get_db
-from server.classifier import classify_with_llm
 from server.llm import chat
 
 LIMIT = int(sys.argv[1]) if len(sys.argv) > 1 else 100
@@ -56,10 +55,10 @@ def batch_classify(limit: int = 100):
     """).fetchall()
 
     ledger_tree_lines = []
-    for l in ledgers:
-        ledger_tree_lines.append(f"Ledger: {l['name']} (id={l['id']})")
+    for ledger in ledgers:
+        ledger_tree_lines.append(f"Ledger: {ledger['name']} (id={ledger['id']})")
         for li in line_items:
-            if li['ledger_id'] == l['id']:
+            if li['ledger_id'] == ledger['id']:
                 ledger_tree_lines.append(f"  - [{li['item_type']}] {li['name']} (id={li['id']})")
     ledger_tree = "\n".join(ledger_tree_lines)
 
