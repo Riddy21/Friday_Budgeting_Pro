@@ -720,6 +720,26 @@ exposure.**
 
 ---
 
+## Multi-Currency Support
+
+### Foundation (shipped in #160)
+
+- `bank_accounts.currency` — ISO 4217 code for the account's native currency, populated from `account.balances.iso_currency_code` during Plaid sync (falls back to `'CAD'` if null)
+- `transactions.currency` — inherited from the parent account's currency at insert time (individual Plaid transactions don't carry an ISO code directly)
+- `server/currency.py` — `format_amount(amount, currency)` helper: `C$` for CAD, `US$` for USD, `£` for GBP, `€` for EUR, ISO code prefix for others
+- `/accounts` page displays balance with currency prefix
+- MCP `list` tool includes `currency` field per transaction
+
+### Deferred to follow-up PR
+
+- FX rate fetching from frankfurter.app
+- `amount_home` conversion at sync time
+- `fx_rates` cache table writes (table schema already exists)
+- Toggle to switch between home currency and original currency in the UI
+- Rate note display ("1 USD = C$1.37 as of May 24")
+
+---
+
 ## Database Migration Strategy
 
 ### Rules (mandatory for all schema changes)
@@ -839,7 +859,7 @@ That's the whole codebase. ~10 files.
 - ❌ Web dashboard with charts/analytics
   - These two roll up into the "bigger UI" future ticket (#55).
 - ❌ Mobile app
-- ❌ Multi-currency / FX
+- ⚠️ Multi-currency / FX — **foundation shipped in #160** (schema + currency prefix display + Plaid sync population); FX rate fetching, `amount_home` conversion, and home-currency toggle are deferred to a follow-up PR
 - ❌ Investment tracking
 - ❌ Tax filing categorization
 - ❌ Budget targets / forecasting

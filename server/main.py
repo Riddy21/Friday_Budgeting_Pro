@@ -1508,7 +1508,7 @@ def sync() -> dict:
                     next_cursor = result.get("next_cursor") if isinstance(result, dict) else None
                     accounts_list = result.get("accounts", []) if isinstance(result, dict) else []
 
-                    # Build a lookup map: plaid_account_id -> {name, type}
+                    # Build a lookup map: plaid_account_id -> {name, type, currency}
                     # Use official_name if present, else fall back to name.
                     account_meta: dict[str, dict] = {}
                     for acct in accounts_list:
@@ -1519,9 +1519,13 @@ def sync() -> dict:
                             # type may come back as an enum object; coerce to string
                             if acct_type is not None and not isinstance(acct_type, str):
                                 acct_type = str(acct_type)
+                            # iso_currency_code from balances; fall back to 'CAD'
+                            balances = _get(acct, "balances") or {}
+                            acct_currency = _get(balances, "iso_currency_code") or "CAD"
                             account_meta[acct_id] = {
                                 "name": acct_name,
                                 "type": acct_type,
+                                "currency": acct_currency,
                             }
 
                     now = int(_time.time())
@@ -1554,9 +1558,10 @@ def sync() -> dict:
                             ).fetchone()
                             bank_account_id = ba_row["id"]
 
-                            # Populate name/type from account metadata (idempotent —
+                            # Populate name/type/currency from account metadata (idempotent —
                             # only overwrites when the incoming value is non-null so
                             # a second sync won't blank out rows with good data).
+                            acct_currency = "CAD"  # default
                             if plaid_account_id in account_meta:
                                 meta = account_meta[plaid_account_id]
                                 if meta["name"] is not None:
@@ -1571,12 +1576,19 @@ def sync() -> dict:
                                         "WHERE plaid_account_id = ? AND (type IS NULL OR type = '')",
                                         (meta["type"], plaid_account_id),
                                     )
+                                # Always update currency from Plaid (authoritative source)
+                                acct_currency = meta.get("currency") or "CAD"
+                                db_conn.execute(
+                                    "UPDATE bank_accounts SET currency = ? "
+                                    "WHERE plaid_account_id = ?",
+                                    (acct_currency, plaid_account_id),
+                                )
 
                             txn_id = str(uuid.uuid4())
                             cur = db_conn.execute(
                                 "INSERT OR IGNORE INTO transactions "
-                                "(id, bank_account_id, plaid_transaction_id, date, merchant, amount, pending) "
-                                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                                "(id, bank_account_id, plaid_transaction_id, date, merchant, amount, currency, pending) "
+                                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                                 (
                                     txn_id,
                                     bank_account_id,
@@ -1584,6 +1596,7 @@ def sync() -> dict:
                                     str(date) if date is not None else None,
                                     merchant,
                                     amount,
+                                    acct_currency,
                                     1 if pending else 0,
                                 ),
                             )
@@ -1798,7 +1811,8 @@ def list(filters: Optional[dict] = None) -> dict:
             te.reviewed,
             t.date,
             t.merchant,
-            t.amount AS transaction_amount
+            t.amount AS transaction_amount,
+            t.currency
         FROM transaction_entries te
         JOIN transactions t ON t.id = te.transaction_id
         {where_clause}

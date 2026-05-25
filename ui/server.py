@@ -876,6 +876,7 @@ def _get_accounts_grouped(user_id: Optional[str] = None) -> dict:
             rows = conn.execute(
                 "SELECT ba.id, ba.name, ba.mask, ba.type, ba.subtype,"
                 "       ba.balance_current, ba.balance_available, ba.description,"
+                "       COALESCE(ba.currency, 'CAD') AS currency,"
                 "       bc.id AS connection_id, bc.institution_name"
                 "  FROM bank_accounts ba"
                 "  JOIN bank_connections bc ON bc.id = ba.connection_id"
@@ -887,6 +888,7 @@ def _get_accounts_grouped(user_id: Optional[str] = None) -> dict:
             rows = conn.execute(
                 "SELECT ba.id, ba.name, ba.mask, ba.type, ba.subtype,"
                 "       ba.balance_current, ba.balance_available, ba.description,"
+                "       COALESCE(ba.currency, 'CAD') AS currency,"
                 "       bc.id AS connection_id, bc.institution_name"
                 "  FROM bank_accounts ba"
                 "  JOIN bank_connections bc ON bc.id = ba.connection_id"

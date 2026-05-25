@@ -142,6 +142,13 @@ def init_db(path: str | Path) -> None:
         conn.execute("UPDATE users SET timezone = 'America/Toronto' WHERE timezone IS NULL")
         conn.commit()
 
+        # Migration: multi-currency (#160)
+        _add_col_if_missing(conn, "bank_accounts", "currency", "TEXT")
+        conn.execute("UPDATE bank_accounts SET currency = 'CAD' WHERE currency IS NULL")
+        _add_col_if_missing(conn, "transactions", "currency", "TEXT")
+        conn.execute("UPDATE transactions SET currency = 'CAD' WHERE currency IS NULL")
+        conn.commit()
+
         # Migration: create default user only when there is existing data to migrate
         # (i.e. rows exist that need a user_id) but no users have been created yet.
         # On truly fresh DBs, we leave users empty so the setup wizard can create

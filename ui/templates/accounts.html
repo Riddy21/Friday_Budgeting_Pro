@@ -47,10 +47,14 @@
             {{ acct.subtype or acct.type or '—' }}
           </td>
           <td style="padding:0.55rem 0.6rem;text-align:right;font-weight:600;font-variant-numeric:tabular-nums">
-            {% if acct.balance_current is not none %}
-              C${{ "%.2f"|format(acct.balance_current) }}
-            {% elif acct.balance_available is not none %}
-              C${{ "%.2f"|format(acct.balance_available) }}
+            {% set balance = acct.balance_current if acct.balance_current is not none else acct.balance_available %}
+            {% if balance is not none %}
+              {% set currency = acct.currency or 'CAD' %}
+              {% if currency == 'CAD' %}C$
+              {% elif currency == 'USD' %}US$
+              {% elif currency == 'GBP' %}£
+              {% elif currency == 'EUR' %}€
+              {% else %}{{ currency }} {% endif %}{{ "%.2f"|format(balance) }}
             {% else %}
               <span style="color:#94a3b8">—</span>
             {% endif %}
