@@ -25,7 +25,11 @@ import server.crypto
 import server.excel_export as excel_export
 import server.health_monitor
 import server.paths
-from server.classifier import apply_rules, classify_with_rules
+from server.classifier import (
+    apply_rules,
+    classify_transaction,
+    classify_with_rules,  # kept import for legacy callers / tests
+)
 from server.db import get_db
 from server.db import transaction as db_txn
 from server.providers.plaid import PlaidProvider
@@ -1265,9 +1269,15 @@ def classify_pending_transactions(user_id: str) -> dict:
 
     conn = get_db(server.paths.DB_PATH)
     try:
-        # Fetch rules once — shared across all transactions in this pass.
+        # Fetch rules / ledger tree / hints ONCE — shared across all
+        # transactions in this pass (issue #205 unified classifier).
         rules_result = list_rules()
         rules = rules_result.get("rules", [])
+
+        from server.classifier import _build_ledger_tree, _fetch_hints
+
+        ledger_tree_text = _build_ledger_tree(conn)
+        hints_list = _fetch_hints(conn)
 
         # Fetch all unclassified, non-pending transactions for this user.
         unclassified = conn.execute(
@@ -1324,12 +1334,20 @@ def classify_pending_transactions(user_id: str) -> dict:
             if hint and hint.get("is_possible_transfer"):
                 context = {"possible_internal_transfer": True}
 
-            # Run classifier.
+            # Run UNIFIED classifier — ONE LLM call per transaction with all
+            # context (rules + ledger tree + hints + transfer hint + account).
             try:
-                result = classify_with_rules(tx_dict, rules, context)
+                result = classify_transaction(
+                    conn,
+                    tx_dict,
+                    rules,
+                    ledger_tree=ledger_tree_text,
+                    hints=hints_list,
+                    context=context,
+                )
             except Exception as exc:
                 _logger.warning(
-                    "classify_pending_transactions: classify_with_rules failed for " "tx_id=%s: %s",
+                    "classify_pending_transactions: classify_transaction failed for " "tx_id=%s: %s",
                     tx_id,
                     exc,
                 )
@@ -1679,53 +1697,13 @@ def sync() -> dict:
                                     )
                                     conn_classified += 1
 
-                                # --- Tier-1 v2: classify_with_rules integration point ---
-                                # Evaluate priority-ordered classification_rules via LLM.
-                                # Results are NOT written to transaction_entries here —
-                                # that is #165's responsibility.  This block runs when
-                                # rules exist and the legacy apply_rules produced no match
-                                # (or as an additional signal when it did).
-                                # Only runs when at least one classification_rule exists.
-                                try:
-                                    _rules_result = list_rules()
-                                    _cr_rules = _rules_result.get("rules", [])
-                                    if _cr_rules:
-                                        _plaid_cat = None
-                                        # Enrich txn_dict for classify_with_rules
-                                        _v2_txn = {
-                                            "merchant": merchant,
-                                            "amount": amount,
-                                            "date": str(date) if date is not None else None,
-                                            "account_name": None,
-                                            "account_description": None,
-                                            "plaid_category": _plaid_cat,
-                                        }
-                                        # Attach account name/description if available
-                                        _ba_row = db_conn.execute(
-                                            "SELECT name, description FROM bank_accounts WHERE id = ?",
-                                            (bank_account_id,),
-                                        ).fetchone()
-                                        if _ba_row:
-                                            _v2_txn["account_name"] = _ba_row["name"]
-                                            _v2_txn["account_description"] = _ba_row["description"]
-                                        _v2_result = classify_with_rules(_v2_txn, _cr_rules)
-                                        import logging as _logging
-
-                                        _logging.getLogger(__name__).debug(
-                                            "classify_with_rules txn_id=%s result=%r",
-                                            txn_id,
-                                            _v2_result,
-                                        )
-                                        # Result available for #165 to consume
-                                        # (auto-write to transaction_entries is out of scope here)
-                                except Exception as _exc:
-                                    import logging as _logging
-
-                                    _logging.getLogger(__name__).debug(
-                                        "classify_with_rules skipped for txn_id=%s: %s",
-                                        txn_id,
-                                        _exc,
-                                    )
+                                # NOTE (issue #205): the previous in-sync
+                                # ``classify_with_rules`` debug-only call was
+                                # removed because classification is now done
+                                # post-sync by the unified ``classify_pending_transactions``
+                                # pipeline (one LLM call per transaction, not
+                                # two). Keeping it here would double the LLM
+                                # spend for every synced transaction.
 
                         # --- Modified transactions ---
                         for txn in modified_txns:

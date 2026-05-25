@@ -370,7 +370,7 @@ class TestClassifyPendingTransactions:
         assert result == {"classified": 0, "skipped": 0, "uncertain": 0}
 
     def test_transfer_hint_passed_to_classifier(self, db_env):
-        """Transfer hint should be included in classify_with_rules context."""
+        """Transfer hint should be included in the unified classifier context."""
         conn = get_db(db_env["db"])
         try:
             _seed_rule(conn, "Transfer Rule", "transfer", db_env["expense_li_id"], priority=1)
@@ -382,10 +382,13 @@ class TestClassifyPendingTransactions:
 
         captured_contexts = []
 
-        def mock_classify(tx_dict, rules, context=None):
+        # New unified signature (issue #205):
+        # classify_transaction(conn, tx_dict, rules, ledger_tree=..., hints=..., context=...)
+        def mock_classify(
+            conn_arg, tx_dict, rules, ledger_tree=None, hints=None, context=None
+        ):
             captured_contexts.append(context)
 
-            # Short-circuit: return a pre-built result.
             return {
                 "rule_id": None,
                 "line_item_id": db_env["expense_li_id"],
@@ -398,7 +401,7 @@ class TestClassifyPendingTransactions:
         hint = {"is_possible_transfer": True, "matched_account": "acct-2", "matched_amount": 50.0}
 
         with (
-            patch("server.main.classify_with_rules", side_effect=mock_classify),
+            patch("server.main.classify_transaction", side_effect=mock_classify),
             patch("server.main.get_transfer_hint", return_value=hint),
         ):
             classify_pending_transactions(db_env["user_id"])

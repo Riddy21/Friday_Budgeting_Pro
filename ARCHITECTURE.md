@@ -312,16 +312,24 @@ That's the whole API. ~15 tools.
 
 ## Classification Engine
 
+As of issue **#205** the classifier makes **one unified LLM call per
+transaction** — the previous two-stage (Tier 1 + Tier 2) flow has been
+merged into a single prompt that carries every piece of context the LLM
+needs. Half the LLM round-trips, half the cost, no split-brain logic.
+
 ```
 New transaction
    │
-   ├─▶ classify_pending_transactions(user_id)  (#165)
+   ├─▶ classify_pending_transactions(user_id)
    │     Runs after sync completes (or can be called standalone).
    │     Finds all non-pending transactions with no transaction_entries row.
+   │     Fetches rules + ledger tree + hints ONCE (shared across the batch).
    │     For each:
    │       1. Build tx dict (merchant, amount, date, account, plaid_category)
    │       2. get_transfer_hint() → possible_internal_transfer context
-   │       3. classify_with_rules(tx, rules, context)  (see Tier 1 v2 below)
+   │       3. classify_transaction(conn, tx, rules,
+   │                               ledger_tree=..., hints=..., context=...)
+   │          → SINGLE LLM call with the full unified prompt below.
    │       4. classification_type='skip' → skip entry (no line_item)
    │       5. line_item_id set → write transaction_entries row directly
    │       6. line_item_id=None + account.default_ledger_id set → fallback
@@ -330,37 +338,43 @@ New transaction
    │       7. No fallback found → uncertain entry (surfaces in get_needs_review)
    │     Returns { classified: N, skipped: M, uncertain: K }
    │
-   ├─▶ Tier 1 v2: classify_with_rules()  (LLM-first, #170)
-   │     Passes the full priority-ordered classification_rules list to the
-   │     LLM.  First matching rule wins.  Returns:
+   ├─▶ Unified classifier: classify_transaction()  (#205)
+   │     ONE LLM call with all context in a single prompt:
+   │       - Priority-ordered classification rules (first match wins)
+   │       - Full ledger tree (every ledger + line item + id)
+   │       - Classification hints
+   │       - Account name + description
+   │       - Up to 5 recent reviewed entries for the same merchant
+   │       - Optional transfer hint + recent corrections
+   │       - The transaction (merchant, amount, date, plaid_category)
+   │     Response (strict JSON):
    │       { rule_id, line_item_id, classification_type, confidence,
-   │         uncertain, reasoning }
-   │     Optional context: possible_internal_transfer hint,
-   │     recent_corrections.
+   │         reasoning }
+   │     The caller derives uncertain = confidence < 0.7.
    │
-   ├─▶ Tier 1 legacy: apply_rules() (substring matching, routing_rules)
-   │     Still runs for backward-compat; new writes use classify_with_rules.
+   ├─▶ Legacy fast path: apply_rules() (substring matching, routing_rules)
+   │     Auto-promoted rules write entries inline during sync without
+   │     spending an LLM call.  Unmatched transactions fall through to
+   │     classify_transaction() in classify_pending_transactions.
    │
-   ├─▶ Tier 2: classify_with_llm()
-   │     Prompt: hints + full ledger tree + recent similar txns + this txn.
-   │     LLM picks ledger/line item with confidence score.
-   │     If confidence >= 0.75 → auto-route + flag for casual review.
-   │
-   └─▶ Tier 3: Ask user
-         HAL sends: "Got a $X charge at Y — my guess is Z (62% sure).
-                     Correct, or should it be something else?"
-         User replies → save as a new rule for next time.
+   └─▶ Review queue: get_needs_review()
+         Surfaces uncertain or unrouted entries.  Agent can ask the user
+         and call correct_transaction(); after 3 consistent corrections
+         for the same merchant maybe_promote_to_rule() creates a new
+         routing_rule so the next match is deterministic.
 ```
 
 After 3 successful LLM classifications of the same merchant, auto-promote
 to a legacy Tier-1 routing_rule. System gets cheaper and faster over time.
 
-### classify_pending_transactions — key design notes (#165)
+### classify_pending_transactions — key design notes (#165 + #205)
 - Called automatically at the end of `sync()`. Errors are logged but never
   block the sync response.
 - Idempotent: already-classified transactions (any `transaction_entries` row)
   are skipped on every call.
 - Pending transactions (`pending=1`) are never classified.
+- Rules, ledger tree, and hints are fetched **once per pass** and reused
+  across every transaction in the batch (avoids redundant DB queries).
 - `classification_type='skip'` writes a `skip` entry so the transaction
   is not re-evaluated on the next run.
 - When `line_item_id=None` from the LLM and the account has a
@@ -368,10 +382,19 @@ to a legacy Tier-1 routing_rule. System gets cheaper and faster over time.
 - Transactions that cannot be routed get an unrouted entry with
   `uncertain=1` and surface in `get_needs_review()`.
 
-### classify_with_rules — key design notes
-- Disabled rules (`enabled=0`) are excluded from the LLM prompt.
+### classify_transaction — key design notes (#205)
+- Single LLM call per transaction; no separate Tier-1 / Tier-2 paths.
+- Disabled rules (`enabled=0`) are excluded from the prompt.
 - `uncertain=True` when `confidence < 0.7`.
-- Writes to `transaction_entries` via `classify_pending_transactions`.
+- Pre-rendered `ledger_tree` and `hints` may be passed in by the caller
+  (used by `classify_pending_transactions` so the tree/hints are fetched
+  once and shared across the entire pending batch).
+- Validation: bad JSON or an unknown `classification_type` raises
+  `ValueError`; `classify_pending_transactions` catches that and counts the
+  transaction as uncertain so it surfaces in the review queue.
+- Backward-compat: the legacy `classify_with_rules` / `classify_with_llm`
+  functions remain in `server/classifier.py` and still pass their own tests,
+  but production code paths now call `classify_transaction()` instead.
 
 ### Transfer Detection
 

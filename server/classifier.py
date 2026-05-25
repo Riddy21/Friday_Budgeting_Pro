@@ -1,16 +1,20 @@
 """
-server/classifier.py — Classifier tiers for Friday Budgeting Pro.
+server/classifier.py — Classifier for Friday Budgeting Pro.
 
-Classification pipeline:
-  Tier 1 (classify_with_rules): LLM-first approach using priority-ordered
-      classification_rules — evaluates natural language rules in order via the
-      LLM and returns a structured result.  This is the primary entry point.
-  Tier 2 (classify_with_llm): LLM classification using the full ledger tree,
-      hints, and recent similar transactions.  Coexists with Tier 1.
-  Tier 3 (auto-promotion): flag_for_review + maybe_promote_to_rule.
+Classification pipeline (post issue #205):
+  Primary (classify_transaction): SINGLE unified LLM call that evaluates
+      priority-ordered classification_rules with full ledger tree, hints,
+      account context, recent reviewed entries, and a transfer hint — all
+      in one prompt.  Replaces the legacy two-stage (Tier 1 + Tier 2) flow.
+  Auto-promotion (flag_for_review + maybe_promote_to_rule): after enough
+      consistent reviewed entries for a merchant, auto-create a routing_rule.
 
-Legacy (apply_rules): deterministic substring matching against routing_rules.
-  Kept for backward-compat; new code should prefer classify_with_rules.
+Legacy compat:
+  classify_with_rules / classify_with_llm — kept as thin wrappers around
+      classify_transaction() so older callers / tests keep working.  New
+      code should call classify_transaction() directly.
+  apply_rules — deterministic substring match against routing_rules.  Kept
+      for the legacy auto-promoted-rule fast path.
 """
 
 from __future__ import annotations
@@ -19,7 +23,296 @@ import json
 import sqlite3
 
 # ---------------------------------------------------------------------------
-# Tier 1 — LLM-first classify_with_rules
+# Unified single LLM classification call (issue #205)
+# ---------------------------------------------------------------------------
+
+UNCERTAIN_THRESHOLD = 0.7
+
+
+def _build_ledger_tree(conn: sqlite3.Connection) -> str:
+    """Render the user's ledger tree as a readable string for the LLM prompt."""
+    ledgers_rows = conn.execute("SELECT id, name FROM ledgers ORDER BY name").fetchall()
+    line_items_rows = conn.execute(
+        "SELECT li.id, li.name, li.ledger_id, li.item_type"
+        "  FROM line_items li"
+        "  JOIN ledgers l ON l.id = li.ledger_id"
+        " ORDER BY l.name, li.name"
+    ).fetchall()
+
+    lines: list[str] = []
+    for ledger_row in ledgers_rows:
+        lines.append(f"  Ledger: {ledger_row['name']} (id={ledger_row['id']})")
+        for li in line_items_rows:
+            if li["ledger_id"] == ledger_row["id"]:
+                # item_type column was added in a later migration; treat missing as ''.
+                try:
+                    item_type = li["item_type"] or ""
+                except (IndexError, KeyError):
+                    item_type = ""
+                suffix = f" [{item_type}]" if item_type else ""
+                lines.append(f"    - {li['name']}{suffix} (id={li['id']})")
+    return "\n".join(lines) if lines else "  (no ledgers)"
+
+
+def _fetch_hints(conn: sqlite3.Connection) -> list[str]:
+    rows = conn.execute("SELECT text FROM classification_hints ORDER BY id").fetchall()
+    return [r["text"] for r in rows]
+
+
+def _fetch_recent_same_merchant(
+    conn: sqlite3.Connection, merchant: str, limit: int = 5
+) -> list[dict]:
+    """Return up to *limit* recent reviewed entries for *merchant*."""
+    if not merchant:
+        return []
+    rows = conn.execute(
+        "SELECT t.merchant, t.amount, t.date, te.line_item_id, li.name AS li_name,"
+        "       l.name AS ledger_name"
+        "  FROM transaction_entries te"
+        "  JOIN transactions t  ON t.id  = te.transaction_id"
+        "  JOIN line_items   li ON li.id = te.line_item_id"
+        "  JOIN ledgers      l  ON l.id  = te.ledger_id"
+        " WHERE te.reviewed = 1"
+        "   AND t.merchant = ?"
+        " ORDER BY t.date DESC"
+        " LIMIT ?",
+        (merchant, limit),
+    ).fetchall()
+    return [
+        {
+            "date": r["date"],
+            "merchant": r["merchant"],
+            "amount": r["amount"],
+            "ledger_name": r["ledger_name"],
+            "line_item_name": r["li_name"],
+            "line_item_id": r["line_item_id"],
+        }
+        for r in rows
+    ]
+
+
+def classify_transaction(
+    conn: sqlite3.Connection,
+    transaction: dict,
+    rules: list[dict],
+    ledger_tree: str | None = None,
+    hints: list[str] | None = None,
+    context: dict | None = None,
+) -> dict:
+    """Classify a single transaction with ONE unified LLM call (issue #205).
+
+    Combines what used to be Tier 1 (classify_with_rules) and Tier 2
+    (classify_with_llm) into a single prompt containing:
+
+    - Priority-ordered classification rules (first match wins)
+    - Full ledger tree with all ledgers + line items + ids
+    - Classification hints (free-text user context)
+    - Account name + description
+    - Up to 5 recent reviewed entries for the same merchant
+    - Optional transfer hint and recent corrections
+    - The transaction itself (merchant, amount, date, plaid category)
+
+    Args:
+        conn:        sqlite3 connection (row_factory must yield Row-like).
+                     Used to fetch ledger_tree / hints / recent entries when
+                     not supplied by the caller.
+        transaction: dict with merchant, amount, date, and optional
+                     account_name, account_description, plaid_category.
+        rules:       List of classification_rule dicts (priority ASC).
+        ledger_tree: Pre-rendered ledger tree string.  If None, the function
+                     fetches it from *conn* itself.  Pass-in form is used by
+                     ``classify_pending_transactions`` so the tree is fetched
+                     once and shared across many transactions.
+        hints:       List of hint strings.  If None, fetched from *conn*.
+        context:     Optional context dict with:
+                     - ``possible_internal_transfer`` (bool)
+                     - ``recent_corrections`` (list[dict])
+
+    Returns:
+        Result dict with keys:
+            rule_id, line_item_id, classification_type,
+            confidence, uncertain, reasoning
+
+    Raises:
+        ValueError: If the LLM returns invalid JSON or an unknown
+            classification_type.
+    """
+    from server.llm import chat  # local import keeps chat patchable in tests
+
+    # ------------------------------------------------------------------
+    # 1. Rules section (enabled only, priority order)
+    # ------------------------------------------------------------------
+    enabled_rules = [r for r in rules if r.get("enabled", True)]
+    if enabled_rules:
+        rules_lines: list[str] = []
+        for r in enabled_rules:
+            li_note = (
+                f" → line_item_id={r['line_item_id']}" if r.get("line_item_id") else ""
+            )
+            rules_lines.append(
+                f"  [{r['priority']:>3}] id={r['id']}  type={r['rule_type']}"
+                f"  name=\"{r['name']}\""
+                f"  desc=\"{r['description']}\"{li_note}"
+            )
+        rules_text = "\n".join(rules_lines)
+    else:
+        rules_text = "  (no enabled rules)"
+
+    # ------------------------------------------------------------------
+    # 2. Ledger tree
+    # ------------------------------------------------------------------
+    if ledger_tree is None:
+        ledger_tree = _build_ledger_tree(conn)
+
+    # ------------------------------------------------------------------
+    # 3. Hints
+    # ------------------------------------------------------------------
+    if hints is None:
+        hints = _fetch_hints(conn)
+    hints_text = "\n".join(f"  - {h}" for h in hints) if hints else "  (none)"
+
+    # ------------------------------------------------------------------
+    # 4. Transaction details
+    # ------------------------------------------------------------------
+    merchant = transaction.get("merchant") or "(unknown)"
+    amount = transaction.get("amount", 0.0)
+    date = transaction.get("date", "unknown")
+    account_name = transaction.get("account_name", "")
+    account_description = transaction.get("account_description", "")
+    plaid_category = transaction.get("plaid_category", "")
+
+    txn_lines = [
+        f"  Merchant            : {merchant}",
+        f"  Amount              : ${amount:.2f}",
+        f"  Date                : {date}",
+    ]
+    if account_name:
+        txn_lines.append(f"  Account             : {account_name}")
+    if account_description:
+        txn_lines.append(f"  Account description : {account_description}")
+    if plaid_category:
+        txn_lines.append(f"  Plaid category      : {plaid_category}")
+    txn_text = "\n".join(txn_lines)
+
+    # ------------------------------------------------------------------
+    # 5. Recent same-merchant reviewed entries
+    # ------------------------------------------------------------------
+    recent_entries = _fetch_recent_same_merchant(conn, merchant) if merchant else []
+    if recent_entries:
+        recent_lines = [
+            f"  - {r['date']} | {r['merchant']} | ${r['amount']:.2f}"
+            f" → {r['ledger_name']} / {r['line_item_name']} (id={r['line_item_id']})"
+            for r in recent_entries
+        ]
+        recent_text = "\n".join(recent_lines)
+    else:
+        recent_text = "  (none)"
+
+    # ------------------------------------------------------------------
+    # 6. Optional context (transfer hint, recent corrections)
+    # ------------------------------------------------------------------
+    context_parts: list[str] = []
+    if context:
+        if context.get("possible_internal_transfer"):
+            context_parts.append(
+                "  ⚠️  Transfer detector flagged this transaction as a "
+                "possible internal transfer (same amount moved between accounts)."
+            )
+        corrections = context.get("recent_corrections") or []
+        if corrections:
+            corr_lines = [
+                f"  - {c.get('date','?')}  "
+                f"{c.get('from_line_item','?')} → {c.get('to_line_item','?')}"
+                for c in corrections
+            ]
+            context_parts.append(
+                "  Recent manual corrections for this merchant:\n"
+                + "\n".join(corr_lines)
+            )
+    context_text = "\n".join(context_parts) if context_parts else "  (none)"
+
+    # ------------------------------------------------------------------
+    # 7. Compose the single unified prompt
+    # ------------------------------------------------------------------
+    system_msg = (
+        "You are a personal finance classifier. You classify a single bank "
+        "transaction in ONE shot using all available context.\n\n"
+        "Decision policy:\n"
+        "1. Walk the priority-ordered classification rules from top to bottom. "
+        "The FIRST rule that clearly applies wins — stop scanning after the "
+        "first match. Return that rule's id (and its line_item_id when it "
+        "has one).\n"
+        "2. If no rule clearly applies, infer the best line_item_id from the "
+        "ledger tree, hints, account context, and recent similar entries. "
+        "Set rule_id to null in that case.\n"
+        "3. classification_type must reflect the chosen line item / rule: "
+        "transfer | savings | spending | income | skip. For unmatched "
+        "transactions infer the type from the Plaid category and amount sign "
+        "(negative = outflow = spending or transfer).\n"
+        "4. Set confidence < 0.7 when you are not confident — the caller "
+        "will flag the transaction for review.\n\n"
+        "Reply with ONLY a JSON object — no markdown, no text outside the "
+        "JSON — with these keys:\n"
+        '{"rule_id": "<id or null>", "line_item_id": "<exact id or null>", '
+        '"classification_type": "<transfer|savings|spending|income|skip>", '
+        '"confidence": <0.0-1.0>, "reasoning": "<one sentence>"}'
+    )
+
+    user_msg = (
+        f"## Classification Rules (priority ASC — first match wins)\n{rules_text}\n\n"
+        f"## Ledger Tree\n{ledger_tree}\n\n"
+        f"## Classification Hints\n{hints_text}\n\n"
+        f"## Recent Reviewed Entries For This Merchant\n{recent_text}\n\n"
+        f"## Additional Context\n{context_text}\n\n"
+        f"## Transaction To Classify\n{txn_text}\n\n"
+        "Reply with the JSON object only."
+    )
+
+    messages = [
+        {"role": "system", "content": system_msg},
+        {"role": "user", "content": user_msg},
+    ]
+
+    # ------------------------------------------------------------------
+    # 8. Call the LLM and parse
+    # ------------------------------------------------------------------
+    raw = chat(messages, temperature=0.0)
+
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"LLM returned non-JSON response: {raw!r}") from exc
+
+    required_keys = {"classification_type", "confidence", "reasoning"}
+    missing = required_keys - parsed.keys()
+    if missing:
+        raise ValueError(
+            f"LLM JSON missing required keys {sorted(missing)!r}: {parsed!r}"
+        )
+
+    confidence = float(parsed.get("confidence", 0.0))
+
+    valid_types = {"transfer", "savings", "spending", "income", "skip"}
+    classification_type = parsed.get("classification_type", "")
+    if classification_type not in valid_types:
+        raise ValueError(
+            f"LLM returned unknown classification_type={classification_type!r}. "
+            f"Expected one of {sorted(valid_types)!r}."
+        )
+
+    return {
+        "rule_id": parsed.get("rule_id"),
+        "line_item_id": parsed.get("line_item_id"),
+        "classification_type": classification_type,
+        "confidence": confidence,
+        "uncertain": confidence < UNCERTAIN_THRESHOLD,
+        "reasoning": str(parsed.get("reasoning", "")),
+    }
+
+
+# ---------------------------------------------------------------------------
+# Legacy Tier-1 wrapper — kept for backward-compat (issue #205).
+# Now implemented in terms of classify_transaction().
 # ---------------------------------------------------------------------------
 
 
