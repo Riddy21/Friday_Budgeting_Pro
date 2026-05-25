@@ -35,6 +35,8 @@ jobs:
         with:
           python-version: "3.11"
       - run: python3 scripts/lint_security.py
+      - name: Check test isolation (no hard-coded production paths)
+        run: python3 scripts/check_test_isolation.py
 
   integration:
     runs-on: ubuntu-latest
