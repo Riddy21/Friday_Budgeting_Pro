@@ -3,6 +3,23 @@
 {% block title %}Ledgers — Friday Budgeting Pro{% endblock %}
 
 {% block content %}
+<style>
+  .item-total-cell { text-align: right; white-space: nowrap; padding-right: 0.5em; color: #555; font-size: 0.9em; }
+  .item-count-cell { white-space: nowrap; color: #888; font-size: 0.85em; padding-right: 0.5em; }
+  .item-expand-cell { width: 2em; text-align: center; }
+  .btn-expand-item { background: none; border: none; cursor: pointer; font-size: 1.1em; color: #666; padding: 0 0.3em; transition: transform 0.15s; }
+  .btn-expand-item.expanded { transform: rotate(180deg); }
+  .txn-detail-row td { padding: 0; }
+  .txn-detail-cell { padding: 0.25em 0 0.25em 1.5em !important; background: #f9f9f9; }
+  .txn-table { width: 100%; border-collapse: collapse; font-size: 0.85em; }
+  .txn-table tr { border-bottom: 1px solid #eee; }
+  .txn-tree { font-family: monospace; color: #aaa; padding-right: 0.3em; white-space: nowrap; }
+  .txn-date { white-space: nowrap; padding-right: 0.5em; color: #666; }
+  .txn-merchant { flex: 1; }
+  .txn-account { color: #888; padding-right: 0.5em; font-size: 0.9em; }
+  .txn-amount { text-align: right; white-space: nowrap; }
+  .txn-pending td { color: #aaa; font-style: italic; }
+</style>
 <div class="card">
   <div style="display:flex;justify-content:space-between;align-items:baseline;">
     <h1>Ledgers</h1>
@@ -38,18 +55,42 @@
             <tbody class="items-tbody" data-section="income">
               {% for item in ledger.line_items %}
               {% if item.item_type == "income" %}
-              <tr data-item-id="{{ item.id }}">
-                <td>
+              <tr class="line-item-row" data-item-id="{{ item.id }}" data-line-item-id="{{ item.id }}">
+                <td class="item-name-cell">
                   <span class="item-name-display">{{ item.name }}</span>
                   <input class="item-name-input" type="text" value="{{ item.name }}"
                     style="display:none;" data-item-id="{{ item.id }}"
                     data-ledger-id="{{ ledger.id }}">
+                </td>
+                <td class="item-total-cell">C${{ "%.2f"|format(item.total) }}</td>
+                <td class="item-count-cell">{{ item.transactions|length }} transaction{% if item.transactions|length != 1 %}s{% endif %}</td>
+                <td class="item-expand-cell">
+                  {% if item.transactions %}
+                  <button class="btn-expand-item" data-item-id="{{ item.id }}" aria-label="Toggle transactions">&#8964;</button>
+                  {% endif %}
                 </td>
                 <td>
                   <button class="btn-danger btn-delete-item" data-item-id="{{ item.id }}"
                     data-ledger-id="{{ ledger.id }}">x</button>
                 </td>
               </tr>
+              {% if item.transactions %}
+              <tr class="txn-detail-row" data-parent-item-id="{{ item.id }}" style="display:none;">
+                <td colspan="5" class="txn-detail-cell">
+                  <table class="txn-table">
+                    {% for tx in item.transactions %}
+                    <tr class="{% if tx.pending %}txn-pending{% endif %}">
+                      <td class="txn-tree">{% if loop.last %}&#9492;&#9472;&#9472;{% else %}&#9500;&#9472;&#9472;{% endif %}</td>
+                      <td class="txn-date">{{ tx.date }}</td>
+                      <td class="txn-merchant">{{ tx.merchant or '(unknown)' }}</td>
+                      <td class="txn-account">{{ tx.account_name or '' }}</td>
+                      <td class="txn-amount">C${{ "%.2f"|format(tx.amount) }}</td>
+                    </tr>
+                    {% endfor %}
+                  </table>
+                </td>
+              </tr>
+              {% endif %}
               {% endif %}
               {% endfor %}
             </tbody>
@@ -66,18 +107,42 @@
             <tbody class="items-tbody" data-section="expenses">
               {% for item in ledger.line_items %}
               {% if item.item_type == "expense" %}
-              <tr data-item-id="{{ item.id }}">
-                <td>
+              <tr class="line-item-row" data-item-id="{{ item.id }}" data-line-item-id="{{ item.id }}">
+                <td class="item-name-cell">
                   <span class="item-name-display">{{ item.name }}</span>
                   <input class="item-name-input" type="text" value="{{ item.name }}"
                     style="display:none;" data-item-id="{{ item.id }}"
                     data-ledger-id="{{ ledger.id }}">
+                </td>
+                <td class="item-total-cell">C${{ "%.2f"|format(item.total) }}</td>
+                <td class="item-count-cell">{{ item.transactions|length }} transaction{% if item.transactions|length != 1 %}s{% endif %}</td>
+                <td class="item-expand-cell">
+                  {% if item.transactions %}
+                  <button class="btn-expand-item" data-item-id="{{ item.id }}" aria-label="Toggle transactions">&#8964;</button>
+                  {% endif %}
                 </td>
                 <td>
                   <button class="btn-danger btn-delete-item" data-item-id="{{ item.id }}"
                     data-ledger-id="{{ ledger.id }}">x</button>
                 </td>
               </tr>
+              {% if item.transactions %}
+              <tr class="txn-detail-row" data-parent-item-id="{{ item.id }}" style="display:none;">
+                <td colspan="5" class="txn-detail-cell">
+                  <table class="txn-table">
+                    {% for tx in item.transactions %}
+                    <tr class="{% if tx.pending %}txn-pending{% endif %}">
+                      <td class="txn-tree">{% if loop.last %}&#9492;&#9472;&#9472;{% else %}&#9500;&#9472;&#9472;{% endif %}</td>
+                      <td class="txn-date">{{ tx.date }}</td>
+                      <td class="txn-merchant">{{ tx.merchant or '(unknown)' }}</td>
+                      <td class="txn-account">{{ tx.account_name or '' }}</td>
+                      <td class="txn-amount">C${{ "%.2f"|format(tx.amount) }}</td>
+                    </tr>
+                    {% endfor %}
+                  </table>
+                </td>
+              </tr>
+              {% endif %}
               {% endif %}
               {% endfor %}
             </tbody>
@@ -270,11 +335,16 @@
 
   function buildItemRow(itemId, name, ledgerId) {
     var tr = document.createElement("tr");
+    tr.className = "line-item-row";
     tr.dataset.itemId = itemId;
+    tr.dataset.lineItemId = itemId;
     tr.innerHTML =
-      '<td><span class="item-name-display">' + esc(name) + '</span>' +
+      '<td class="item-name-cell"><span class="item-name-display">' + esc(name) + '</span>' +
       '<input class="item-name-input" type="text" value="' + esc(name) + '"' +
       ' style="display:none;" data-item-id="' + itemId + '" data-ledger-id="' + ledgerId + '"></td>' +
+      '<td class="item-total-cell">C$0.00</td>' +
+      '<td class="item-count-cell">0 transactions</td>' +
+      '<td class="item-expand-cell"></td>' +
       '<td><button class="btn-danger btn-delete-item" data-item-id="' + itemId +
       '" data-ledger-id="' + ledgerId + '">x</button></td>';
     return tr;
@@ -305,6 +375,19 @@
   function esc(s) {
     return String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");
   }
+
+  // ── Drilldown: expand/collapse transactions per line item ──────────────────
+  document.addEventListener("click", function (e) {
+    var btn = e.target.closest(".btn-expand-item");
+    if (!btn) return;
+    var itemId = btn.dataset.itemId;
+    var detailRow = document.querySelector(".txn-detail-row[data-parent-item-id='" + itemId + "']");
+    if (!detailRow) return;
+    var isOpen = detailRow.style.display !== "none";
+    detailRow.style.display = isOpen ? "none" : "";
+    btn.classList.toggle("expanded", !isOpen);
+    btn.setAttribute("aria-expanded", !isOpen);
+  });
 })();
 </script>
 {% endblock %}
