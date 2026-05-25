@@ -122,6 +122,10 @@ Invoke for any personal finance request:
 - `list_hints` — list all classification hints
 - `remove_hint(id)` — remove a classification hint
 
+### Corrections
+- `find_transactions(merchant?, date?, amount?, account?, days_window?)` — fuzzy-search transactions by merchant name, ISO date (±`days_window` days), amount (±$0.50), or account name; returns up to 10 matches with their current classification
+- `correct_transaction(transaction_id, line_item_id, create_rule?, rule_description?)` — reclassify a transaction; set `create_rule=True` to also create a rule so future matches are classified the same way automatically
+
 ### Classification Rules
 - `list_rules` — list all classification rules sorted by priority (lower = evaluated first)
 - `add_rule(name, description, rule_type, line_item_id?, priority?)` — add a natural-language rule (`transfer | savings | spending | income | skip`)
