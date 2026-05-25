@@ -308,3 +308,35 @@ th {
 }
 
 .badge-default { background: #eef2ff; color: #3730a3; }
+
+/* ── Ledger income/expense totals (#166) ─────────────────────────────── */
+
+.ledger-totals-row {
+  display: flex;
+  gap: 2em;
+  padding: 0.6em 0 0.4em 0;
+  margin-top: 0.5em;
+  border-top: 2px solid #e0e0e0;
+  font-size: 0.95em;
+}
+
+.ledger-totals-row .total-label {
+  color: #555;
+  margin-right: 0.25em;
+}
+
+.ledger-totals-row .total-value {
+  font-weight: 600;
+}
+
+.net-positive {
+  color: #16a34a;
+}
+
+.net-negative {
+  color: #dc2626;
+}
+
+.net-zero {
+  color: #555;
+}

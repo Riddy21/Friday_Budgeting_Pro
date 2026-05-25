@@ -482,6 +482,14 @@ A small local-only web app. v0.1 scope:
   `last_3_months`, `this_year`, or `all`. Period filtering is applied
   inside `_build_ledger_drilldown()` in `server/main.py` and passed
   through `_get_ledgers()` in `ui/server.py`.
+  Each ledger also carries a `totals` dict with the structure
+  `{"income": float, "expenses": float, "net": float}` (income − expenses).
+  Line items with `item_type == "income"` contribute to `totals.income`;
+  those with `item_type == "expense"` contribute to `totals.expenses`.
+  All amounts are in the user’s home currency (CAD by default); full
+  FX conversion for mixed-currency accounts is deferred (see #160).
+  The net value is rendered green (`.net-positive`) when positive and
+  red (`.net-negative`) when negative in the UI.
 - **Plaid Link page** — the browser-based bank-connection flow,
   used by the setup wizard, by the Profile Linked Accounts section,
   and by any MCP-issued "add a bank" link.
