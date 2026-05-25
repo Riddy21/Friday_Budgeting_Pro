@@ -135,9 +135,11 @@ Three things, kept minimal:
   and **Reconnect / Disconnect / + Connect a bank** buttons. No fancy
   cards, just a list.
 
-**Ledgers page** - minimal structure editor. List your ledgers (default:
+**Ledgers page** - structure editor with drilldown. List your ledgers (default:
 Personal), click into one to add/rename/remove line items, add new
-ledgers when you need them (e.g. for a rental property).
+ledgers when you need them (e.g. for a rental property). Each line item shows
+its running total and transaction count; click to expand and see the individual
+transactions classified to it (populated once auto-categorisation is active).
 
 Ledgers come in three types:
 - **Personal** (default) — standard household budget with line items like Salary, Groceries, Dining, etc.

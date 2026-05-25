@@ -266,6 +266,7 @@ Only what HAL actually needs to call. Grouped:
 
 ### Ledgers (rarely used after setup)
 - `list_ledgers()` — returns `id`, `name`, `type`, `description`, and `items` for each ledger
+- `get_ledger(ledger_id, period?)` — returns full ledger tree: metadata, all line items with per-item totals, and the transactions classified to each item; `period` is `"this_month"` (default), `"last_month"`, `"this_year"`, or `None` for all time
 - `add_ledger(name)` — creates a generic personal ledger
 - `create_property_ledger(name, description?)` — creates a `property` ledger seeded with 6 default line items (Rent income, Mortgage, Property tax, Maintenance & repairs, Insurance, Utilities)
 - `create_investment_ledger(name)` — creates an `investment` ledger seeded with 2 default line items (Contributions, Dividends & Returns)

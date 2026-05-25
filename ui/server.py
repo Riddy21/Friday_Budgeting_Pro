@@ -215,34 +215,60 @@ def _set_notification_pref(pref: str) -> None:
     _set_notification_channel(_PREF_TO_CHANNEL.get(pref, pref))
 
 
-def _get_ledgers(user_id: Optional[str] = None) -> list[dict]:
-    """Query ledgers + line_items from the DB and return a list of dicts."""
+def _get_ledgers(user_id: Optional[str] = None, with_drilldown: bool = False) -> list[dict]:
+    """Query ledgers + line_items from the DB and return a list of dicts.
+
+    Parameters
+    ----------
+    user_id :
+        When supplied only ledgers owned by this user (plus legacy NULL-user
+        rows) are returned.
+    with_drilldown :
+        When ``True`` each line-item dict includes ``total`` and
+        ``transactions`` keys (used by the /ledgers page drilldown UI).
+    """
+    from server.main import _build_ledger_drilldown
+
     conn = get_db(_db_path())
     try:
         if user_id:
             # Include rows owned by user_id AND unowned rows (NULL user_id = legacy/migration)
             ledger_rows = conn.execute(
-                "SELECT id, name FROM ledgers WHERE user_id = ? OR user_id IS NULL ORDER BY name",
+                "SELECT id, name, type, description FROM ledgers "
+                "WHERE user_id = ? OR user_id IS NULL ORDER BY name",
                 (user_id,),
             ).fetchall()
         else:
-            ledger_rows = conn.execute("SELECT id, name FROM ledgers ORDER BY name").fetchall()
+            ledger_rows = conn.execute(
+                "SELECT id, name, type, description FROM ledgers ORDER BY name"
+            ).fetchall()
         ledgers = []
         for lr in ledger_rows:
-            items = conn.execute(
-                "SELECT id, name, item_type FROM line_items WHERE ledger_id = ? ORDER BY name",
-                (lr["id"],),
-            ).fetchall()
-            ledgers.append(
-                {
-                    "id": lr["id"],
-                    "name": lr["name"],
-                    "line_items": [
-                        {"id": i["id"], "name": i["name"], "item_type": i["item_type"]}
-                        for i in items
-                    ],
-                }
-            )
+            if with_drilldown:
+                drilldown = _build_ledger_drilldown(conn, lr, period=None)
+                ledgers.append(
+                    {
+                        "id": lr["id"],
+                        "name": lr["name"],
+                        "line_items": drilldown["line_items"],
+                        "totals": drilldown["totals"],
+                    }
+                )
+            else:
+                items = conn.execute(
+                    "SELECT id, name, item_type FROM line_items WHERE ledger_id = ? ORDER BY name",
+                    (lr["id"],),
+                ).fetchall()
+                ledgers.append(
+                    {
+                        "id": lr["id"],
+                        "name": lr["name"],
+                        "line_items": [
+                            {"id": i["id"], "name": i["name"], "item_type": i["item_type"]}
+                            for i in items
+                        ],
+                    }
+                )
         return ledgers
     finally:
         conn.close()
@@ -1203,7 +1229,7 @@ def ledgers_get(request: Request):
     if not _is_authenticated(request):
         return _redirect("/login")
     uid = _current_user_id(request)
-    ledgers = _get_ledgers(uid)
+    ledgers = _get_ledgers(uid, with_drilldown=True)
     return templates.TemplateResponse(
         request,
         "ledgers.html",

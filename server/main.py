@@ -678,6 +678,179 @@ def list_ledgers() -> dict:
         conn.close()
 
 
+# ---------------------------------------------------------------------------
+# Shared helper: fetch a ledger + line items + classified transactions
+# ---------------------------------------------------------------------------
+
+
+def _build_ledger_drilldown(
+    conn,
+    ledger_row: dict,
+    period: str | None = "this_month",
+) -> dict:
+    """Return a ledger dict with line_items + transactions per item and totals.
+
+    Parameters
+    ----------
+    conn :
+        Open DB connection (caller is responsible for closing).
+    ledger_row :
+        Row from the ``ledgers`` table with at least ``id``, ``name``,
+        ``type``, and ``description``.
+    period : str | None
+        Date filter applied to ``transactions.date``:
+        - ``"this_month"``  — current calendar month (default)
+        - ``"last_month"``  — previous calendar month
+        - ``"this_year"``   — current calendar year
+        - ``None``          — all time
+    """
+    from datetime import datetime as _dt
+
+    # Build date-range filter -------------------------------------------
+    date_filter_sql = ""
+    date_params: list = []
+
+    if period is not None:
+        now = _dt.now()
+        if period == "this_month":
+            start = _dt(now.year, now.month, 1).strftime("%Y-%m-%d")
+            if now.month == 12:
+                end = _dt(now.year + 1, 1, 1).strftime("%Y-%m-%d")
+            else:
+                end = _dt(now.year, now.month + 1, 1).strftime("%Y-%m-%d")
+            date_filter_sql = " AND t.date >= ? AND t.date < ?"
+            date_params = [start, end]
+        elif period == "last_month":
+            if now.month == 1:
+                s_year, s_month = now.year - 1, 12
+            else:
+                s_year, s_month = now.year, now.month - 1
+            start = _dt(s_year, s_month, 1).strftime("%Y-%m-%d")
+            if s_month == 12:
+                end = _dt(s_year + 1, 1, 1).strftime("%Y-%m-%d")
+            else:
+                end = _dt(s_year, s_month + 1, 1).strftime("%Y-%m-%d")
+            date_filter_sql = " AND t.date >= ? AND t.date < ?"
+            date_params = [start, end]
+        elif period == "this_year":
+            start = _dt(now.year, 1, 1).strftime("%Y-%m-%d")
+            end = _dt(now.year + 1, 1, 1).strftime("%Y-%m-%d")
+            date_filter_sql = " AND t.date >= ? AND t.date < ?"
+            date_params = [start, end]
+        # unknown period values → no filter (treat as None)
+
+    # Fetch line items --------------------------------------------------
+    item_rows = conn.execute(
+        "SELECT id, name, item_type FROM line_items WHERE ledger_id = ? ORDER BY name",
+        (ledger_row["id"],),
+    ).fetchall()
+
+    total_income = 0.0
+    total_expenses = 0.0
+    line_items_out = []
+
+    for item in item_rows:
+        txn_sql = (
+            "SELECT t.id, t.date, t.merchant, te.amount_home, te.amount, "
+            "       b.name AS account_name, t.pending "
+            "FROM transaction_entries te "
+            "JOIN transactions t ON te.transaction_id = t.id "
+            "LEFT JOIN bank_accounts b ON t.bank_account_id = b.id "
+            "WHERE te.line_item_id = ?" + date_filter_sql + " ORDER BY t.date DESC"
+        )
+        txn_rows = conn.execute(txn_sql, [item["id"]] + date_params).fetchall()
+
+        transactions_out = []
+        item_total = 0.0
+        for tx in txn_rows:
+            amt = tx["amount_home"] if tx["amount_home"] is not None else tx["amount"]
+            item_total += amt
+            transactions_out.append(
+                {
+                    "id": tx["id"],
+                    "date": tx["date"],
+                    "merchant": tx["merchant"] or "",
+                    "amount": round(amt, 2),
+                    "account_name": tx["account_name"] or "",
+                    "pending": bool(tx["pending"]),
+                }
+            )
+
+        item_total = round(item_total, 2)
+        if item["item_type"] == "income":
+            total_income += item_total
+        else:
+            total_expenses += item_total
+
+        line_items_out.append(
+            {
+                "id": item["id"],
+                "name": item["name"],
+                "item_type": item["item_type"],
+                "total": item_total,
+                "transactions": transactions_out,
+            }
+        )
+
+    return {
+        "ledger": {
+            "id": ledger_row["id"],
+            "name": ledger_row["name"],
+            "type": ledger_row["type"],
+        },
+        "line_items": line_items_out,
+        "totals": {
+            "income": round(total_income, 2),
+            "expenses": round(total_expenses, 2),
+            "net": round(total_income - total_expenses, 2),
+        },
+    }
+
+
+@mcp.tool
+def get_ledger(ledger_id: str, period: str = "this_month") -> dict:
+    """Get a ledger with all line items and the transactions classified to each.
+
+    Parameters
+    ----------
+    ledger_id : str
+        ID of the ledger to retrieve.
+    period : str | None
+        Optional date filter:
+        - ``"this_month"`` (default)
+        - ``"last_month"``
+        - ``"this_year"``
+        - ``None`` / empty string → all time
+
+    Returns
+    -------
+    dict
+        ``{"ledger": {...}, "line_items": [...], "totals": {...}}`` on
+        success, or ``{"status": "error", "message": ...}`` on failure.
+    """
+    uid = get_active_user_id(server.paths.DB_PATH)
+    if uid is None:
+        return {"status": "error", "message": "No active user found"}
+
+    # Normalise period
+    if not period:
+        period = None
+
+    conn = get_db(server.paths.DB_PATH)
+    try:
+        ledger_row = conn.execute(
+            "SELECT id, name, type, description FROM ledgers "
+            "WHERE id = ? AND (user_id = ? OR user_id IS NULL)",
+            (ledger_id, uid),
+        ).fetchone()
+        if ledger_row is None:
+            return {"status": "error", "message": f"Ledger '{ledger_id}' not found"}
+
+        return _build_ledger_drilldown(conn, ledger_row, period=period)
+    finally:
+        conn.close()
+
+
 @mcp.tool
 def add_ledger(name: str) -> dict:
     """Create a new ledger for the active user.
