@@ -222,6 +222,26 @@ All active rules are visible in the **Settings page** (`/settings`) under
 *Classification Rules*, shown in priority order.  The table is read-only —
 editing is done via MCP/chat.
 
+### Correcting Classifications via Chat
+
+If a transaction is classified wrong, just tell your AI assistant:
+
+```
+You:    That $42 Uber from last Tuesday was an airport trip, not a regular ride.
+Agent:  Got it — I'll reclassify it as Travel.
+        Should I also create a rule so future Uber charges over $40 are
+        automatically marked as Travel?
+You:    Yes please.
+Agent:  Done! Uber transactions will now be routed to Travel automatically.
+```
+
+Under the hood the agent uses `find_transactions` to locate the right
+transaction (fuzzy match on merchant, date, and amount) and
+`correct_transaction` to update the classification and optionally create a
+priority-80 rule.  Every correction is audited: the original
+`line_item_id` is preserved in `corrected_from_line_item_id` and the
+timestamp is recorded in `corrected_at`.
+
 ---
 
 ## With OpenClaw (and any other MCP client)

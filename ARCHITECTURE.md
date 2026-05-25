@@ -229,6 +229,8 @@ Full schema lives in `db/schema.sql` (source of truth). Summary:
 - `uncertain` — 1 if classifier confidence < threshold
 - `reasoning` — LLM explanation
 - `corrected_from_line_item_id` + `corrected_at` — audit trail for corrections
+- When `source = 'manual'`, `corrected_from_line_item_id` holds the previous
+  line item so corrections can be reviewed or undone
 
 ### classification_rules key fields
 - `description` — natural language rule (what it matches and does)
@@ -282,6 +284,23 @@ Only what HAL actually needs to call. Grouped:
 - `get_needs_review()` → ambiguous ones HAL should ask about
 - `route(transaction_id, allocations[])` → manual or HAL-driven routing
 - `add_hint(text)` → save a natural-language hint
+
+### Corrections (natural language reclassification, #173)
+- `find_transactions(merchant?, date?, amount?, account?, days_window?)` →
+  fuzzy-search: merchant substring, date ±window, amount ±$0.50, account name;
+  returns up to 10 matches with `current_classification` and `line_item_id`
+- `correct_transaction(transaction_id, line_item_id, create_rule?, rule_description?)` →
+  reclassifies a transaction (`source='manual'`, `reviewed=1`), preserves audit
+  trail (`corrected_from_line_item_id`, `corrected_at`), and optionally creates
+  a priority-80 rule for future auto-classification of the same merchant
+
+**Correction audit trail:** Every `correct_transaction` call records:
+- `corrected_from_line_item_id` — the previous classification
+- `corrected_at` — Unix timestamp of the correction
+- `source = 'manual'` — distinguishes human overrides from automatic classifications
+
+**Retroactive bulk corrections** (e.g. "all my Uber rides over $40 are airport trips")
+are tracked as a follow-up (deferred from #173 to keep scope manageable).
 
 ### Reports
 - `summary(period)` → spending totals

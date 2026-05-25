@@ -2752,6 +2752,231 @@ def get_ui_url(page: str = None) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# Natural-language corrections (#173)
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool
+def find_transactions(
+    merchant: str = None,
+    date: str = None,
+    amount: float = None,
+    account: str = None,
+    days_window: int = 7,
+) -> dict:
+    """Fuzzy search for transactions matching natural-language hints.
+
+    Parameters
+    ----------
+    merchant : str, optional
+        Partial merchant name (case-insensitive substring match).
+    date : str, optional
+        ISO date ``YYYY-MM-DD`` — transactions within ±``days_window`` days
+        of this date are included.
+    amount : float, optional
+        Absolute transaction amount — transactions within ±$0.50 of this
+        value are included.
+    account : str, optional
+        Partial bank account or institution name (case-insensitive).
+    days_window : int, optional
+        Number of days either side of ``date`` to search.  Default 7.
+
+    Returns
+    -------
+    dict
+        ``{"transactions": [{id, merchant, date, amount, account_name,
+        current_classification, line_item_id, entry_id}, ...]}``
+        Up to 10 matches sorted by date descending.
+    """
+    uid = get_active_user_id(server.paths.DB_PATH)
+    if not uid:
+        return {"transactions": [], "error": "not_authenticated"}
+
+    conditions: list[str] = [
+        "bc.user_id = ?",
+        "t.pending = 0",
+    ]
+    params: list = [uid]
+
+    if merchant is not None:
+        conditions.append("LOWER(COALESCE(t.merchant, '')) LIKE LOWER(?)")
+        params.append(f"%{merchant}%")
+
+    if date is not None:
+        import datetime as _dt
+
+        try:
+            pivot = _dt.date.fromisoformat(date)
+        except ValueError:
+            return {"transactions": [], "error": f"invalid date: {date!r}"}
+        lo = (pivot - _dt.timedelta(days=days_window)).isoformat()
+        hi = (pivot + _dt.timedelta(days=days_window)).isoformat()
+        conditions.append("t.date BETWEEN ? AND ?")
+        params.extend([lo, hi])
+
+    if amount is not None:
+        conditions.append("ABS(t.amount - ?) <= 0.50")
+        params.append(amount)
+
+    if account is not None:
+        conditions.append(
+            "(LOWER(COALESCE(ba.name, '')) LIKE LOWER(?)"
+            " OR LOWER(COALESCE(bc.institution_name, '')) LIKE LOWER(?))"
+        )
+        params.extend([f"%{account}%", f"%{account}%"])
+
+    where_clause = " AND ".join(conditions)
+    sql = f"""
+        SELECT
+            t.id,
+            t.merchant,
+            t.date,
+            t.amount,
+            ba.name        AS account_name,
+            te.id          AS entry_id,
+            te.line_item_id,
+            te.entry_type  AS current_classification
+        FROM transactions t
+        JOIN bank_accounts ba     ON ba.id = t.bank_account_id
+        JOIN bank_connections bc  ON bc.id = ba.connection_id
+        LEFT JOIN transaction_entries te ON te.transaction_id = t.id
+        WHERE {where_clause}
+        ORDER BY t.date DESC
+        LIMIT 10
+    """
+
+    conn = get_db(server.paths.DB_PATH)
+    try:
+        rows = conn.execute(sql, params).fetchall()
+        return {
+            "transactions": [
+                {
+                    "id": r["id"],
+                    "merchant": r["merchant"],
+                    "date": r["date"],
+                    "amount": r["amount"],
+                    "account_name": r["account_name"],
+                    "entry_id": r["entry_id"],
+                    "line_item_id": r["line_item_id"],
+                    "current_classification": r["current_classification"],
+                }
+                for r in rows
+            ]
+        }
+    finally:
+        conn.close()
+
+
+@mcp.tool
+def correct_transaction(
+    transaction_id: str,
+    line_item_id: str,
+    create_rule: bool = False,
+    rule_description: str = None,
+) -> dict:
+    """Reclassify a transaction and optionally create a matching rule.
+
+    Parameters
+    ----------
+    transaction_id : str
+        ID of the transaction to reclassify.
+    line_item_id : str
+        New line item ID to assign.
+    create_rule : bool, optional
+        When ``True``, also call :func:`add_rule` so future transactions
+        from the same merchant are automatically classified the same way.
+    rule_description : str, optional
+        Custom description for the new rule.  If omitted an auto-generated
+        description based on the merchant name is used.
+
+    Returns
+    -------
+    dict
+        ``{"status": "ok", "transaction_id": ..., "new_line_item_id": ...,
+        "rule_created": bool}``
+    """
+    uid = get_active_user_id(server.paths.DB_PATH)
+    if not uid:
+        return {"status": "error", "error": "not_authenticated"}
+
+    conn = get_db(server.paths.DB_PATH)
+    try:
+        # Verify transaction belongs to this user.
+        tx_row = conn.execute(
+            """
+            SELECT t.id, t.merchant
+            FROM transactions t
+            JOIN bank_accounts ba    ON ba.id = t.bank_account_id
+            JOIN bank_connections bc ON bc.id = ba.connection_id
+            WHERE t.id = ? AND bc.user_id = ?
+            """,
+            (transaction_id, uid),
+        ).fetchone()
+        if not tx_row:
+            return {"status": "error", "error": f"transaction {transaction_id!r} not found"}
+
+        merchant = tx_row["merchant"] or "Unknown"
+        now = int(_time.time())
+
+        # Check for an existing entry.
+        entry_row = conn.execute(
+            "SELECT id, line_item_id FROM transaction_entries WHERE transaction_id = ?",
+            (transaction_id,),
+        ).fetchone()
+
+        if entry_row:
+            old_line_item_id = entry_row["line_item_id"]
+            conn.execute(
+                """
+                UPDATE transaction_entries
+                SET line_item_id = ?,
+                    source = 'manual',
+                    reviewed = 1,
+                    corrected_from_line_item_id = ?,
+                    corrected_at = ?
+                WHERE transaction_id = ?
+                """,
+                (line_item_id, old_line_item_id, now, transaction_id),
+            )
+        else:
+            # No entry yet — insert one.
+            conn.execute(
+                """
+                INSERT INTO transaction_entries
+                    (id, transaction_id, line_item_id, amount, source, reviewed, corrected_at)
+                SELECT ?, t.id, ?, t.amount, 'manual', 1, ?
+                FROM transactions t WHERE t.id = ?
+                """,
+                (str(uuid.uuid4()), line_item_id, now, transaction_id),
+            )
+
+        conn.commit()
+    finally:
+        conn.close()
+
+    rule_created = False
+    if create_rule:
+        desc = rule_description or (
+            f"Transactions from {merchant!r} should be classified under this line item"
+        )
+        add_rule(
+            name=f"Custom: {merchant}",
+            description=desc,
+            rule_type="spending",
+            line_item_id=line_item_id,
+            priority=80,
+        )
+        rule_created = True
+
+    return {
+        "status": "ok",
+        "transaction_id": transaction_id,
+        "new_line_item_id": line_item_id,
+        "rule_created": rule_created,
+    }
+
+
+# ---------------------------------------------------------------------------
 # Entrypoint
 # ---------------------------------------------------------------------------
 
