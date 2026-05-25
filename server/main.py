@@ -222,29 +222,43 @@ def setup_status() -> dict:
 
 @mcp.tool
 def apply_initial_setup(
-    banks_to_link: List,
-    extra_ledgers: List,
-    hints: List,
+    banks_to_link: List = None,
+    extra_ledgers: List = None,
+    hints: List = None,
+    rental_properties: List = None,
+    investment_account_ids: List = None,
 ) -> dict:
     """Perform the whole first-run setup in one call.
 
     Parameters
     ----------
-    banks_to_link : List[str]
+    banks_to_link : List[str], optional
         Human-readable bank names the user wants to connect.  NOTE: This tool
         does NOT run Plaid Link — that interactive flow lives in start_link /
         complete_link.  We simply acknowledge the requested banks and return
         them so the caller can chain start_link calls for each one.
-    extra_ledgers : List[dict]
+    extra_ledgers : List[dict], optional
         Additional ledgers beyond "Personal".  Each entry is a dict like::
 
             {"name": "Business", "line_items": [{"name": "Office", "type": "expense"}, ...]}
 
         The built-in "Personal" ledger is always created (with the standard
         10 line items below) regardless of this parameter.
-    hints : List[str]
+    hints : List[str], optional
         Natural-language classification hints; each becomes a row in
         ``classification_hints``.  De-duped on exact text.
+    rental_properties : List[dict], optional
+        Rental properties to create ledgers for.  Each entry is a dict like::
+
+            {"name": "123 Main St", "description": "2-bed condo", "account_id": "<uuid>"}
+
+        For each property a ledger is created via ``create_property_ledger``
+        and the given bank account is linked via ``set_account_ledger``.
+        ``account_id`` may be omitted or ``None`` to skip the account link.
+    investment_account_ids : List[str], optional
+        Bank account IDs to route to a shared "Investments" ledger.  If the
+        list is non-empty a single "Investments" ledger is created (once) and
+        every account in the list is linked to it via ``set_account_ledger``.
 
     Standard Personal line items (always created):
       Salary (income), Groceries (expense), Dining (expense),
@@ -257,7 +271,8 @@ def apply_initial_setup(
     -------
     dict
         {"status": "ok", "ledgers_created": [...], "line_items_created": N,
-         "hints_created": N, "banks_to_link": [...]}
+         "hints_created": N, "banks_to_link": [...],
+         "properties_created": N, "investment_ledger_id": str | None}
     """
     PERSONAL_LINE_ITEMS = [
         ("Salary", "income"),
@@ -350,6 +365,34 @@ def apply_initial_setup(
 
     cron_registered = _register_openclaw_cron()
 
+    # ── Rental properties ─────────────────────────────────────────────────
+    properties_created = 0
+    for prop in rental_properties or []:
+        prop_name = prop.get("name", "").strip()
+        if not prop_name:
+            continue
+        result = create_property_ledger(
+            name=prop_name,
+            description=prop.get("description"),
+        )
+        if result.get("status") == "ok":
+            ledgers_created.append(prop_name)
+            properties_created += 1
+            acct_id = prop.get("account_id")
+            if acct_id:
+                set_account_ledger(account_id=acct_id, ledger_id=result["ledger_id"])
+
+    # ── Investment accounts ───────────────────────────────────────────────
+    investment_ledger_id = None
+    inv_ids = [aid for aid in (investment_account_ids or []) if aid]
+    if inv_ids:
+        inv_result = create_investment_ledger(name="Investments")
+        if inv_result.get("status") == "ok":
+            investment_ledger_id = inv_result["ledger_id"]
+            ledgers_created.append("Investments")
+            for acct_id in inv_ids:
+                set_account_ledger(account_id=acct_id, ledger_id=investment_ledger_id)
+
     return {
         "status": "ok",
         "ledgers_created": ledgers_created,
@@ -357,6 +400,8 @@ def apply_initial_setup(
         "hints_created": hints_created,
         "banks_to_link": [*banks_to_link] if banks_to_link else [],
         "cron_registered": cron_registered,
+        "properties_created": properties_created,
+        "investment_ledger_id": investment_ledger_id,
     }
 
 

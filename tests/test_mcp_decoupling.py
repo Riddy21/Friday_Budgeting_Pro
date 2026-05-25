@@ -60,7 +60,11 @@ def _complete_setup(client: TestClient, password: str = "testpassword123") -> No
     r = client.post("/setup/3", data={"ledger_name": "Personal"})
     assert r.status_code == 200, f"Setup step 3 failed: {r.status_code}"
 
-    r = client.post("/setup/4", data={})
+    r = client.post("/setup/4", data={"action": "skip"})
+    assert r.status_code == 200
+    r = client.post("/setup/5", data={"action": "skip"})
+    assert r.status_code == 200
+    r = client.post("/setup/6", data={})
     assert r.status_code == 302, f"Setup step 4 failed: {r.status_code}"
     assert r.headers["location"] == "/dashboard"
 
@@ -381,11 +385,17 @@ class TestSetupWizardCompletesWithoutMcp:
         r = cl.post("/setup/3", data={"ledger_name": "Budget"})
         assert r.status_code == 200, f"Setup step 3 failed: {r.status_code}"
 
-        # Step 4: finalise — must redirect to /profile.
-        with patch("server.main.apply_initial_setup", return_value={"status": "ok"}) as mock_apply:
-            r = cl.post("/setup/4", data={})
+        # Steps 4 (properties) and 5 (investments): skip both.
+        r = cl.post("/setup/4", data={"action": "skip"})
+        assert r.status_code == 200, f"Setup step 4 failed: {r.status_code}"
+        r = cl.post("/setup/5", data={"action": "skip"})
+        assert r.status_code == 200, f"Setup step 5 failed: {r.status_code}"
 
-        assert r.status_code == 302, f"Setup step 4 failed: {r.status_code}"
+        # Step 6: finalise — must redirect to /dashboard.
+        with patch("server.main.apply_initial_setup", return_value={"status": "ok"}) as mock_apply:
+            r = cl.post("/setup/6", data={})
+
+        assert r.status_code == 302, f"Setup step 6 failed: {r.status_code}"
         assert r.headers["location"] == "/dashboard"
 
         # Verify a user was created in the DB — the wizard persisted state.

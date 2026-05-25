@@ -56,7 +56,11 @@ def _complete_setup(client: TestClient, password: str = "correcthorsebattery") -
     assert r.status_code == 200
     r = client.post("/setup/3", data={"ledger_name": "Personal"})
     assert r.status_code == 200
-    r = client.post("/setup/4", data={})
+    r = client.post("/setup/4", data={"action": "skip"})
+    assert r.status_code == 200
+    r = client.post("/setup/5", data={"action": "skip"})
+    assert r.status_code == 200
+    r = client.post("/setup/6", data={})
     assert r.status_code == 302
 
 

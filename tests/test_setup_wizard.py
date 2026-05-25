@@ -1,13 +1,15 @@
 """
-tests/test_setup_wizard.py — Tests for the 4-step setup wizard (issue #56).
+tests/test_setup_wizard.py — Tests for the 6-step setup wizard.
 
 Covers:
   - GET /setup on empty DB → step 1
   - POST /setup/1 validation errors (mismatch, too short)
   - POST /setup/1 success → password hash set, session cookie returned, advance to step 2
   - POST /setup/2 → notification_channel persisted, advance to step 3
-  - POST /setup/3 skip → advance to step 4
-  - POST /setup/4 → apply_initial_setup called, redirect to /profile
+  - POST /setup/3 skip → advance to step 4 (rental properties)
+  - POST /setup/4 skip → advance to step 5 (investments)
+  - POST /setup/5 skip → advance to step 6 (done)
+  - POST /setup/6 → apply_initial_setup called, redirect to /dashboard
   - After complete → GET /setup → 404
   - Redirect-to-setup middleware regression (non-setup routes redirect when no password)
 """
@@ -266,11 +268,11 @@ class TestSetupStep3:
         _wizard_through_step2(client)
         r = client.post("/setup/3", data={"action": "skip"})
         assert r.status_code == 200
-        # Step 4 done-page content should be rendered.
+        # Step 4 (rental properties) content should be rendered.
         assert (
-            b"profile" in r.content.lower()
-            or b"done" in r.content.lower()
-            or b"set" in r.content.lower()
+            b"rental" in r.content.lower()
+            or b"propert" in r.content.lower()
+            or b"Properties" in r.content
         )
 
     def test_no_action_treated_as_skip(self, client):
@@ -281,30 +283,43 @@ class TestSetupStep3:
 
 
 # ---------------------------------------------------------------------------
-# Tests — POST /setup/4
+# Tests — POST /setup/4 (rental properties)
 # ---------------------------------------------------------------------------
 
 
 class TestSetupStep4:
-    def test_apply_initial_setup_called(self, client):
+    def test_skip_advances_to_step5(self, client):
         _wizard_through_step3(client)
-        with patch("server.main.apply_initial_setup") as mock_setup:
-            mock_setup.return_value = {
-                "status": "ok",
-                "ledgers_created": [],
-                "line_items_created": 0,
-                "hints_created": 0,
-                "banks_to_link": [],
-            }
-            r = client.post("/setup/4", data={})
-        mock_setup.assert_called_once_with(
-            banks_to_link=[],
-            extra_ledgers=[],
-            hints=[],
-        )
+        r = client.post("/setup/4", data={"action": "skip"})
+        assert r.status_code == 200
+        assert b"Investment" in r.content or b"investment" in r.content.lower()
 
-    def test_redirects_to_profile(self, client):
+    def test_continue_without_checkbox_advances_to_step5(self, client):
         _wizard_through_step3(client)
+        r = client.post("/setup/4", data={"action": "continue"})
+        assert r.status_code == 200
+        assert b"Investment" in r.content or b"investment" in r.content.lower()
+
+
+# ---------------------------------------------------------------------------
+# Tests — POST /setup/5 (investments) + /setup/6 (final)
+# ---------------------------------------------------------------------------
+
+
+class TestSetupStep5And6:
+    def _through_step4(self, client):
+        _wizard_through_step3(client)
+        client.post("/setup/4", data={"action": "skip"})
+
+    def test_step5_skip_advances_to_step6(self, client):
+        self._through_step4(client)
+        r = client.post("/setup/5", data={"action": "skip"})
+        assert r.status_code == 200
+        assert b"set" in r.content.lower() or b"Dashboard" in r.content
+
+    def test_apply_initial_setup_called_at_step6(self, client):
+        self._through_step4(client)
+        client.post("/setup/5", data={"action": "skip"})
         with patch("server.main.apply_initial_setup") as mock_setup:
             mock_setup.return_value = {
                 "status": "ok",
@@ -312,14 +327,19 @@ class TestSetupStep4:
                 "line_items_created": 0,
                 "hints_created": 0,
                 "banks_to_link": [],
+                "properties_created": 0,
+                "investment_ledger_id": None,
+                "cron_registered": False,
             }
-            r = client.post("/setup/4", data={})
+            r = client.post("/setup/6", data={})
+        mock_setup.assert_called_once()
         assert r.status_code == 302
         assert r.headers["location"] == "/dashboard"
 
     def test_session_allows_profile_access_after_setup(self, client):
         """Session set during step 1 should let the client reach /profile."""
-        _wizard_through_step3(client)
+        self._through_step4(client)
+        client.post("/setup/5", data={"action": "skip"})
         with patch("server.main.apply_initial_setup") as mock_setup:
             mock_setup.return_value = {
                 "status": "ok",
@@ -327,9 +347,11 @@ class TestSetupStep4:
                 "line_items_created": 0,
                 "hints_created": 0,
                 "banks_to_link": [],
+                "properties_created": 0,
+                "investment_ledger_id": None,
+                "cron_registered": False,
             }
-            client.post("/setup/4", data={})
-        # Session cookie was set at step 1; profile should be accessible now.
+            client.post("/setup/6", data={})
         r = client.get("/profile")
         assert r.status_code == 200
 
@@ -342,6 +364,8 @@ class TestSetupStep4:
 class TestSetupAfterComplete:
     def _complete(self, client):
         _wizard_through_step3(client)
+        client.post("/setup/4", data={"action": "skip"})
+        client.post("/setup/5", data={"action": "skip"})
         with patch("server.main.apply_initial_setup") as mock_setup:
             mock_setup.return_value = {
                 "status": "ok",
@@ -349,8 +373,11 @@ class TestSetupAfterComplete:
                 "line_items_created": 0,
                 "hints_created": 0,
                 "banks_to_link": [],
+                "properties_created": 0,
+                "investment_ledger_id": None,
+                "cron_registered": False,
             }
-            client.post("/setup/4", data={})
+            client.post("/setup/6", data={})
 
     def test_get_setup_returns_404(self, client):
         self._complete(client)
