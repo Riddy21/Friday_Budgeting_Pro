@@ -31,7 +31,8 @@ def batch_classify(limit: int = 100):
     conn = get_db(paths.DB_PATH)
 
     # Fetch unclassified non-pending transactions (most recent first)
-    rows = conn.execute("""
+    rows = conn.execute(
+        """
         SELECT t.id, t.merchant, t.amount, t.date, t.plaid_category,
                ba.name as account_name, ba.id as bank_account_id,
                ba.default_ledger_id
@@ -42,7 +43,9 @@ def batch_classify(limit: int = 100):
         WHERE t.pending = 0 AND te.id IS NULL
         ORDER BY t.date DESC, t.rowid DESC
         LIMIT ?
-    """, (limit,)).fetchall()
+    """,
+        (limit,),
+    ).fetchall()
 
     print(f"Found {len(rows)} transactions to classify")
 
@@ -58,12 +61,12 @@ def batch_classify(limit: int = 100):
     for ledger in ledgers:
         ledger_tree_lines.append(f"Ledger: {ledger['name']} (id={ledger['id']})")
         for li in line_items:
-            if li['ledger_id'] == ledger['id']:
+            if li["ledger_id"] == ledger["id"]:
                 ledger_tree_lines.append(f"  - [{li['item_type']}] {li['name']} (id={li['id']})")
     ledger_tree = "\n".join(ledger_tree_lines)
 
     # Map line_item_id -> ledger_id for fast lookup
-    li_to_ledger = {li['id']: li['ledger_id'] for li in line_items}
+    li_to_ledger = {li["id"]: li["ledger_id"] for li in line_items}
     li_ids = set(li_to_ledger.keys())
 
     classified = 0
@@ -71,13 +74,13 @@ def batch_classify(limit: int = 100):
 
     # Process in batches
     for batch_start in range(0, len(rows), BATCH_SIZE):
-        batch = rows[batch_start:batch_start + BATCH_SIZE]
+        batch = rows[batch_start : batch_start + BATCH_SIZE]
 
         # Build batch prompt
         txn_lines = []
         for i, t in enumerate(batch):
             txn_lines.append(
-                f"{i+1}. merchant={t['merchant']!r} amount={t['amount']:.2f} "
+                f"{i + 1}. merchant={t['merchant']!r} amount={t['amount']:.2f} "
                 f"date={t['date']} account={t['account_name']!r} "
                 f"plaid_category={t['plaid_category']!r}"
             )
@@ -89,13 +92,20 @@ def batch_classify(limit: int = 100):
             "Reply with ONLY a JSON array — no markdown — one object per transaction:\n"
             '[{"index":1,"line_item_id":"<exact id>","confidence":0.9,"reasoning":"<short>"},...]'
         )
-        user_msg = "## Transactions to classify\n" + "\n".join(txn_lines) + "\n\nReply with the JSON array only."
+        user_msg = (
+            "## Transactions to classify\n"
+            + "\n".join(txn_lines)
+            + "\n\nReply with the JSON array only."
+        )
 
         try:
-            raw = chat([
-                {"role": "system", "content": system_msg},
-                {"role": "user", "content": user_msg},
-            ], temperature=0.0)
+            raw = chat(
+                [
+                    {"role": "system", "content": system_msg},
+                    {"role": "user", "content": user_msg},
+                ],
+                temperature=0.0,
+            )
 
             # Strip markdown fences if present
             raw = raw.strip()
@@ -109,7 +119,7 @@ def batch_classify(limit: int = 100):
                 results = [results]
 
         except Exception as e:
-            print(f"  Batch {batch_start//BATCH_SIZE + 1} LLM error: {e}")
+            print(f"  Batch {batch_start // BATCH_SIZE + 1} LLM error: {e}")
             failed += len(batch)
             continue
 
@@ -130,15 +140,24 @@ def batch_classify(limit: int = 100):
             entry_id = str(uuid.uuid4())
             uncertain = 1 if confidence < 0.7 else 0
 
-            conn.execute("""
+            conn.execute(
+                """
                 INSERT OR IGNORE INTO transaction_entries
                 (id, transaction_id, ledger_id, line_item_id, amount,
                  entry_type, source, confidence, uncertain, reasoning, reviewed)
                 VALUES (?, ?, ?, ?, ?, 'spending', 'llm', ?, ?, ?, 0)
-            """, (
-                entry_id, t['id'], ledger_id, line_item_id, t['amount'],
-                confidence, uncertain, item.get("reasoning", "")
-            ))
+            """,
+                (
+                    entry_id,
+                    t["id"],
+                    ledger_id,
+                    line_item_id,
+                    t["amount"],
+                    confidence,
+                    uncertain,
+                    item.get("reasoning", ""),
+                ),
+            )
             classified += 1
 
         conn.commit()

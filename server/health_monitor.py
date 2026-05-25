@@ -48,7 +48,7 @@ def check_all_connections(db_conn: "sqlite3.Connection", plaid_provider=None) ->
         plaid_provider = PlaidProvider()
 
     rows = db_conn.execute(
-        "SELECT id, plaid_access_token_encrypted " "FROM bank_connections WHERE status = 'active'"
+        "SELECT id, plaid_access_token_encrypted FROM bank_connections WHERE status = 'active'"
     ).fetchall()
 
     checked = 0

@@ -252,7 +252,7 @@ class TestProfileDataUtc:
         ]
         html = _render_profile_html_tz(monkeypatch, connections)
         assert f'data-utc="{FAKE_TS}"' in html, (
-            f"data-utc attribute not found in profile HTML " f'(expected data-utc="{FAKE_TS}")'
+            f'data-utc attribute not found in profile HTML (expected data-utc="{FAKE_TS}")'
         )
 
     def test_profile_has_datetime_local_class(self, monkeypatch):

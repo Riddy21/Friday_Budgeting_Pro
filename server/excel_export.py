@@ -75,8 +75,7 @@ def _fetch_line_items(conn: sqlite3.Connection, ledger_id: str) -> list[dict]:
 def _fetch_years(conn: sqlite3.Connection) -> list[int]:
     """Return all distinct years present in the transactions table."""
     rows = conn.execute(
-        "SELECT DISTINCT CAST(strftime('%Y', date) AS INTEGER) AS yr "
-        "FROM transactions ORDER BY yr"
+        "SELECT DISTINCT CAST(strftime('%Y', date) AS INTEGER) AS yr FROM transactions ORDER BY yr"
     ).fetchall()
     return [r[0] for r in rows]
 

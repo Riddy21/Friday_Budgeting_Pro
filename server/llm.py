@@ -259,8 +259,7 @@ def _chat_sdk_fallback(messages: list[dict], temperature: float) -> str:
         return _chat_openai(messages, temperature, model)
     else:
         raise RuntimeError(
-            f"Unknown OPENCLAW_LLM_PROVIDER={provider!r}. "
-            "Supported values: 'anthropic', 'openai'."
+            f"Unknown OPENCLAW_LLM_PROVIDER={provider!r}. Supported values: 'anthropic', 'openai'."
         )
 
 

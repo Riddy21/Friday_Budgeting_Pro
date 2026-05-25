@@ -206,8 +206,7 @@ def test_transactions_fallback_to_date_when_no_datetime(env, monkeypatch):
     conn = get_db(env["db"])
     # NULL out the late-night transaction's authorized_datetime
     conn.execute(
-        "UPDATE transactions SET authorized_datetime = NULL "
-        "WHERE plaid_transaction_id = 'dt-txn-3'"
+        "UPDATE transactions SET authorized_datetime = NULL WHERE plaid_transaction_id = 'dt-txn-3'"
     )
     conn.commit()
 
@@ -223,6 +222,6 @@ def test_transactions_fallback_to_date_when_no_datetime(env, monkeypatch):
     # Lunch Spot (13:30) should still come before Morning Bagel (08:00)
     lunch_idx = merchants.index("Lunch Spot")
     morning_idx = merchants.index("Morning Bagel")
-    assert (
-        lunch_idx < morning_idx
-    ), f"Lunch Spot should appear before Morning Bagel; got: {merchants}"
+    assert lunch_idx < morning_idx, (
+        f"Lunch Spot should appear before Morning Bagel; got: {merchants}"
+    )

@@ -58,9 +58,7 @@ def _make_fake_repo(tmp_path: Path, extra_code_tool: str = "", extra_doc_tool: s
 
     extra_code_block = ""
     if extra_code_tool:
-        extra_code_block = (
-            f"\n@mcp.tool\n" f"def {extra_code_tool}() -> dict:\n" f"    return {{}}\n"
-        )
+        extra_code_block = f"\n@mcp.tool\ndef {extra_code_tool}() -> dict:\n    return {{}}\n"
 
     # Build main.py without textwrap.dedent so embedded extra_code_block
     # (which has no leading indent) does not confuse the common-prefix calc.
@@ -141,7 +139,7 @@ def test_synthetic_in_sync_passes(tmp_path):
     """A minimal synthetic repo with code and docs in sync exits 0."""
     repo = _make_fake_repo(tmp_path)
     result = _run(repo)
-    assert (
-        result.returncode == 0
-    ), f"Expected exit 0 for in-sync repo.\nstdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+    assert result.returncode == 0, (
+        f"Expected exit 0 for in-sync repo.\nstdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+    )
     assert "OK" in result.stdout

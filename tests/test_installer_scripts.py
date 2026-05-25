@@ -80,9 +80,9 @@ def test_plist_template_label() -> None:
     assert "Label" in keys, "Template missing <key>Label</key>"
     label_idx = list(d).index(d.findall("key")[keys.index("Label")])
     label_value = list(d)[label_idx + 1]
-    assert (
-        label_value.text == "ai.openclaw.friday-budgeting-pro"
-    ), f"Unexpected label value: {label_value.text!r}"
+    assert label_value.text == "ai.openclaw.friday-budgeting-pro", (
+        f"Unexpected label value: {label_value.text!r}"
+    )
 
 
 def test_plist_template_keep_alive_true() -> None:

@@ -121,9 +121,9 @@ def test_plaid_full_sandbox_flow(in_memory_keyring):
     # Step 1: create_link_token
     # ------------------------------------------------------------------
     link_token = provider.create_link_token()
-    assert (
-        isinstance(link_token, str) and link_token
-    ), "create_link_token() must return a non-empty string"
+    assert isinstance(link_token, str) and link_token, (
+        "create_link_token() must return a non-empty string"
+    )
 
     # ------------------------------------------------------------------
     # Step 2: create a sandbox public token (bypasses the Link UI)
@@ -136,20 +136,20 @@ def test_plaid_full_sandbox_flow(in_memory_keyring):
     )
     sandbox_response = api_client.sandbox_public_token_create(sandbox_request)
     public_token = sandbox_response["public_token"]
-    assert (
-        isinstance(public_token, str) and public_token
-    ), "sandbox_public_token_create() must return a non-empty public_token"
+    assert isinstance(public_token, str) and public_token, (
+        "sandbox_public_token_create() must return a non-empty public_token"
+    )
 
     # ------------------------------------------------------------------
     # Step 3: exchange_public_token
     # ------------------------------------------------------------------
     exchange_result = provider.exchange_public_token(public_token)
-    assert (
-        "access_token" in exchange_result and exchange_result["access_token"]
-    ), "exchange_public_token() must include a non-empty access_token"
-    assert (
-        "item_id" in exchange_result and exchange_result["item_id"]
-    ), "exchange_public_token() must include a non-empty item_id"
+    assert "access_token" in exchange_result and exchange_result["access_token"], (
+        "exchange_public_token() must include a non-empty access_token"
+    )
+    assert "item_id" in exchange_result and exchange_result["item_id"], (
+        "exchange_public_token() must include a non-empty item_id"
+    )
     access_token = exchange_result["access_token"]
 
     # ------------------------------------------------------------------
@@ -175,6 +175,6 @@ def test_plaid_full_sandbox_flow(in_memory_keyring):
     ciphertext = encrypt(access_token)
     assert isinstance(ciphertext, str) and ciphertext, "encrypt() must return a non-empty string"
     decrypted = decrypt(ciphertext)
-    assert (
-        decrypted == access_token
-    ), "decrypt(encrypt(access_token)) must equal the original access_token"
+    assert decrypted == access_token, (
+        "decrypt(encrypt(access_token)) must equal the original access_token"
+    )

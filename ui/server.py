@@ -45,7 +45,9 @@ from fastapi.templating import Jinja2Templates
 # Load .env before any server imports so Plaid credentials are available
 try:
     import pathlib as _pathlib
+
     from dotenv import load_dotenv as _load_dotenv
+
     _load_dotenv(_pathlib.Path(__file__).parent.parent / ".env")
 except ImportError:
     pass

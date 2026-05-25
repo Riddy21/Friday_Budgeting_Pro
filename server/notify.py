@@ -79,7 +79,7 @@ def _try_macos_notification(message: str) -> bool:
     Send a macOS Notification Center alert via osascript.
     Returns True on success, False on any error.
     """
-    script = f"display notification {json_escape(message)} " f'with title "Friday Budgeting Pro"'
+    script = f'display notification {json_escape(message)} with title "Friday Budgeting Pro"'
     try:
         result = subprocess.run(
             ["osascript", "-e", script],

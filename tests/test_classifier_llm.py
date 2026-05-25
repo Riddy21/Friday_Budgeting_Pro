@@ -65,7 +65,7 @@ def seed(conn) -> None:
         conn.execute(
             "INSERT INTO transactions (id, bank_account_id, date, merchant, amount)"
             " VALUES (?, ?, ?, ?, ?)",
-            (txn_id, "acct-x", f"2025-01-0{i+1}", "Whole Foods Market", 55.00 + i),
+            (txn_id, "acct-x", f"2025-01-0{i + 1}", "Whole Foods Market", 55.00 + i),
         )
         conn.execute(
             "INSERT INTO transaction_entries"

@@ -161,9 +161,9 @@ def test_account_transactions_endpoint_returns_entry_type(tmp_path):
 
     # CC payment must be entry_type='transfer'
     assert txn_cc_id in txns, "CC payment transaction missing from results"
-    assert (
-        txns[txn_cc_id]["entry_type"] == "transfer"
-    ), f"Expected 'transfer' for CC payment, got {txns[txn_cc_id]['entry_type']!r}"
+    assert txns[txn_cc_id]["entry_type"] == "transfer", (
+        f"Expected 'transfer' for CC payment, got {txns[txn_cc_id]['entry_type']!r}"
+    )
 
     # Grocery is spending
     assert txns[txn_groc_id]["entry_type"] == "spending"
@@ -259,12 +259,12 @@ def test_accounts_template_has_transaction_toggle():
 
     assert "txn-toggle-btn" in content, "Missing .txn-toggle-btn class"
     assert "txn-expand-" in content, "Missing txn-expand-* row IDs"
-    assert (
-        "/accounts/" in content and "transactions" in content
-    ), "Missing /accounts/{id}/transactions fetch URL"
+    assert "/accounts/" in content and "transactions" in content, (
+        "Missing /accounts/{id}/transactions fetch URL"
+    )
     # Transfer badge colour definition
     assert "transfer" in content.lower(), "Missing 'transfer' entry type in template"
     # entry_type rendering
-    assert (
-        "entry_type" in content or "Transfer" in content
-    ), "Template doesn't reference entry_type or Transfer label"
+    assert "entry_type" in content or "Transfer" in content, (
+        "Template doesn't reference entry_type or Transfer label"
+    )

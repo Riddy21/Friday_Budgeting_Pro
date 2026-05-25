@@ -168,8 +168,8 @@ def classify_transaction(
             li_note = f" → line_item_id={r['line_item_id']}" if r.get("line_item_id") else ""
             rules_lines.append(
                 f"  [{r['priority']:>3}] id={r['id']}  type={r['rule_type']}"
-                f"  name=\"{r['name']}\""
-                f"  desc=\"{r['description']}\"{li_note}"
+                f'  name="{r["name"]}"'
+                f'  desc="{r["description"]}"{li_note}'
             )
         rules_text = "\n".join(rules_lines)
     else:
@@ -238,8 +238,8 @@ def classify_transaction(
         corrections = context.get("recent_corrections") or []
         if corrections:
             corr_lines = [
-                f"  - {c.get('date','?')}  "
-                f"{c.get('from_line_item','?')} → {c.get('to_line_item','?')}"
+                f"  - {c.get('date', '?')}  "
+                f"{c.get('from_line_item', '?')} → {c.get('to_line_item', '?')}"
                 for c in corrections
             ]
             context_parts.append(
@@ -401,8 +401,8 @@ def classify_with_rules(
             li_note = f" → line_item_id={r['line_item_id']}" if r.get("line_item_id") else ""
             rules_lines.append(
                 f"  [{r['priority']:>3}] id={r['id']}  type={r['rule_type']}"
-                f"  name=\"{r['name']}\""
-                f"  desc=\"{r['description']}\"{li_note}"
+                f'  name="{r["name"]}"'
+                f'  desc="{r["description"]}"{li_note}'
             )
         rules_text = "\n".join(rules_lines)
     else:
@@ -444,8 +444,8 @@ def classify_with_rules(
         corrections = context.get("recent_corrections") or []
         if corrections:
             corr_lines = [
-                f"  - {c.get('date','?')}  "
-                f"{c.get('from_line_item','?')} → {c.get('to_line_item','?')}"
+                f"  - {c.get('date', '?')}  "
+                f"{c.get('from_line_item', '?')} → {c.get('to_line_item', '?')}"
                 for c in corrections
             ]
             context_parts.append(

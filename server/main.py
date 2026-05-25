@@ -1297,7 +1297,7 @@ def classify_pending_transactions(user_id: str, limit: int | None = None) -> dic
             (user_id,),
         ).fetchall()
         if limit:
-            unclassified = unclassified[:int(limit)]
+            unclassified = unclassified[: int(limit)]
 
         for row in unclassified:
             tx_id = row["id"]
@@ -1348,8 +1348,7 @@ def classify_pending_transactions(user_id: str, limit: int | None = None) -> dic
                 )
             except Exception as exc:
                 _logger.warning(
-                    "classify_pending_transactions: classify_transaction failed for "
-                    "tx_id=%s: %s",
+                    "classify_pending_transactions: classify_transaction failed for tx_id=%s: %s",
                     tx_id,
                     exc,
                 )
@@ -1397,16 +1396,20 @@ def classify_pending_transactions(user_id: str, limit: int | None = None) -> dic
             if line_item_id is None:
                 try:
                     from server.classifier import classify_with_llm
-                    llm_entry = classify_with_llm(conn, {
-                        "id": tx_id,
-                        "merchant": merchant,
-                        "amount": amount,
-                        "date": date,
-                        "account_name": account_name,
-                        "account_description": account_description,
-                        "plaid_category": plaid_category,
-                        "bank_account_id": bank_account_id,
-                    })
+
+                    llm_entry = classify_with_llm(
+                        conn,
+                        {
+                            "id": tx_id,
+                            "merchant": merchant,
+                            "amount": amount,
+                            "date": date,
+                            "account_name": account_name,
+                            "account_description": account_description,
+                            "plaid_category": plaid_category,
+                            "bank_account_id": bank_account_id,
+                        },
+                    )
                     line_item_id = llm_entry.get("line_item_id")
                     ledger_id = llm_entry.get("ledger_id")
                     confidence = float(llm_entry.get("confidence", confidence))
@@ -1424,7 +1427,9 @@ def classify_pending_transactions(user_id: str, limit: int | None = None) -> dic
                 except Exception as _llm_exc:
                     _logger.warning(
                         "classify_pending_transactions: LLM best-guess fallback "
-                        "failed for tx_id=%s: %s", tx_id, _llm_exc
+                        "failed for tx_id=%s: %s",
+                        tx_id,
+                        _llm_exc,
                     )
 
             # Last resort: if still no line_item_id but account has a default
@@ -2258,9 +2263,7 @@ def analyze_recurring_merchants(min_occurrences: int = 2, lookback_days: int = 9
             params = (uid, cutoff)
         else:
             base_filter = (
-                " WHERE t.merchant IS NOT NULL\n"
-                "   AND TRIM(t.merchant) != ''\n"
-                "   AND t.date >= ?\n"
+                " WHERE t.merchant IS NOT NULL\n   AND TRIM(t.merchant) != ''\n   AND t.date >= ?\n"
             )
             params = (cutoff,)
 
@@ -2589,7 +2592,7 @@ def configure_plaid(
         raise ValueError(f"env must be one of {sorted(_VALID_ENVS)!r}, got {env!r}")
 
     env_path = project_root / ".env"
-    content = f"PLAID_CLIENT_ID={client_id}\n" f"PLAID_SECRET={secret}\n" f"PLAID_ENV={env}\n"
+    content = f"PLAID_CLIENT_ID={client_id}\nPLAID_SECRET={secret}\nPLAID_ENV={env}\n"
 
     # Atomic write: write to a sibling temp file, then os.replace into place.
     env_path.parent.mkdir(parents=True, exist_ok=True)
