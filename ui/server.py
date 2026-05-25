@@ -589,6 +589,7 @@ async def login_post(request: Request):
 # ── /logout ──────────────────────────────────────────────────────────────────
 
 
+@app.get("/logout")
 @app.post("/logout")
 def logout(request: Request):
     """Delete session row(s) and clear cookies."""

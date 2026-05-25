@@ -2,60 +2,30 @@
 tests/ui/test_login.py — Playwright tests for the login / logout flow.
 
 Prerequisites (handled by conftest):
-  - Server running with a fresh DB.
-  - The session-scoped `server_url` fixture is shared — tests run after
-    test_setup_flow has already completed setup (same server process).
-    If tests run in isolation the fixture boots a fresh server, so we
-    create a user via the setup wizard before testing login.
+  - Server running with a DB pre-seeded with testuser/testpass.
 
 Tests skip cleanly when Playwright / Chromium are not installed (see conftest).
 """
 
 from __future__ import annotations
 
-import pytest
+# Pre-seeded credentials (set up by tests/ui/_server_runner.py)
+_USERNAME = "testuser"
+_PASSWORD = "testpass"
+
 
 # ---------------------------------------------------------------------------
-# Module-level helper: ensure the server has a user we can log in with.
-# We use a session-scoped fixture so the wizard runs only once per session.
+# Helper
 # ---------------------------------------------------------------------------
 
 
-@pytest.fixture(scope="module")
-def registered_user(server_url):
-    """Ensure a test user exists by completing the setup wizard if needed.
-
-    Returns (username, password).
-    """
-    from playwright.sync_api import sync_playwright
-
-    username = "logintest"
-    password = "hunter2abc"
-
-    with sync_playwright() as p:
-        browser = p.chromium.launch()
-        ctx = browser.new_context()
-        pg = ctx.new_page()
-
-        pg.goto(server_url + "/")
-        if "/setup" in pg.url:
-            # Complete the wizard
-            pg.fill("input#username", username)
-            pg.fill("input#password", password)
-            pg.fill("input#password_confirm", password)
-            pg.click("button[type=submit]")
-            # Step 2 — submit defaults
-            pg.click("button[type=submit]")
-            # Step 3 — skip bank
-            pg.locator("button[type=submit]", has_text="Skip").first.click()
-            # Step 4 — finish
-            pg.click("button[type=submit]")
-            pg.wait_for_url("**/profile", timeout=5000)
-
-        ctx.close()
-        browser.close()
-
-    return username, password
+def _login(page, server_url: str, username: str = _USERNAME, password: str = _PASSWORD) -> None:
+    """Log in via the /login form."""
+    page.goto(server_url + "/login")
+    page.fill("input#username", username)
+    page.fill("input#password", password)
+    page.click("button[type=submit]")
+    page.wait_for_url("**/dashboard", timeout=5000)
 
 
 # ---------------------------------------------------------------------------
@@ -63,18 +33,17 @@ def registered_user(server_url):
 # ---------------------------------------------------------------------------
 
 
-def test_login_page_renders(page, server_url, registered_user):
+def test_login_page_renders(page, server_url):
     """GET /login shows username and password fields."""
     page.goto(server_url + "/login")
     assert page.locator("input#username").is_visible()
     assert page.locator("input#password").is_visible()
 
 
-def test_login_wrong_password_shows_error(page, server_url, registered_user):
+def test_login_wrong_password_shows_error(page, server_url):
     """Wrong password keeps the user on /login and shows an error."""
-    username, _ = registered_user
     page.goto(server_url + "/login")
-    page.fill("input#username", username)
+    page.fill("input#username", _USERNAME)
     page.fill("input#password", "wrongpassword!")
     page.click("button[type=submit]")
 
@@ -84,30 +53,24 @@ def test_login_wrong_password_shows_error(page, server_url, registered_user):
     assert page.locator(".alert-error").is_visible()
 
 
-def test_login_correct_password_redirects_to_profile(page, server_url, registered_user):
-    """Correct credentials redirect to /profile."""
-    username, password = registered_user
+def test_login_correct_password_redirects_to_dashboard(page, server_url):
+    """Correct credentials redirect to /dashboard."""
     page.goto(server_url + "/login")
-    page.fill("input#username", username)
-    page.fill("input#password", password)
+    page.fill("input#username", _USERNAME)
+    page.fill("input#password", _PASSWORD)
     page.click("button[type=submit]")
 
-    page.wait_for_url("**/profile", timeout=5000)
-    assert "/profile" in page.url
+    page.wait_for_url("**/dashboard", timeout=5000)
+    assert "/dashboard" in page.url
 
 
-def test_logout_redirects_to_login(page, server_url, registered_user):
+def test_logout_redirects_to_login(page, server_url):
     """Clicking Sign out lands back on /login."""
-    username, password = registered_user
+    _login(page, server_url)
 
-    # Log in first
-    page.goto(server_url + "/login")
-    page.fill("input#username", username)
-    page.fill("input#password", password)
-    page.click("button[type=submit]")
-    page.wait_for_url("**/profile", timeout=5000)
-
-    # Submit logout form (POST /logout)
-    page.click("button[type=submit]:has-text('Sign out')")
+    # Navigate to profile to find the Log out link
+    page.goto(server_url + "/profile")
+    # Click the Log out link
+    page.click("a[href='/logout']")
     page.wait_for_url("**/login", timeout=5000)
     assert "/login" in page.url
