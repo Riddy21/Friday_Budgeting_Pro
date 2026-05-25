@@ -1078,7 +1078,7 @@ def sync() -> dict:
                     next_cursor = result.get("next_cursor") if isinstance(result, dict) else None
                     accounts_list = result.get("accounts", []) if isinstance(result, dict) else []
 
-                    # Build a lookup map: plaid_account_id -> {name, type, balances}
+                    # Build a lookup map: plaid_account_id -> {name, type}
                     # Use official_name if present, else fall back to name.
                     account_meta: dict[str, dict] = {}
                     for acct in accounts_list:
@@ -1089,21 +1089,9 @@ def sync() -> dict:
                             # type may come back as an enum object; coerce to string
                             if acct_type is not None and not isinstance(acct_type, str):
                                 acct_type = str(acct_type)
-                            acct_balances = _get(acct, "balances") or {}
-                            if not isinstance(acct_balances, dict):
-                                # balances may be an object with attribute access
-                                try:
-                                    acct_balances = {
-                                        "current": getattr(acct_balances, "current", None),
-                                        "available": getattr(acct_balances, "available", None),
-                                    }
-                                except Exception:
-                                    acct_balances = {}
                             account_meta[acct_id] = {
                                 "name": acct_name,
                                 "type": acct_type,
-                                "balance_current": acct_balances.get("current"),
-                                "balance_available": acct_balances.get("available"),
                             }
 
                     now = int(_time.time())
@@ -1153,17 +1141,6 @@ def sync() -> dict:
                                         "WHERE plaid_account_id = ? AND (type IS NULL OR type = '')",
                                         (meta["type"], plaid_account_id),
                                     )
-                                # Always update balances with latest Plaid data (idempotent)
-                                db_conn.execute(
-                                    "UPDATE bank_accounts "
-                                    "SET balance_current = ?, balance_available = ? "
-                                    "WHERE plaid_account_id = ?",
-                                    (
-                                        meta["balance_current"],
-                                        meta["balance_available"],
-                                        plaid_account_id,
-                                    ),
-                                )
 
                             txn_id = str(uuid.uuid4())
                             cur = db_conn.execute(

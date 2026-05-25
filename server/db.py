@@ -129,10 +129,6 @@ def init_db(path: str | Path) -> None:
         # Migration: bank_accounts default_ledger_id (#174)
         _add_col_if_missing(conn, "bank_accounts", "default_ledger_id", "TEXT")
 
-        # Migration: bank_accounts balance columns (#158)
-        _add_col_if_missing(conn, "bank_accounts", "balance_current", "REAL")
-        _add_col_if_missing(conn, "bank_accounts", "balance_available", "REAL")
-
         # Migration: line_items item_type (#174)
         _add_col_if_missing(conn, "line_items", "item_type", "TEXT NOT NULL DEFAULT 'expense'")
 
