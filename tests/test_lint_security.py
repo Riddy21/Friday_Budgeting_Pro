@@ -24,9 +24,9 @@ def run_linter(*extra_args):
 # ---------------------------------------------------------------------------
 def test_smoke_clean_repo():
     result = run_linter()
-    assert result.returncode == 0, (
-        f"lint_security.py found violations in the current repo:\n{result.stdout}"
-    )
+    assert (
+        result.returncode == 0
+    ), f"lint_security.py found violations in the current repo:\n{result.stdout}"
 
 
 # ---------------------------------------------------------------------------
@@ -38,12 +38,10 @@ def test_flags_all_interfaces_bind(tmp_path, monkeypatch):
     fake_server = tmp_path / "server"
     fake_server.mkdir()
     bad_file = fake_server / "bad_config.py"
-    bad_file.write_text(
-        textwrap.dedent("""\
+    bad_file.write_text(textwrap.dedent("""\
             HOST = "0" + "." + "0" + "." + "0" + "." + "0"  # won't match
             HOST2 = "0.0.0.0"  # this one should match
-            """)
-    )
+            """))
 
     # Patch the linter's root so it scans tmp_path instead of the real repo
     import scripts.lint_security as linter  # noqa: PLC0415
@@ -56,9 +54,9 @@ def test_flags_all_interfaces_bind(tmp_path, monkeypatch):
     monkeypatch.setattr(linter, "iter_python_files", patched_iter)
 
     violations = linter.check_file(bad_file)
-    assert any("all-interfaces" in v for v in violations), (
-        f"Expected a violation for 0.0.0.0 but got: {violations}"
-    )
+    assert any(
+        "all-interfaces" in v for v in violations
+    ), f"Expected a violation for 0.0.0.0 but got: {violations}"
 
 
 # ---------------------------------------------------------------------------
@@ -100,6 +98,6 @@ def test_flags_hardcoded_plaid_secret(tmp_path):
     bad_file.write_text('PLAID_SECRET = "abcdef1234567890abcdef1234567890"\n')
 
     violations = linter.check_file(bad_file)
-    assert any("Plaid" in v for v in violations), (
-        f"Expected Plaid secret violation but got: {violations}"
-    )
+    assert any(
+        "Plaid" in v for v in violations
+    ), f"Expected Plaid secret violation but got: {violations}"

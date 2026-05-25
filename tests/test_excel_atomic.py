@@ -132,9 +132,9 @@ def test_crash_leaves_original_unchanged(seeded_db, patched_paths, tmp_path):
             export_to_file(seeded_db, dest)
 
     # Original file must be byte-for-byte unchanged.
-    assert dest.read_bytes() == sentinel_content, (
-        "Original file was modified despite a crash during export"
-    )
+    assert (
+        dest.read_bytes() == sentinel_content
+    ), "Original file was modified despite a crash during export"
 
     # No temp file should remain with the non-crashing content.
     # (The crash path cleans up the .tmp.<pid> file.)
@@ -209,6 +209,6 @@ def test_pid_suffix_on_temp_file(seeded_db, patched_paths, tmp_path):
 
     assert recorded_src, "os.replace was never called"
     src_path = recorded_src[0]
-    assert f".tmp.{current_pid}" in src_path, (
-        f"Expected PID {current_pid} in temp path, got: {src_path}"
-    )
+    assert (
+        f".tmp.{current_pid}" in src_path
+    ), f"Expected PID {current_pid} in temp path, got: {src_path}"

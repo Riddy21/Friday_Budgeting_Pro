@@ -406,9 +406,9 @@ class TestSetupWizardCompletesWithoutMcp:
 
         # Verify setup page now returns 404 (wizard is complete).
         r = cl.get("/setup")
-        assert r.status_code == 404, (
-            f"GET /setup after completion should be 404, got {r.status_code}"
-        )
+        assert (
+            r.status_code == 404
+        ), f"GET /setup after completion should be 404, got {r.status_code}"
 
         # After wizard: apply_initial_setup was called via the UI (not via MCP JSON-RPC).
         mock_apply.assert_called_once()

@@ -139,7 +139,7 @@ def test_synthetic_in_sync_passes(tmp_path):
     """A minimal synthetic repo with code and docs in sync exits 0."""
     repo = _make_fake_repo(tmp_path)
     result = _run(repo)
-    assert result.returncode == 0, (
-        f"Expected exit 0 for in-sync repo.\nstdout:\n{result.stdout}\nstderr:\n{result.stderr}"
-    )
+    assert (
+        result.returncode == 0
+    ), f"Expected exit 0 for in-sync repo.\nstdout:\n{result.stdout}\nstderr:\n{result.stderr}"
     assert "OK" in result.stdout
