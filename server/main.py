@@ -1924,6 +1924,65 @@ def get_needs_review() -> dict:
 
 
 @mcp.tool
+def get_needs_review_summary() -> dict:
+    """Return a pre-formatted batch summary of transactions needing manual review.
+
+    Designed to be called immediately after ``sync`` so the agent can surface
+    uncertain or unrouted transactions to the user in a single, readable
+    message rather than one message per transaction.
+
+    The summary is intentionally terse: merchant, amount, date, and the
+    classifier's reasoning (when available) are included for each item so the
+    user has just enough context to reply with the correct classification.
+
+    Returns
+    -------
+    dict
+        ``{"count": int, "summary": str, "transactions": [...]}``
+
+        * ``count`` — number of transactions needing review (0 when none).
+        * ``summary`` — human-readable batch message suitable for presenting
+          directly to the user.  Empty string when ``count == 0``.
+        * ``transactions`` — raw list (same shape as ``get_needs_review``) for
+          downstream processing (corrections, rule proposals, etc.).
+    """
+    result = get_needs_review()
+    transactions = result.get("transactions", [])
+    count = len(transactions)
+
+    if count == 0:
+        return {"count": 0, "summary": "", "transactions": []}
+
+    lines = [
+        f"🔍 **{count} transaction{'s' if count != 1 else ''} need your review** after the latest sync:\n"
+    ]
+    for i, tx in enumerate(transactions, 1):
+        amount = tx.get("amount", 0)
+        merchant = tx.get("merchant") or "Unknown merchant"
+        date = tx.get("date", "")
+        account = tx.get("account_name", "")
+        reasoning = tx.get("reasoning", "")
+
+        amount_str = f"${abs(amount):.2f}" if amount is not None else "$?.??"
+        line = f"{i}. **{merchant}** — {amount_str} on {date}"
+        if account:
+            line += f" ({account})"
+        if reasoning:
+            line += f"\n   _Classifier note: {reasoning}_"
+        lines.append(line)
+
+    lines.append(
+        "\nReply with the correct category for each, or say 'skip' to leave them for later."
+    )
+
+    return {
+        "count": count,
+        "summary": "\n".join(lines),
+        "transactions": transactions,
+    }
+
+
+@mcp.tool
 def route(transaction_id: str, allocations: List) -> dict:
     """Manually route a transaction to one or more line items."""
     return {"status": "not_implemented"}

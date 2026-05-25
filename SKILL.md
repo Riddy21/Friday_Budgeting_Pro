@@ -52,7 +52,7 @@ metadata:
             },
           ],
         "onInstall":
-          "Friday Budgeting Pro is installed.  Walk the user through the guided onboarding flow:\n1. Call setup_status — if not 'complete', send the URL from get_ui_url() and instruct the user to set a password and connect their first bank.  Poll setup_status until it returns 'complete'.\n2. Once banks are connected and an initial sync has run, run the personalisation interview.  Use list_setup_interview_questions to get the canonical question list, then ask each one conversationally (skip ones the user already volunteered).  Call setup_interview(question_key, answer_text) to persist each answer.\n3. Call analyze_recurring_merchants to cross-reference the user's interview answers with recently-synced transactions.  Reconcile gaps (e.g. user mentioned Netflix but it's not in transactions yet, or there's a recurring charge they didn't mention).\n4. For each identified pattern, propose and create a classification rule via add_rule (use a description that starts with '[onboarding]' so the user can see what was auto-generated) and add classification hints via add_hint.  Examples: 'Deposits from TENSTORRENT are Salary & Income', 'Disney Plus charges are Entertainment & Subscriptions'.\n5. Call sync once more so the newly-installed rules classify any remaining transactions, then surface get_needs_review items to the user.\n6. After setup the user can update rules at any time via natural language ('add a rule that Home Depot over $200 goes to Rental Maintenance', 'remove the Netflix rule') — wire those to add_rule / update_rule / delete_rule directly.  No UI needed for rule management.",
+          "Friday Budgeting Pro is installed.  Walk the user through the guided onboarding flow:\n1. Call setup_status — if not 'complete', send the URL from get_ui_url() and instruct the user to set a password and connect their first bank.  Poll setup_status until it returns 'complete'.\n2. Once banks are connected and an initial sync has run, run the personalisation interview.  Use list_setup_interview_questions to get the canonical question list, then ask each one conversationally (skip ones the user already volunteered).  Call setup_interview(question_key, answer_text) to persist each answer.\n3. Call analyze_recurring_merchants to cross-reference the user's interview answers with recently-synced transactions.  Reconcile gaps (e.g. user mentioned Netflix but it's not in transactions yet, or there's a recurring charge they didn't mention).\n4. For each identified pattern, propose and create a classification rule via add_rule (use a description that starts with '[onboarding]' so the user can see what was auto-generated) and add classification hints via add_hint.  Examples: 'Deposits from TENSTORRENT are Salary & Income', 'Disney Plus charges are Entertainment & Subscriptions'.\n5. Call sync once more so the newly-installed rules classify any remaining transactions, then call get_needs_review_summary and, if count > 0, present the summary field to the user in one message.\n6. After setup the user can update rules at any time via natural language ('add a rule that Home Depot over $200 goes to Rental Maintenance', 'remove the Netflix rule') — wire those to add_rule / update_rule / delete_rule directly.  No UI needed for rule management.",
       },
   }
 ---
@@ -119,6 +119,7 @@ Invoke for any personal finance request:
 - `sync` — pull latest transactions from all connected banks
 - `list(filters?)` — query transactions (supports date, ledger, category, account filters)
 - `get_needs_review` — transactions that need manual review: uncertain classifications (confidence < 0.7) or unrouted transactions with no line item assigned
+- `get_needs_review_summary` — **call this immediately after every `sync`**; returns a pre-formatted batch message (`count`, `summary`, `transactions`) ready to present to the user in one message. Use `summary` as-is for the user-facing message. Includes merchant, amount, date, account, and classifier reasoning for each transaction.
 - `route(transaction_id, allocations)` — manually assign a transaction to a ledger/line item
 - `add_hint(text)` — add a natural-language classification hint for the LLM
 - `list_hints` — list all classification hints
@@ -166,11 +167,15 @@ Invoke for any personal finance request:
 **Do**
 - Always use the MCP tools — never guess from general knowledge
 - Call `sync` before answering spending questions if data may be stale
-- Use `get_needs_review` periodically and walk the user through uncertain classifications
+- **After every `sync`, call `get_needs_review_summary` and, if `count > 0`, present the `summary` field to the user in a single message** — do not send one message per transaction
 - Use `list_rules` to show what classification rules are active before adding new ones
 - Open `start_link` when the user wants to connect or reconnect a bank
 - Use `create_property_ledger` for rental properties — it seeds the right line items automatically
 - Respect that all data is local and private
+- When the user replies with classifications for uncertain transactions:
+  1. Call `correct_transaction(transaction_id, line_item_id)` for each corrected item
+  2. Check if the merchant is recurring by calling `find_transactions(merchant=<name>)` — if 2+ past transactions exist, propose adding a rule via `add_rule` (tag description with `[from-correction]`)
+  3. Apply the rule only after the user confirms
 
 **Don't**
 - Don't answer general finance questions ("what is inflation?") — this skill is for personal accounts only
