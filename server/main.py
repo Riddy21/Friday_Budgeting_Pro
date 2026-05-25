@@ -27,8 +27,7 @@ import server.health_monitor
 import server.paths
 from server.classifier import (
     apply_rules,
-    classify_transaction,
-    classify_with_rules,  # kept import for legacy callers / tests
+    classify_transaction,  # kept import for legacy callers / tests
 )
 from server.db import get_db
 from server.db import transaction as db_txn

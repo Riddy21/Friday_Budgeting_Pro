@@ -27,7 +27,6 @@ from server.classifier import (
 )
 from server.db import get_db, init_db
 
-
 LEDGER_ID = "ledger-unified"
 LI_GROCERIES = "li-groceries-u"
 LI_DINING = "li-dining-u"
