@@ -25,7 +25,12 @@ SKILL_MD = Path("SKILL.md")
 # (e.g. code-block examples, prose references).  Add here if the regex
 # produces false positives.
 # ---------------------------------------------------------------------------
-SKILL_MD_IGNORE: set[str] = set()
+# Parameter/value names that appear as bullet items in SKILL.md docs
+# but are not MCP tool names.
+SKILL_MD_IGNORE: set[str] = {
+    "home_currency",  # parameter value of set_setting/get_setting
+    "timezone",  # parameter value of set_setting/get_setting
+}
 
 
 def get_mcp_tools_in_code() -> set[str]:
