@@ -288,27 +288,43 @@ That's the whole API. ~15 tools.
 
 ---
 
-## Classification Engine (Unchanged — This Is the Value)
+## Classification Engine
 
 ```
 New transaction
    │
-   ├─▶ Tier 1: Rules
-   │     If merchant matches a saved rule → auto-route. Done.
+   ├─▶ Tier 1 v2: classify_with_rules()  (LLM-first, #170)
+   │     Passes the full priority-ordered classification_rules list to the
+   │     LLM.  First matching rule wins.  Returns:
+   │       { rule_id, line_item_id, classification_type, confidence,
+   │         uncertain, reasoning }
+   │     Optional context: possible_internal_transfer hint (#171),
+   │     recent_corrections.
+   │     Results available for #165 to write to transaction_entries.
    │
-   ├─▶ Tier 2: LLM
-   │     Prompt: hints + ledger tree + recent similar txns + this txn
-   │     LLM picks ledger/line item with confidence score
-   │     If confidence >= 0.75 → auto-route + flag for casual review
+   ├─▶ Tier 1 legacy: apply_rules() (substring matching, routing_rules)
+   │     Still runs for backward-compat; new writes use classify_with_rules.
+   │
+   ├─▶ Tier 2: classify_with_llm()
+   │     Prompt: hints + full ledger tree + recent similar txns + this txn.
+   │     LLM picks ledger/line item with confidence score.
+   │     If confidence >= 0.75 → auto-route + flag for casual review.
    │
    └─▶ Tier 3: Ask user
          HAL sends: "Got a $X charge at Y — my guess is Z (62% sure).
                      Correct, or should it be something else?"
-         User replies → save as a new rule for next time
+         User replies → save as a new rule for next time.
 ```
 
 After 3 successful LLM classifications of the same merchant, auto-promote
-to a Tier 1 rule. System gets cheaper and faster over time.
+to a legacy Tier-1 routing_rule. System gets cheaper and faster over time.
+
+### classify_with_rules — key design notes
+- Disabled rules (`enabled=0`) are excluded from the LLM prompt.
+- `uncertain=True` when `confidence < 0.7`.
+- Does NOT write to `transaction_entries` — that is #165's responsibility.
+- The sync loop (`server/main.py`) calls it as a read-only integration point
+  and logs the result at DEBUG level for now.
 
 ### Transfer Detection
 

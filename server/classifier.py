@@ -1,19 +1,226 @@
 """
-server/classifier.py — Tier 1 deterministic rules-based classifier.
+server/classifier.py — Classifier tiers for Friday Budgeting Pro.
 
-Given a transaction, checks routing_rules for a matching merchant_pattern
-and returns a ready-to-insert transaction_entry dict, or None if no rule fires.
+Classification pipeline:
+  Tier 1 (classify_with_rules): LLM-first approach using priority-ordered
+      classification_rules — evaluates natural language rules in order via the
+      LLM and returns a structured result.  This is the primary entry point.
+  Tier 2 (classify_with_llm): LLM classification using the full ledger tree,
+      hints, and recent similar transactions.  Coexists with Tier 1.
+  Tier 3 (auto-promotion): flag_for_review + maybe_promote_to_rule.
 
-This is the first tier in the three-tier classification pipeline:
-  Tier 1 (this file): deterministic merchant-pattern rules
-  Tier 2: LLM-based classification
-  Tier 3: auto-promotion of confident results
+Legacy (apply_rules): deterministic substring matching against routing_rules.
+  Kept for backward-compat; new code should prefer classify_with_rules.
 """
 
 from __future__ import annotations
 
 import json
 import sqlite3
+
+# ---------------------------------------------------------------------------
+# Tier 1 — LLM-first classify_with_rules
+# ---------------------------------------------------------------------------
+
+
+def classify_with_rules(
+    transaction: dict,
+    rules: list[dict],
+    context: dict | None = None,
+) -> dict:
+    """Classify a single transaction using priority-ordered rules via the LLM.
+
+    This is the primary Tier-1 entry point.  It passes the full ordered
+    ``classification_rules`` list to the LLM and asks it to find the first
+    matching rule.  The LLM is also given optional context such as a
+    transfer-detection hint from issue #171 and recent manual corrections.
+
+    Args:
+        transaction: dict with any of the following keys (all optional except
+            those needed for meaningful classification):
+
+            - merchant             (str)  display name from the bank
+            - amount               (real) signed transaction amount
+            - date                 (str)  ISO-format date
+            - account_name         (str)  human name of the bank account
+            - account_description  (str)  user-set context for the account
+            - plaid_category       (str)  Plaid category string
+
+        rules: list of rule dicts as returned by
+            ``list_rules()["rules"]``.  Expected keys per rule:
+            ``id``, ``name``, ``description``, ``rule_type``,
+            ``line_item_id``, ``priority``, ``enabled``.
+            Pre-sorted by priority ASC; disabled rules are skipped.
+
+        context: optional dict with any of:
+            - ``possible_internal_transfer`` (bool)  hint from transfer
+              detection (#171) — included in the prompt when True.
+            - ``recent_corrections`` (list[dict])  recent manual overrides
+              for this merchant; each dict should have ``from_line_item``,
+              ``to_line_item``, and ``date``.
+
+    Returns:
+        A classification result dict::
+
+            {
+                "rule_id":             str | None,
+                "line_item_id":        str | None,
+                "classification_type": "transfer" | "savings" | "spending"
+                                        | "income" | "skip",
+                "confidence":          float,
+                "uncertain":           bool,
+                "reasoning":           str,
+            }
+
+        ``rule_id`` is the ID of the first matching rule, or ``None`` when no
+        rule clearly applies.  ``uncertain`` is ``True`` when confidence < 0.7.
+
+    Raises:
+        ValueError: If the LLM returns invalid JSON or a response that is
+            missing required fields.
+    """
+    from server.llm import chat  # local import keeps chat patchable in tests
+
+    UNCERTAIN_THRESHOLD = 0.7
+
+    # ------------------------------------------------------------------
+    # 1. Build the rules section (enabled rules only, priority order)
+    # ------------------------------------------------------------------
+    enabled_rules = [r for r in rules if r.get("enabled", True)]
+
+    if enabled_rules:
+        rules_lines: list[str] = []
+        for r in enabled_rules:
+            li_note = f" → line_item_id={r['line_item_id']}" if r.get("line_item_id") else ""
+            rules_lines.append(
+                f"  [{r['priority']:>3}] id={r['id']}  type={r['rule_type']}"
+                f"  name=\"{r['name']}\""
+                f"  desc=\"{r['description']}\"{li_note}"
+            )
+        rules_text = "\n".join(rules_lines)
+    else:
+        rules_text = "  (no enabled rules)"
+
+    # ------------------------------------------------------------------
+    # 2. Build the transaction section
+    # ------------------------------------------------------------------
+    merchant = transaction.get("merchant") or "(unknown)"
+    amount = transaction.get("amount", 0.0)
+    date = transaction.get("date", "unknown")
+    account_name = transaction.get("account_name", "")
+    account_description = transaction.get("account_description", "")
+    plaid_category = transaction.get("plaid_category", "")
+
+    txn_lines = [
+        f"  Merchant            : {merchant}",
+        f"  Amount              : ${amount:.2f}",
+        f"  Date                : {date}",
+    ]
+    if account_name:
+        txn_lines.append(f"  Account             : {account_name}")
+    if account_description:
+        txn_lines.append(f"  Account description : {account_description}")
+    if plaid_category:
+        txn_lines.append(f"  Plaid category      : {plaid_category}")
+    txn_text = "\n".join(txn_lines)
+
+    # ------------------------------------------------------------------
+    # 3. Build the optional context section
+    # ------------------------------------------------------------------
+    context_parts: list[str] = []
+    if context:
+        if context.get("possible_internal_transfer"):
+            context_parts.append(
+                "  ⚠️  Transfer detector flagged this transaction as a "
+                "possible internal transfer (same amount moved between accounts)."
+            )
+        corrections = context.get("recent_corrections") or []
+        if corrections:
+            corr_lines = [
+                f"  - {c.get('date','?')}  "
+                f"{c.get('from_line_item','?')} → {c.get('to_line_item','?')}"
+                for c in corrections
+            ]
+            context_parts.append(
+                "  Recent manual corrections for this merchant:\n" + "\n".join(corr_lines)
+            )
+    context_text = "\n".join(context_parts) if context_parts else "  (none)"
+
+    # ------------------------------------------------------------------
+    # 4. Compose the prompt
+    # ------------------------------------------------------------------
+    system_msg = (
+        "You are a personal finance classifier.  Your job is to evaluate "
+        "priority-ordered classification rules and find the FIRST rule that "
+        "clearly applies to the given transaction.  The FIRST match wins — "
+        "stop evaluating after the first match.\n\n"
+        "Reply with ONLY a JSON object — no markdown, no text outside the JSON — "
+        "with these keys:\n"
+        '{"rule_id": "<id or null>", "line_item_id": "<id or null>", '
+        '"classification_type": "<transfer|savings|spending|income|skip>", '
+        '"confidence": <0.0-1.0>, "reasoning": "<one sentence>"}\n\n'
+        "Rules for null fields:\n"
+        "- Set rule_id=null when no rule clearly applies.\n"
+        "- Set line_item_id=null when the matched rule has no line_item_id, "
+        "or when no rule matched.\n"
+        "- When no rule matches, infer classification_type from the Plaid "
+        "category and amount sign (negative = outflow = spending/transfer).\n"
+        "- Set confidence < 0.7 (and the caller will set uncertain=true) when "
+        "you are not confident."
+    )
+
+    user_msg = (
+        f"## Classification Rules (priority ASC — first match wins)\n{rules_text}\n\n"
+        f"## Transaction\n{txn_text}\n\n"
+        f"## Additional Context\n{context_text}\n\n"
+        "Reply with the JSON object only."
+    )
+
+    messages = [
+        {"role": "system", "content": system_msg},
+        {"role": "user", "content": user_msg},
+    ]
+
+    # ------------------------------------------------------------------
+    # 5. Call the LLM and parse the response
+    # ------------------------------------------------------------------
+    raw = chat(messages, temperature=0.0)
+
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"LLM returned non-JSON response: {raw!r}") from exc
+
+    # Validate required keys
+    required_keys = {"rule_id", "classification_type", "confidence", "reasoning"}
+    missing = required_keys - parsed.keys()
+    if missing:
+        raise ValueError(f"LLM JSON missing required keys {sorted(missing)!r}: {parsed!r}")
+
+    confidence = float(parsed.get("confidence", 0.0))
+
+    # Validate classification_type
+    valid_types = {"transfer", "savings", "spending", "income", "skip"}
+    classification_type = parsed.get("classification_type", "")
+    if classification_type not in valid_types:
+        raise ValueError(
+            f"LLM returned unknown classification_type={classification_type!r}. "
+            f"Expected one of {sorted(valid_types)!r}."
+        )
+
+    return {
+        "rule_id": parsed.get("rule_id"),
+        "line_item_id": parsed.get("line_item_id"),
+        "classification_type": classification_type,
+        "confidence": confidence,
+        "uncertain": confidence < UNCERTAIN_THRESHOLD,
+        "reasoning": str(parsed.get("reasoning", "")),
+    }
+
+
+# ---------------------------------------------------------------------------
+# Legacy Tier 1 — deterministic substring rules (routing_rules table)
+# ---------------------------------------------------------------------------
 
 
 def apply_rules(
