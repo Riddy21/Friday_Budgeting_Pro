@@ -42,6 +42,14 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Resp
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
+# Load .env before any server imports so Plaid credentials are available
+try:
+    import pathlib as _pathlib
+    from dotenv import load_dotenv as _load_dotenv
+    _load_dotenv(_pathlib.Path(__file__).parent.parent / ".env")
+except ImportError:
+    pass
+
 import server.paths as _paths
 from server.db import get_db, init_db
 from server.main import list_rules as _list_rules
