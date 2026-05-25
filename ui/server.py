@@ -43,7 +43,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 import server.paths as _paths
-from server.db import get_db
+from server.db import get_db, init_db
 from server.main import list_rules as _list_rules
 
 # ── Recovery token store (in-memory, 10-min TTL) ──────────────────────────
@@ -70,6 +70,10 @@ from ui.auth import (
 )
 
 # ── App setup ───────────────────────────────────────────────────────────────
+
+# Run DB migrations on startup so schema is always up to date
+# (safe to call repeatedly — all operations are idempotent)
+init_db(_paths.DB_PATH)
 
 app = FastAPI(title="Friday Budgeting Pro UI", version="0.1.0")
 
