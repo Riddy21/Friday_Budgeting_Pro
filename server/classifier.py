@@ -23,6 +23,277 @@ import json
 import sqlite3
 
 # ---------------------------------------------------------------------------
+# Batch LLM classification (issue #207)
+# ---------------------------------------------------------------------------
+
+# Maximum prompt character count before splitting into sub-batches.
+# Approximates ~20 000 tokens (chars / 4 ≈ tokens).
+MAX_BATCH_CHARS = 80_000
+
+
+def _build_batch_user_msg(
+    conn: sqlite3.Connection,
+    transactions: list[dict],
+    rules: list[dict],
+    ledger_tree: str,
+    hints: list[str],
+) -> str:
+    """Build the user-side content for a batch classification prompt."""
+    enabled_rules = [r for r in rules if r.get("enabled", True)]
+    if enabled_rules:
+        rules_lines: list[str] = []
+        for r in enabled_rules:
+            li_note = f" -> line_item_id={r['line_item_id']}" if r.get("line_item_id") else ""
+            rules_lines.append(
+                f"  [{r['priority']:>3}] id={r['id']}  type={r['rule_type']}"
+                f"  name=\"{r['name']}\""
+                f"  desc=\"{r['description']}\"{li_note}"
+            )
+        rules_text = "\n".join(rules_lines)
+    else:
+        rules_text = "  (no enabled rules)"
+
+    hints_text = "\n".join(f"  - {h}" for h in hints) if hints else "  (none)"
+
+    txn_sections: list[str] = []
+    for idx, txn in enumerate(transactions):
+        merchant = txn.get("merchant") or "(unknown)"
+        amount = txn.get("amount", 0.0)
+        date = txn.get("date", "unknown")
+        account_name = txn.get("account_name", "")
+        account_description = txn.get("account_description", "")
+        plaid_category = txn.get("plaid_category", "")
+
+        lines = [
+            f"### Transaction {idx}",
+            f"  Merchant            : {merchant}",
+            f"  Amount              : ${amount:.2f}",
+            f"  Date                : {date}",
+        ]
+        if account_name:
+            lines.append(f"  Account             : {account_name}")
+        if account_description:
+            lines.append(f"  Account description : {account_description}")
+        if plaid_category:
+            lines.append(f"  Plaid category      : {plaid_category}")
+
+        recent = _fetch_recent_same_merchant(conn, merchant) if merchant else []
+        if recent:
+            rec_lines = [
+                f"  - {r['date']} | {r['merchant']} | ${r['amount']:.2f}"
+                f" -> {r['ledger_name']} / {r['line_item_name']} (id={r['line_item_id']})"
+                for r in recent
+            ]
+            lines.append("  Recent reviewed entries for this merchant:")
+            lines.extend(rec_lines)
+        else:
+            lines.append("  Recent reviewed entries: (none)")
+
+        if txn.get("possible_transfer"):
+            lines.append(
+                "  WARNING: Transfer detector flagged this as a possible internal transfer."
+            )
+
+        txn_sections.append("\n".join(lines))
+
+    txns_text = "\n\n".join(txn_sections)
+
+    return (
+        f"## Classification Rules (priority ASC - first match wins)\n{rules_text}\n\n"
+        f"## Ledger Tree\n{ledger_tree}\n\n"
+        f"## Classification Hints\n{hints_text}\n\n"
+        f"## Transactions To Classify\n{txns_text}\n\n"
+        "Reply with the JSON array only."
+    )
+
+
+def _classify_batch_chunk(
+    conn: sqlite3.Connection,
+    transactions: list[dict],
+    rules: list[dict],
+    ledger_tree: str,
+    hints: list[str],
+) -> list[dict]:
+    """Classify one sub-batch with a single LLM call. Returns results in input order."""
+    from server.llm import chat
+
+    system_msg = (
+        "You are a personal finance classifier. You will classify a BATCH of "
+        "bank transactions in ONE shot using all available context.\n\n"
+        "Decision policy for EACH transaction:\n"
+        "1. Walk the priority-ordered classification rules from top to bottom. "
+        "The FIRST rule that clearly applies wins - stop scanning after the "
+        "first match. Return that rule's id (and its line_item_id when present).\n"
+        "2. If no rule clearly applies, infer the best line_item_id from the "
+        "ledger tree, hints, account context, and recent similar entries. "
+        "Set rule_id to null in that case.\n"
+        "3. classification_type must reflect the chosen line item / rule: "
+        "transfer | savings | spending | income | skip.\n"
+        "4. Set confidence < 0.7 when you are not confident.\n\n"
+        "Reply with ONLY a JSON array - no markdown, no text outside the array - "
+        "with one object per transaction, in the SAME order:\n"
+        '[{"transaction_index": 0, "rule_id": "<id or null>", '
+        '"line_item_id": "<exact id or null>", '
+        '"classification_type": "<transfer|savings|spending|income|skip>", '
+        '"confidence": <0.0-1.0>, "reasoning": "<one sentence>"}, ...]'
+    )
+
+    user_msg = _build_batch_user_msg(conn, transactions, rules, ledger_tree, hints)
+
+    messages = [
+        {"role": "system", "content": system_msg},
+        {"role": "user", "content": user_msg},
+    ]
+
+    raw = chat(messages, temperature=0.0)
+
+    try:
+        parsed = json.loads(raw)
+        if not isinstance(parsed, list):
+            raise ValueError(f"expected JSON array, got {type(parsed).__name__}")
+    except (json.JSONDecodeError, ValueError) as exc:
+        import logging
+        logging.getLogger(__name__).warning(
+            "classify_batch: LLM returned unparseable response: %s", exc
+        )
+        return [
+            {
+                "rule_id": None,
+                "line_item_id": None,
+                "classification_type": "spending",
+                "confidence": 0.0,
+                "uncertain": True,
+                "reasoning": f"batch LLM parse error: {exc}",
+            }
+            for _ in transactions
+        ]
+
+    valid_types = {"transfer", "savings", "spending", "income", "skip"}
+
+    index_map: dict[int, dict] = {}
+    for item in parsed:
+        if not isinstance(item, dict):
+            continue
+        idx = item.get("transaction_index")
+        if idx is None:
+            continue
+        try:
+            idx = int(idx)
+        except (TypeError, ValueError):
+            continue
+        if 0 <= idx < len(transactions):
+            index_map[idx] = item
+
+    results: list[dict] = []
+    for i in range(len(transactions)):
+        item = index_map.get(i)
+        if item is None:
+            results.append(
+                {
+                    "rule_id": None,
+                    "line_item_id": None,
+                    "classification_type": "spending",
+                    "confidence": 0.0,
+                    "uncertain": True,
+                    "reasoning": "batch LLM did not return result for this transaction",
+                }
+            )
+            continue
+
+        confidence = float(item.get("confidence", 0.0))
+        classification_type = item.get("classification_type", "spending")
+        if classification_type not in valid_types:
+            classification_type = "spending"
+
+        results.append(
+            {
+                "rule_id": item.get("rule_id"),
+                "line_item_id": item.get("line_item_id"),
+                "classification_type": classification_type,
+                "confidence": confidence,
+                "uncertain": confidence < UNCERTAIN_THRESHOLD,
+                "reasoning": str(item.get("reasoning", "")),
+            }
+        )
+
+    return results
+
+
+def classify_batch(
+    conn: sqlite3.Connection,
+    transactions: list[dict],
+    rules: list[dict],
+    ledger_tree: str | None = None,
+    hints: list[str] | None = None,
+) -> list[dict]:
+    """Classify a batch of transactions using as few LLM calls as possible.
+
+    Issue #207: replaces the old per-transaction loop with a single batched
+    LLM call.  Shared context (rules, ledger tree, hints) is built once and
+    embedded in every batch prompt.  Prompts exceeding ``MAX_BATCH_CHARS``
+    are split into sub-batches (greedy bin-packing; at least 1 txn per batch).
+
+    Args:
+        conn:         sqlite3 connection for fetching per-transaction context.
+        transactions: List of transaction dicts (merchant, amount, date, etc).
+        rules:        List of classification_rule dicts (priority ASC).
+        ledger_tree:  Pre-rendered ledger tree string.  If None, fetched.
+        hints:        List of hint strings.  If None, fetched.
+
+    Returns:
+        List of result dicts in the same order as *transactions*:
+        {rule_id, line_item_id, classification_type, confidence, uncertain, reasoning}
+    """
+    if not transactions:
+        return []
+
+    if ledger_tree is None:
+        ledger_tree = _build_ledger_tree(conn)
+    if hints is None:
+        hints = _fetch_hints(conn)
+
+    results: list[dict | None] = [None] * len(transactions)
+
+    batch_start = 0
+    while batch_start < len(transactions):
+        sub_txns: list[dict] = []
+        sub_indices: list[int] = []
+
+        for global_idx in range(batch_start, len(transactions)):
+            sub_txns.append(transactions[global_idx])
+            sub_indices.append(global_idx)
+
+            user_msg = _build_batch_user_msg(conn, sub_txns, rules, ledger_tree, hints)
+            if len(user_msg) > MAX_BATCH_CHARS and len(sub_txns) > 1:
+                sub_txns.pop()
+                sub_indices.pop()
+                break
+
+        if not sub_txns:
+            sub_txns = [transactions[batch_start]]
+            sub_indices = [batch_start]
+
+        chunk_results = _classify_batch_chunk(conn, sub_txns, rules, ledger_tree, hints)
+        for local_idx, global_idx in enumerate(sub_indices):
+            results[global_idx] = chunk_results[local_idx]
+
+        batch_start += len(sub_txns)
+
+    for i, r in enumerate(results):
+        if r is None:
+            results[i] = {
+                "rule_id": None,
+                "line_item_id": None,
+                "classification_type": "spending",
+                "confidence": 0.0,
+                "uncertain": True,
+                "reasoning": "batch classification failed for this transaction",
+            }
+
+    return results  # type: ignore[return-value]
+
+
+# ---------------------------------------------------------------------------
 # Unified single LLM classification call (issue #205)
 # ---------------------------------------------------------------------------
 
