@@ -153,6 +153,7 @@ def _classify_batch_chunk(
             raise ValueError(f"expected JSON array, got {type(parsed).__name__}")
     except (json.JSONDecodeError, ValueError) as exc:
         import logging
+
         logging.getLogger(__name__).warning(
             "classify_batch: LLM returned unparseable response: %s", exc
         )

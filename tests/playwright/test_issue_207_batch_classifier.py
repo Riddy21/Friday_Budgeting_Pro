@@ -238,9 +238,7 @@ def test_issue_207_batch_classifier_end_to_end(tmp_app_dir, monkeypatch):
                     "  JOIN transactions t ON t.id = te.transaction_id"
                 ).fetchall()
 
-                txn_count = conn.execute(
-                    "SELECT COUNT(*) FROM transactions"
-                ).fetchone()[0]
+                txn_count = conn.execute("SELECT COUNT(*) FROM transactions").fetchone()[0]
             finally:
                 conn.close()
 
@@ -293,13 +291,13 @@ def test_issue_207_batch_classifier_end_to_end(tmp_app_dir, monkeypatch):
             "Classification Hints",
             "Transactions To Classify",
         ):
-            assert section in prompt, (
-                f"batch prompt missing section {section!r}\n--- prompt ---\n{prompt[:800]}"
-            )
+            assert (
+                section in prompt
+            ), f"batch prompt missing section {section!r}\n--- prompt ---\n{prompt[:800]}"
         # Indexed transaction header format introduced in #207.
-        assert "### Transaction 0" in prompt, (
-            f"batch prompt missing '### Transaction 0' header\n--- prompt ---\n{prompt[:800]}"
-        )
+        assert (
+            "### Transaction 0" in prompt
+        ), f"batch prompt missing '### Transaction 0' header\n--- prompt ---\n{prompt[:800]}"
 
     # ------------------------------------------------------------------
     # 5. Boot the UI and capture a Playwright screenshot.
@@ -483,8 +481,7 @@ def test_classify_batch_sub_batching(tmp_app_dir, monkeypatch):
     # With MAX_BATCH_CHARS=100, each transaction should be in its own sub-batch.
     assert len(results) == 4
     assert chat_calls["count"] > 1, (
-        f"Expected multiple chat calls with tiny MAX_BATCH_CHARS=100, "
-        f"got {chat_calls['count']}"
+        f"Expected multiple chat calls with tiny MAX_BATCH_CHARS=100, " f"got {chat_calls['count']}"
     )
 
 
@@ -497,9 +494,7 @@ def test_classify_batch_malformed_llm_response(tmp_app_dir):
 
     conn = db.get_db(paths.DB_PATH)
     try:
-        transactions = [
-            {"merchant": "Bad Merchant", "amount": 9.99, "date": "2024-01-01"}
-        ]
+        transactions = [{"merchant": "Bad Merchant", "amount": 9.99, "date": "2024-01-01"}]
 
         from unittest.mock import patch
 
