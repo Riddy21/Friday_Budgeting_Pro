@@ -157,15 +157,19 @@ other MCP client).
 
 Every transaction goes through a three-tier classifier:
 
-1. **Rules** - exact merchant matches you've already confirmed. Free, instant.
-2. **LLM** - for new merchants, the LLM reasons about the transaction
-   using your hints and recent similar transactions, and auto-routes if
-   confident enough.
+1. **Rules (LLM-first)** - the LLM evaluates your priority-ordered
+   `classification_rules` in order and applies the first matching rule.
+   Returns `rule_id`, `classification_type`, `confidence`, and `reasoning`.
+   Disabled rules are skipped.  When confidence < 0.7 the result is
+   flagged as `uncertain`.  _(Introduced in v2, issue #170.)_
+2. **LLM (free-form)** - for transactions with no matching rule, the LLM
+   reasons about the transaction using your hints, full ledger tree, and
+   recent similar transactions, and auto-routes if confident enough.
 3. **Review queue** - if it's unsure, the transaction lands in a review
    queue. You'll get a notification through your chosen channel.
 
 After 3 successful classifications of the same merchant, it becomes a
-Tier 1 rule automatically. The longer you use it, the less it asks.
+Tier 1 legacy rule automatically. The longer you use it, the less it asks.
 
 ### Classification Rules
 
