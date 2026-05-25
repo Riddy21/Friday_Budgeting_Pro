@@ -116,7 +116,7 @@ Invoke for any personal finance request:
 ### Transactions
 - `sync` — pull latest transactions from all connected banks
 - `list(filters?)` — query transactions (supports date, ledger, category, account filters)
-- `get_needs_review` — transactions awaiting classification or flagged as uncertain
+- `get_needs_review` — transactions that need manual review: uncertain classifications (confidence < 0.7) or unrouted transactions with no line item assigned
 - `route(transaction_id, allocations)` — manually assign a transaction to a ledger/line item
 - `add_hint(text)` — add a natural-language classification hint for the LLM
 - `list_hints` — list all classification hints

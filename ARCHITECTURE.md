@@ -296,14 +296,28 @@ That's the whole API. ~15 tools.
 ```
 New transaction
    │
+   ├─▶ classify_pending_transactions(user_id)  (#165)
+   │     Runs after sync completes (or can be called standalone).
+   │     Finds all non-pending transactions with no transaction_entries row.
+   │     For each:
+   │       1. Build tx dict (merchant, amount, date, account, plaid_category)
+   │       2. get_transfer_hint() → possible_internal_transfer context
+   │       3. classify_with_rules(tx, rules, context)  (see Tier 1 v2 below)
+   │       4. classification_type='skip' → skip entry (no line_item)
+   │       5. line_item_id set → write transaction_entries row directly
+   │       6. line_item_id=None + account.default_ledger_id set → fallback
+   │            income → first income line_item in that ledger
+   │            other  → first expense line_item in that ledger
+   │       7. No fallback found → uncertain entry (surfaces in get_needs_review)
+   │     Returns { classified: N, skipped: M, uncertain: K }
+   │
    ├─▶ Tier 1 v2: classify_with_rules()  (LLM-first, #170)
    │     Passes the full priority-ordered classification_rules list to the
    │     LLM.  First matching rule wins.  Returns:
    │       { rule_id, line_item_id, classification_type, confidence,
    │         uncertain, reasoning }
-   │     Optional context: possible_internal_transfer hint (#171),
+   │     Optional context: possible_internal_transfer hint,
    │     recent_corrections.
-   │     Results available for #165 to write to transaction_entries.
    │
    ├─▶ Tier 1 legacy: apply_rules() (substring matching, routing_rules)
    │     Still runs for backward-compat; new writes use classify_with_rules.
@@ -322,12 +336,23 @@ New transaction
 After 3 successful LLM classifications of the same merchant, auto-promote
 to a legacy Tier-1 routing_rule. System gets cheaper and faster over time.
 
+### classify_pending_transactions — key design notes (#165)
+- Called automatically at the end of `sync()`. Errors are logged but never
+  block the sync response.
+- Idempotent: already-classified transactions (any `transaction_entries` row)
+  are skipped on every call.
+- Pending transactions (`pending=1`) are never classified.
+- `classification_type='skip'` writes a `skip` entry so the transaction
+  is not re-evaluated on the next run.
+- When `line_item_id=None` from the LLM and the account has a
+  `default_ledger_id`, a fallback line item is selected from that ledger.
+- Transactions that cannot be routed get an unrouted entry with
+  `uncertain=1` and surface in `get_needs_review()`.
+
 ### classify_with_rules — key design notes
 - Disabled rules (`enabled=0`) are excluded from the LLM prompt.
 - `uncertain=True` when `confidence < 0.7`.
-- Does NOT write to `transaction_entries` — that is #165's responsibility.
-- The sync loop (`server/main.py`) calls it as a read-only integration point
-  and logs the result at DEBUG level for now.
+- Writes to `transaction_entries` via `classify_pending_transactions`.
 
 ### Transfer Detection
 

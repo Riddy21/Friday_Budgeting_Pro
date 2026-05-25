@@ -30,6 +30,7 @@ from server.db import get_db
 from server.db import transaction as db_txn
 from server.providers.plaid import PlaidProvider
 from server.sync_lock import LockBusy, sync_lock
+from server.transfer_detect import get_transfer_hint
 from ui.auth import (
     add_recovery_token,
     get_active_user_id,
@@ -1213,6 +1214,217 @@ def create_investment_ledger(name: str) -> dict:
 # ---------------------------------------------------------------------------
 
 
+def classify_pending_transactions(user_id: str) -> dict:
+    """Classify all unclassified transactions for *user_id* and write entries.
+
+    Finds transactions owned by *user_id* that have no row in
+    ``transaction_entries``, then for each one:
+
+    1. Builds a rich transaction dict (merchant, amount, date, account
+       name/description, plaid_category).
+    2. Calls :func:`get_transfer_hint` to check for possible internal
+       transfers and passes the result as context to the LLM.
+    3. Calls :func:`classify_with_rules` with the active
+       ``classification_rules`` and the transfer hint.
+    4. If ``classification_type == 'skip'`` → no entry is written; counted
+       as skipped.
+    5. If ``line_item_id`` is set → inserts a ``transaction_entries`` row
+       linking the transaction to that line item.
+    6. If ``line_item_id`` is None but the owning account has a
+       ``default_ledger_id`` → picks a fallback line item from that ledger
+       (first income item for 'income', first expense item for all others).
+    7. If no fallback is found → transaction is left unrouted and counted
+       as 'uncertain'.
+
+    Already-classified transactions (any existing row in
+    ``transaction_entries``) are always skipped → idempotent.
+
+    Args:
+        user_id: The user whose transactions to classify.
+
+    Returns:
+        ``{"classified": N, "skipped": M, "uncertain": K}``
+    """
+    classified = 0
+    skipped = 0
+    uncertain = 0
+
+    if not user_id:
+        return {"classified": classified, "skipped": skipped, "uncertain": uncertain}
+
+    conn = get_db(server.paths.DB_PATH)
+    try:
+        # Fetch rules once — shared across all transactions in this pass.
+        rules_result = list_rules()
+        rules = rules_result.get("rules", [])
+
+        # Fetch all unclassified, non-pending transactions for this user.
+        unclassified = conn.execute(
+            """
+            SELECT t.id, t.merchant, t.amount, t.date,
+                   t.plaid_category, t.bank_account_id
+            FROM transactions t
+            JOIN bank_accounts ba ON ba.id = t.bank_account_id
+            JOIN bank_connections bc ON bc.id = ba.connection_id
+            WHERE bc.user_id = ?
+              AND t.pending = 0
+              AND NOT EXISTS (
+                SELECT 1 FROM transaction_entries te
+                WHERE te.transaction_id = t.id
+              )
+            ORDER BY t.date ASC
+            """,
+            (user_id,),
+        ).fetchall()
+
+        for row in unclassified:
+            tx_id = row["id"]
+            merchant = row["merchant"] or ""
+            amount = row["amount"]
+            date = row["date"]
+            plaid_category = row["plaid_category"] or ""
+            bank_account_id = row["bank_account_id"]
+
+            # Enrich with account context.
+            ba_row = conn.execute(
+                "SELECT name, description, default_ledger_id FROM bank_accounts WHERE id = ?",
+                (bank_account_id,),
+            ).fetchone()
+            account_name = ba_row["name"] if ba_row else None
+            account_description = ba_row["description"] if ba_row else None
+            default_ledger_id = ba_row["default_ledger_id"] if ba_row else None
+
+            tx_dict = {
+                "merchant": merchant,
+                "amount": amount,
+                "date": date,
+                "account_name": account_name,
+                "account_description": account_description,
+                "plaid_category": plaid_category,
+            }
+
+            # Build transfer hint context.
+            try:
+                hint = get_transfer_hint(tx_id, str(server.paths.DB_PATH))
+            except Exception:
+                hint = None
+
+            context: dict | None = None
+            if hint and hint.get("is_possible_transfer"):
+                context = {"possible_internal_transfer": True}
+
+            # Run classifier.
+            try:
+                result = classify_with_rules(tx_dict, rules, context)
+            except Exception as exc:
+                _logger.warning(
+                    "classify_pending_transactions: classify_with_rules failed for " "tx_id=%s: %s",
+                    tx_id,
+                    exc,
+                )
+                uncertain += 1
+                continue
+
+            classification_type = result.get("classification_type", "spending")
+            line_item_id = result.get("line_item_id")
+            confidence = float(result.get("confidence", 0.0))
+            is_uncertain = bool(result.get("uncertain", False))
+            reasoning = result.get("reasoning", "")
+
+            # skip → don't write entry.
+            if classification_type == "skip":
+                # Still write a skip entry so we don't re-process.
+                entry_id = str(uuid.uuid4())
+                conn.execute(
+                    "INSERT OR IGNORE INTO transaction_entries "
+                    "(id, transaction_id, ledger_id, line_item_id, amount, "
+                    " entry_type, source, confidence, uncertain, reasoning, reviewed) "
+                    "VALUES (?, ?, NULL, NULL, ?, 'skip', 'llm', ?, ?, ?, 0)",
+                    (entry_id, tx_id, amount, confidence, 1 if is_uncertain else 0, reasoning),
+                )
+                conn.commit()
+                skipped += 1
+                continue
+
+            # Resolve ledger_id from line_item if we have one.
+            ledger_id = None
+            if line_item_id:
+                li_row = conn.execute(
+                    "SELECT ledger_id FROM line_items WHERE id = ?",
+                    (line_item_id,),
+                ).fetchone()
+                if li_row:
+                    ledger_id = li_row["ledger_id"]
+                else:
+                    # line_item_id is stale/invalid; clear it.
+                    line_item_id = None
+
+            # Fallback: use default_ledger_id when no line_item routed.
+            if line_item_id is None and default_ledger_id:
+                if classification_type == "income":
+                    item_type_filter = "income"
+                else:
+                    item_type_filter = "expense"
+                fb_row = conn.execute(
+                    "SELECT id FROM line_items "
+                    "WHERE ledger_id = ? AND item_type = ? "
+                    "ORDER BY rowid ASC LIMIT 1",
+                    (default_ledger_id, item_type_filter),
+                ).fetchone()
+                if fb_row:
+                    line_item_id = fb_row["id"]
+                    ledger_id = default_ledger_id
+
+            if line_item_id is None:
+                # Could not route — mark uncertain and leave unrouted entry so
+                # get_needs_review() can surface it.
+                entry_id = str(uuid.uuid4())
+                conn.execute(
+                    "INSERT OR IGNORE INTO transaction_entries "
+                    "(id, transaction_id, ledger_id, line_item_id, amount, "
+                    " entry_type, source, confidence, uncertain, reasoning, reviewed) "
+                    "VALUES (?, ?, NULL, NULL, ?, ?, 'llm', ?, 1, ?, 0)",
+                    (
+                        entry_id,
+                        tx_id,
+                        amount,
+                        classification_type,
+                        confidence,
+                        reasoning,
+                    ),
+                )
+                conn.commit()
+                uncertain += 1
+                continue
+
+            # Write the classified entry.
+            entry_id = str(uuid.uuid4())
+            conn.execute(
+                "INSERT OR IGNORE INTO transaction_entries "
+                "(id, transaction_id, ledger_id, line_item_id, amount, "
+                " entry_type, source, confidence, uncertain, reasoning, reviewed) "
+                "VALUES (?, ?, ?, ?, ?, ?, 'llm', ?, ?, ?, 0)",
+                (
+                    entry_id,
+                    tx_id,
+                    ledger_id,
+                    line_item_id,
+                    amount,
+                    classification_type,
+                    confidence,
+                    1 if is_uncertain else 0,
+                    reasoning,
+                ),
+            )
+            conn.commit()
+            classified += 1
+
+    finally:
+        conn.close()
+
+    return {"classified": classified, "skipped": skipped, "uncertain": uncertain}
+
+
 @mcp.tool
 def sync() -> dict:
     """Pull new transactions from Plaid, classify them, and return a summary."""
@@ -1506,6 +1718,17 @@ def sync() -> dict:
                     total_removed += conn_removed
                     total_classified += conn_classified
 
+                # After all connections are synced, run auto-classification on
+                # any newly inserted (unclassified) transactions.  Errors are
+                # caught so a classification failure never blocks sync.
+                auto_classify_result = {"classified": 0, "skipped": 0, "uncertain": 0}
+                try:
+                    uid = get_active_user_id(server.paths.DB_PATH)
+                    if uid:
+                        auto_classify_result = classify_pending_transactions(uid)
+                except Exception as _exc:
+                    _logger.warning("Auto-classification after sync failed: %s", _exc)
+
             finally:
                 db_conn.close()
 
@@ -1519,6 +1742,9 @@ def sync() -> dict:
         "modified": total_modified,
         "removed": total_removed,
         "classified_by_rule": total_classified,
+        "auto_classified": auto_classify_result.get("classified", 0),
+        "auto_skipped": auto_classify_result.get("skipped", 0),
+        "auto_uncertain": auto_classify_result.get("uncertain", 0),
         "health_check": health_check_result,
     }
 
@@ -1591,8 +1817,59 @@ def list(filters: Optional[dict] = None) -> dict:
 
 @mcp.tool
 def get_needs_review() -> dict:
-    """Return transactions that require manual classification review."""
-    return list(filters={"reviewed": False})
+    """Return transactions that need manual classification review.
+
+    Returns transactions where the classifier was uncertain
+    (``uncertain=1`` in ``transaction_entries``) OR where no
+    ``line_item_id`` was assigned (unrouted), scoped to the active user.
+
+    Returns
+    -------
+    dict
+        ``{"transactions": [{id, merchant, amount, date, account_name,
+        reasoning}, ...]}``
+    """
+    uid = get_active_user_id(server.paths.DB_PATH)
+    if not uid:
+        return {"transactions": []}
+
+    conn = get_db(server.paths.DB_PATH)
+    try:
+        rows = conn.execute(
+            """
+            SELECT t.id, t.merchant, t.amount, t.date,
+                   ba.name AS account_name,
+                   te.reasoning
+            FROM transaction_entries te
+            JOIN transactions t ON t.id = te.transaction_id
+            JOIN bank_accounts ba ON ba.id = t.bank_account_id
+            JOIN bank_connections bc ON bc.id = ba.connection_id
+            WHERE bc.user_id = ?
+              AND te.reviewed = 0
+              AND (
+                te.uncertain = 1
+                OR te.line_item_id IS NULL
+              )
+              AND te.entry_type != 'skip'
+            ORDER BY t.date DESC
+            """,
+            (uid,),
+        ).fetchall()
+        return {
+            "transactions": [
+                {
+                    "id": r["id"],
+                    "merchant": r["merchant"],
+                    "amount": r["amount"],
+                    "date": r["date"],
+                    "account_name": r["account_name"],
+                    "reasoning": r["reasoning"] or "",
+                }
+                for r in rows
+            ]
+        }
+    finally:
+        conn.close()
 
 
 @mcp.tool
