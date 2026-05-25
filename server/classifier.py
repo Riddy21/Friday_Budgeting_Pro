@@ -146,9 +146,7 @@ def classify_transaction(
     if enabled_rules:
         rules_lines: list[str] = []
         for r in enabled_rules:
-            li_note = (
-                f" → line_item_id={r['line_item_id']}" if r.get("line_item_id") else ""
-            )
+            li_note = f" → line_item_id={r['line_item_id']}" if r.get("line_item_id") else ""
             rules_lines.append(
                 f"  [{r['priority']:>3}] id={r['id']}  type={r['rule_type']}"
                 f"  name=\"{r['name']}\""
@@ -226,8 +224,7 @@ def classify_transaction(
                 for c in corrections
             ]
             context_parts.append(
-                "  Recent manual corrections for this merchant:\n"
-                + "\n".join(corr_lines)
+                "  Recent manual corrections for this merchant:\n" + "\n".join(corr_lines)
             )
     context_text = "\n".join(context_parts) if context_parts else "  (none)"
 
@@ -286,9 +283,7 @@ def classify_transaction(
     required_keys = {"classification_type", "confidence", "reasoning"}
     missing = required_keys - parsed.keys()
     if missing:
-        raise ValueError(
-            f"LLM JSON missing required keys {sorted(missing)!r}: {parsed!r}"
-        )
+        raise ValueError(f"LLM JSON missing required keys {sorted(missing)!r}: {parsed!r}")
 
     confidence = float(parsed.get("confidence", 0.0))
 

@@ -50,9 +50,7 @@ os.environ.setdefault("PLAID_CLIENT_ID", "6a108c2ccfbb2f000d022c26")
 os.environ.setdefault("PLAID_SECRET", "7ed0d08cc23ca47f6b550504f314ab")
 os.environ.setdefault("PLAID_ENV", "sandbox")
 
-PLAID_CREDS = bool(os.environ.get("PLAID_CLIENT_ID")) and bool(
-    os.environ.get("PLAID_SECRET")
-)
+PLAID_CREDS = bool(os.environ.get("PLAID_CLIENT_ID")) and bool(os.environ.get("PLAID_SECRET"))
 
 try:  # pragma: no cover - import guard
     from playwright.sync_api import sync_playwright  # noqa: F401
@@ -156,9 +154,9 @@ def test_issue_205_unified_classifier_end_to_end(tmp_app_dir, monkeypatch):
 
     li_expense = next((r["id"] for r in rows if r["item_type"] == "expense"), None)
     li_income = next((r["id"] for r in rows if r["item_type"] == "income"), None)
-    assert li_expense and li_income, (
-        f"expected expense+income line items after apply_initial_setup; got {rows!r}"
-    )
+    assert (
+        li_expense and li_income
+    ), f"expected expense+income line items after apply_initial_setup; got {rows!r}"
 
     # ------------------------------------------------------------------
     # 3. Mint a Plaid sandbox public token and exchange it.
@@ -265,9 +263,9 @@ def test_issue_205_unified_classifier_end_to_end(tmp_app_dir, monkeypatch):
             "Recent Reviewed Entries",
             "Transaction To Classify",
         ):
-            assert section in prompt, (
-                f"unified prompt missing section {section!r}\n--- prompt ---\n{prompt}"
-            )
+            assert (
+                section in prompt
+            ), f"unified prompt missing section {section!r}\n--- prompt ---\n{prompt}"
 
     # ------------------------------------------------------------------
     # 6. Boot the UI on a free port and capture a Playwright screenshot.
@@ -314,9 +312,9 @@ def test_issue_205_unified_classifier_end_to_end(tmp_app_dir, monkeypatch):
 
     print(f"\nScreenshot: {screenshot_path}\nTitle: {title!r}\nBody chars: {len(body_text)}\n")
 
-    assert screenshot_path.exists() and screenshot_path.stat().st_size > 1000, (
-        f"screenshot missing or too small: {screenshot_path}"
-    )
+    assert (
+        screenshot_path.exists() and screenshot_path.stat().st_size > 1000
+    ), f"screenshot missing or too small: {screenshot_path}"
 
     # Shut server down cleanly.
     server.should_exit = True

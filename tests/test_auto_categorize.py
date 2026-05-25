@@ -384,9 +384,7 @@ class TestClassifyPendingTransactions:
 
         # New unified signature (issue #205):
         # classify_transaction(conn, tx_dict, rules, ledger_tree=..., hints=..., context=...)
-        def mock_classify(
-            conn_arg, tx_dict, rules, ledger_tree=None, hints=None, context=None
-        ):
+        def mock_classify(conn_arg, tx_dict, rules, ledger_tree=None, hints=None, context=None):
             captured_contexts.append(context)
 
             return {

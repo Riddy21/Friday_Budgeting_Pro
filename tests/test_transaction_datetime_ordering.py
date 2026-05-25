@@ -92,6 +92,7 @@ def _plaid_factory(sync_fn):
     class _MockPlaidProvider:
         def __init__(self, env=None):
             import os as _os
+
             self.env = (env or _os.environ.get("PLAID_ENV", "sandbox")).lower()
 
         def sync_transactions(self, access_token, cursor=None):
@@ -174,20 +175,20 @@ def test_transactions_ordered_by_datetime_desc(env, monkeypatch):
 
     conn = get_db(env["db"])
     # Replicate the exact ORDER BY clause used in ui/server.py
-    rows = conn.execute(
-        """
+    rows = conn.execute("""
         SELECT t.merchant, t.authorized_datetime
           FROM transactions t
          ORDER BY COALESCE(t.authorized_datetime, t.date) DESC,
                   t.rowid DESC
-        """
-    ).fetchall()
+        """).fetchall()
     conn.close()
 
     merchants = [r["merchant"] for r in rows]
-    assert merchants == ["LateNight Coffee", "Lunch Spot", "Morning Bagel"], (
-        f"Unexpected ordering: {merchants}"
-    )
+    assert merchants == [
+        "LateNight Coffee",
+        "Lunch Spot",
+        "Morning Bagel",
+    ], f"Unexpected ordering: {merchants}"
 
 
 def test_transactions_fallback_to_date_when_no_datetime(env, monkeypatch):
@@ -210,20 +211,18 @@ def test_transactions_fallback_to_date_when_no_datetime(env, monkeypatch):
     )
     conn.commit()
 
-    rows = conn.execute(
-        """
+    rows = conn.execute("""
         SELECT t.merchant, t.authorized_datetime
           FROM transactions t
          ORDER BY COALESCE(t.authorized_datetime, t.date) DESC,
                   t.rowid DESC
-        """
-    ).fetchall()
+        """).fetchall()
     conn.close()
 
     merchants = [r["merchant"] for r in rows]
     # Lunch Spot (13:30) should still come before Morning Bagel (08:00)
     lunch_idx = merchants.index("Lunch Spot")
     morning_idx = merchants.index("Morning Bagel")
-    assert lunch_idx < morning_idx, (
-        f"Lunch Spot should appear before Morning Bagel; got: {merchants}"
-    )
+    assert (
+        lunch_idx < morning_idx
+    ), f"Lunch Spot should appear before Morning Bagel; got: {merchants}"
