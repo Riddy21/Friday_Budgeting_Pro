@@ -178,19 +178,22 @@ After every sync, `classify_pending_transactions` automatically routes all
 newly imported transactions into your ledger line items.  No manual step
 needed — just sync and your budget is up to date.
 
-Every transaction goes through a three-tier classifier:
+Every transaction goes through **one unified LLM call** that combines
+rules-first evaluation and free-form reasoning into a single prompt
+_(issue #205)_:
 
-1. **Rules (LLM-first)** - the LLM evaluates your priority-ordered
-   `classification_rules` in order and applies the first matching rule.
-   Returns `rule_id`, `classification_type`, `confidence`, and `reasoning`.
-   Disabled rules are skipped.  When confidence < 0.7 the result is
-   flagged as `uncertain`.  _(Introduced in v2, issue #170.)_
-2. **LLM (free-form)** - for transactions with no matching rule, the LLM
-   reasons about the transaction using your hints, full ledger tree, and
-   recent similar transactions, and auto-routes if confident enough.
-3. **Review queue** - if it's unsure, the transaction lands in a review
-   queue (`get_needs_review`). You'll get a notification through your
-   chosen channel.
+1. **Unified classification** - the LLM sees your priority-ordered
+   `classification_rules`, your full ledger tree, your hints, recent
+   reviewed entries for the same merchant, the account name +
+   description, and any transfer-detection hint — all in one shot.
+   It tries the first matching rule; if none clearly apply, it picks the
+   best line item from the ledger tree using the other context.
+   Returns `rule_id`, `line_item_id`, `classification_type`, `confidence`,
+   and `reasoning`.  When confidence < 0.7 the result is flagged as
+   `uncertain`.
+2. **Review queue** - if it's unsure or the LLM couldn't route it, the
+   transaction lands in a review queue (`get_needs_review`).  You'll get
+   a notification through your chosen channel.
 
 **Transfer detection**: before classification, each transaction is checked
 against internal transfer pairs (same amount, different accounts, within
