@@ -299,3 +299,12 @@ th {
 .ledger-block {
   margin-top: 16px;
 }
+
+/* ── Classification Rules table (#172) ───────────────────────────────── */
+
+.rule-disabled td {
+  color: var(--muted);
+  opacity: 0.65;
+}
+
+.badge-default { background: #eef2ff; color: #3730a3; }
