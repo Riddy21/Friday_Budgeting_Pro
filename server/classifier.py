@@ -22,6 +22,25 @@ from __future__ import annotations
 import json
 import sqlite3
 
+
+def _strip_markdown_json(raw: str) -> str:
+    """Strip markdown code fences from an LLM response before JSON parsing.
+
+    The LLM sometimes wraps JSON in ```json ... ``` or ``` ... ``` fences
+    even when told not to.  Strip them so json.loads always gets clean input.
+    """
+    s = raw.strip()
+    if s.startswith("```"):
+        # Drop the opening fence line
+        lines = s.splitlines()
+        lines = lines[1:]  # remove ```json or ```
+        # Drop the closing fence if present
+        if lines and lines[-1].strip() == "```":
+            lines = lines[:-1]
+        s = "\n".join(lines).strip()
+    return s
+
+
 # ---------------------------------------------------------------------------
 # Unified single LLM classification call (issue #205)
 # ---------------------------------------------------------------------------
@@ -475,7 +494,7 @@ def classify_with_rules(
     raw = chat(messages, temperature=0.0)
 
     try:
-        parsed = json.loads(raw)
+        parsed = json.loads(_strip_markdown_json(raw))
     except json.JSONDecodeError as exc:
         raise ValueError(f"LLM returned non-JSON response: {raw!r}") from exc
 
@@ -730,7 +749,7 @@ def classify_with_llm(
     raw = chat(messages, temperature=0.0)
 
     try:
-        parsed = json.loads(raw)
+        parsed = json.loads(_strip_markdown_json(raw))
     except json.JSONDecodeError as exc:
         raise ValueError(f"LLM returned non-JSON response: {raw!r}") from exc
 

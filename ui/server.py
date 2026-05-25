@@ -976,6 +976,7 @@ def account_transactions_get(request: Request, account_id: str, limit: int = 50)
         rows = conn.execute(
             """
             SELECT t.id, t.date, t.authorized_datetime, t.merchant, t.amount,
+                   t.pending,
                    COALESCE(t.currency, 'CAD') AS currency,
                    te.entry_type, te.source, te.uncertain,
                    li.name AS line_item_name,
@@ -986,6 +987,7 @@ def account_transactions_get(request: Request, account_id: str, limit: int = 50)
               LEFT JOIN ledgers    l  ON l.id  = te.ledger_id
              WHERE t.bank_account_id = ?
              ORDER BY
+               t.pending DESC,
                COALESCE(t.authorized_datetime, t.date) DESC,
                t.rowid DESC
              LIMIT ?

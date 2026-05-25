@@ -71,7 +71,7 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 _DEFAULT_OPENCLAW_URL = "http://127.0.0.1:7531/v1/completions"
-_OPENCLAW_TIMEOUT = 3  # seconds
+_OPENCLAW_TIMEOUT = 60  # seconds — agent turns can take time
 
 
 def _openclaw_url() -> str:
@@ -146,10 +146,15 @@ def _chat_openclaw(messages: list[dict], temperature: float) -> str:
         }
     ).encode()
 
+    headers = {"Content-Type": "application/json"}
+    _token = os.environ.get("OPENCLAW_GATEWAY_TOKEN", "")
+    if _token:
+        headers["Authorization"] = f"Bearer {_token}"
+
     req = urllib.request.Request(
         url,
         data=payload,
-        headers={"Content-Type": "application/json"},
+        headers=headers,
         method="POST",
     )
 

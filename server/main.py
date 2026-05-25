@@ -1228,7 +1228,7 @@ def create_investment_ledger(name: str) -> dict:
 # ---------------------------------------------------------------------------
 
 
-def classify_pending_transactions(user_id: str) -> dict:
+def classify_pending_transactions(user_id: str, limit: int | None = None) -> dict:
     """Classify all unclassified transactions for *user_id* and write entries.
 
     Finds transactions owned by *user_id* that have no row in
@@ -1292,10 +1292,12 @@ def classify_pending_transactions(user_id: str) -> dict:
                 SELECT 1 FROM transaction_entries te
                 WHERE te.transaction_id = t.id
               )
-            ORDER BY t.date ASC
+            ORDER BY t.date DESC
             """,
             (user_id,),
         ).fetchall()
+        if limit:
+            unclassified = unclassified[:int(limit)]
 
         for row in unclassified:
             tx_id = row["id"]
@@ -1388,21 +1390,42 @@ def classify_pending_transactions(user_id: str) -> dict:
                     # line_item_id is stale/invalid; clear it.
                     line_item_id = None
 
-            # Fallback: use default_ledger_id when no line_item routed.
-            if line_item_id is None and default_ledger_id:
-                if classification_type == "income":
-                    item_type_filter = "income"
-                else:
-                    item_type_filter = "expense"
-                fb_row = conn.execute(
-                    "SELECT id FROM line_items "
-                    "WHERE ledger_id = ? AND item_type = ? "
-                    "ORDER BY rowid ASC LIMIT 1",
-                    (default_ledger_id, item_type_filter),
-                ).fetchone()
-                if fb_row:
-                    line_item_id = fb_row["id"]
-                    ledger_id = default_ledger_id
+            # Fallback: LLM best-guess using full ledger tree.
+            # When no rule matched (line_item_id is None), ask the LLM to pick
+            # the best line item from the full ledger tree rather than blindly
+            # grabbing the first item in the ledger.
+            if line_item_id is None:
+                try:
+                    from server.classifier import classify_with_llm
+                    llm_entry = classify_with_llm(conn, {
+                        "id": tx_id,
+                        "merchant": merchant,
+                        "amount": amount,
+                        "date": date,
+                        "account_name": account_name,
+                        "account_description": account_description,
+                        "plaid_category": plaid_category,
+                        "bank_account_id": bank_account_id,
+                    })
+                    line_item_id = llm_entry.get("line_item_id")
+                    ledger_id = llm_entry.get("ledger_id")
+                    confidence = float(llm_entry.get("confidence", confidence))
+                    is_uncertain = confidence < 0.7
+                    # Derive classification_type from the line item's item_type
+                    # so income line items get entry_type='income', not 'spending'
+                    li_type_row = conn.execute(
+                        "SELECT item_type FROM line_items WHERE id = ?",
+                        (line_item_id,),
+                    ).fetchone()
+                    if li_type_row and li_type_row["item_type"] == "income":
+                        classification_type = "income"
+                    elif classification_type not in ("transfer", "savings", "skip"):
+                        classification_type = "spending"
+                except Exception as _llm_exc:
+                    _logger.warning(
+                        "classify_pending_transactions: LLM best-guess fallback "
+                        "failed for tx_id=%s: %s", tx_id, _llm_exc
+                    )
 
             if line_item_id is None:
                 # Could not route — mark uncertain and leave unrouted entry so
@@ -1427,6 +1450,11 @@ def classify_pending_transactions(user_id: str) -> dict:
                 continue
 
             # Write the classified entry.
+            # Normalise the stored amount to always be positive:
+            # - Plaid income (deposits) = negative raw amount → store as positive
+            # - Plaid expenses (debits) = positive raw amount → store as-is
+            # This ensures ledger totals are always additive and display correctly.
+            stored_amount = abs(amount) if classification_type == "income" else amount
             entry_id = str(uuid.uuid4())
             conn.execute(
                 "INSERT OR IGNORE INTO transaction_entries "
@@ -1438,7 +1466,7 @@ def classify_pending_transactions(user_id: str) -> dict:
                     tx_id,
                     ledger_id,
                     line_item_id,
-                    amount,
+                    stored_amount,
                     classification_type,
                     confidence,
                     1 if is_uncertain else 0,
