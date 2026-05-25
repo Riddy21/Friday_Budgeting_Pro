@@ -844,19 +844,70 @@ async def accounts_name_patch(request: Request, account_id: str):
     return JSONResponse({"status": "ok", "account_id": account_id, "name": name})
 
 
-# ── /settings (stub — #159 will implement) ────────────────────────────────────
+# ── /settings (#159) ─────────────────────────────────────────────────────────
+
+_VALID_CURRENCIES = ["CAD", "USD", "EUR", "GBP"]
 
 
 @app.get("/settings", response_class=HTMLResponse)
 def settings_get(request: Request):
-    """Settings stub page.  Requires authentication.  Full implementation: #159."""
+    """Settings page.  Requires authentication."""
     if not _is_authenticated(request):
         return _redirect("/login")
+    uid = _current_user_id(request)
+    conn = get_db(_db_path())
+    try:
+        row = conn.execute("SELECT home_currency FROM users WHERE id = ?", (uid,)).fetchone()
+        home_currency = row["home_currency"] if row and row["home_currency"] else "CAD"
+    finally:
+        conn.close()
+    saved = request.query_params.get("saved") == "1"
     return templates.TemplateResponse(
         request,
         "settings.html",
-        {"current_page": "settings"},
+        {
+            "current_page": "settings",
+            "home_currency": home_currency,
+            "currencies": _VALID_CURRENCIES,
+            "saved": saved,
+        },
     )
+
+
+@app.post("/settings", response_class=HTMLResponse)
+async def settings_post(request: Request):
+    """Save settings.  Requires authentication."""
+    if not _is_authenticated(request):
+        return _redirect("/login")
+    uid = _current_user_id(request)
+    form = await request.form()
+    home_currency = (form.get("home_currency") or "").strip().upper()
+    if home_currency not in _VALID_CURRENCIES:
+        # Invalid value — reload with error, keep existing value
+        conn = get_db(_db_path())
+        try:
+            row = conn.execute("SELECT home_currency FROM users WHERE id = ?", (uid,)).fetchone()
+            current = row["home_currency"] if row and row["home_currency"] else "CAD"
+        finally:
+            conn.close()
+        return templates.TemplateResponse(
+            request,
+            "settings.html",
+            {
+                "current_page": "settings",
+                "home_currency": current,
+                "currencies": _VALID_CURRENCIES,
+                "saved": False,
+                "error": f"Invalid currency: {home_currency!r}. Choose one of {_VALID_CURRENCIES}.",
+            },
+        )
+    conn = get_db(_db_path())
+    try:
+        conn.execute("UPDATE users SET home_currency = ? WHERE id = ?", (home_currency, uid))
+        conn.commit()
+    finally:
+        conn.close()
+    return _redirect("/settings?saved=1")
 
 
 # ── /profile ─────────────────────────────────────────────────────────────────
