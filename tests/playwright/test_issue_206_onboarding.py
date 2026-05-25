@@ -71,10 +71,10 @@ pytestmark = [
 @pytest.fixture()
 def tmp_app(tmp_path, monkeypatch):
     """Patch server.paths to a temp DB without reloading modules."""
-    import server.paths as _paths
     import server.db as _db
-    import ui.auth as _auth
     import server.main as _main
+    import server.paths as _paths
+    import ui.auth as _auth
 
     app_dir = tmp_path / "fbp"
     app_dir.mkdir(mode=0o700)

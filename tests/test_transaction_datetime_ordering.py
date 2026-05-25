@@ -14,9 +14,9 @@ import uuid
 
 import pytest
 
+import server.main as _main
 from server.db import get_db, init_db
 from server.main import sync  # noqa: F401 — imported for patching side-effects
-import server.main as _main
 from ui.auth import create_user
 
 # ---------------------------------------------------------------------------

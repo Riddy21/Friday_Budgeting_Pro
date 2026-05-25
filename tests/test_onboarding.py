@@ -23,10 +23,10 @@ def env(tmp_path, monkeypatch):
     automatically reverted in fixture teardown, keeping cross-test
     isolation intact.
     """
-    import server.paths as _paths
     import server.db as _db
-    import ui.auth as _auth
     import server.main as _main
+    import server.paths as _paths
+    import ui.auth as _auth
 
     app_dir = tmp_path / "fbp"
     app_dir.mkdir(mode=0o700)
@@ -175,7 +175,6 @@ def test_setup_interview_scoped_to_active_user(env):
 
 def _seed_account(env, ledger_id_out: list | None = None):
     """Create a bank_connection + bank_account for the active user."""
-    import time
     import uuid
 
     conn = env["db"].get_db(env["db_path"])
