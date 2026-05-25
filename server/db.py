@@ -163,8 +163,7 @@ def init_db(path: str | Path) -> None:
         # Stores answers from the personalisation interview keyed by
         # (user_id, question_key).  Idempotent on (user_id, question_key)
         # so re-answering the same question replaces the previous value.
-        conn.execute(
-            """
+        conn.execute("""
             CREATE TABLE IF NOT EXISTS setup_interview (
                 id           TEXT PRIMARY KEY,
                 user_id      TEXT,
@@ -174,8 +173,7 @@ def init_db(path: str | Path) -> None:
                 updated_at   INTEGER NOT NULL,
                 UNIQUE(user_id, question_key)
             )
-            """
-        )
+            """)
         conn.commit()
 
         # Migration: create default user only when there is existing data to migrate

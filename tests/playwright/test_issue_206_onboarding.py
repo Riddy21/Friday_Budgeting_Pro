@@ -40,9 +40,7 @@ os.environ.setdefault("PLAID_CLIENT_ID", "6a108c2ccfbb2f000d022c26")
 os.environ.setdefault("PLAID_SECRET", "7ed0d08cc23ca47f6b550504f314ab")
 os.environ.setdefault("PLAID_ENV", "sandbox")
 
-PLAID_CREDS = bool(os.environ.get("PLAID_CLIENT_ID")) and bool(
-    os.environ.get("PLAID_SECRET")
-)
+PLAID_CREDS = bool(os.environ.get("PLAID_CLIENT_ID")) and bool(os.environ.get("PLAID_SECRET"))
 
 try:
     from playwright.sync_api import sync_playwright  # noqa: F401
@@ -232,7 +230,9 @@ def test_issue_206_onboarding_end_to_end(tmp_app, monkeypatch):
     # runs against real data \u2014 the API surface is what matters here.
     if not recurring["merchants"]:
         recurring = main.analyze_recurring_merchants(min_occurrences=1, lookback_days=400)
-    assert recurring["merchants"], "analyze_recurring_merchants returned no merchants from sandbox data"
+    assert recurring[
+        "merchants"
+    ], "analyze_recurring_merchants returned no merchants from sandbox data"
 
     # ------------------------------------------------------------------
     # 7. add_rule creates an onboarding-tagged rule and list_rules shows it.

@@ -1578,9 +1578,7 @@ def sync() -> dict:
                             # authorized_datetime is an ISO-8601 string with time (e.g.
                             # "2024-01-15T14:23:00Z"); fall back to datetime then None.
                             authorized_datetime = (
-                                _get(txn, "authorized_datetime")
-                                or _get(txn, "datetime")
-                                or None
+                                _get(txn, "authorized_datetime") or _get(txn, "datetime") or None
                             )
                             name = _get(txn, "name") or ""
                             merchant_name = _get(txn, "merchant_name") or ""
@@ -1642,7 +1640,11 @@ def sync() -> dict:
                                     bank_account_id,
                                     plaid_txn_id,
                                     str(date) if date is not None else None,
-                                    str(authorized_datetime) if authorized_datetime is not None else None,
+                                    (
+                                        str(authorized_datetime)
+                                        if authorized_datetime is not None
+                                        else None
+                                    ),
                                     merchant,
                                     amount,
                                     acct_currency,
@@ -1732,9 +1734,7 @@ def sync() -> dict:
                             plaid_txn_id = _get(txn, "transaction_id")
                             date = _get(txn, "date")
                             authorized_datetime = (
-                                _get(txn, "authorized_datetime")
-                                or _get(txn, "datetime")
-                                or None
+                                _get(txn, "authorized_datetime") or _get(txn, "datetime") or None
                             )
                             name = _get(txn, "name") or ""
                             merchant_name = _get(txn, "merchant_name") or ""
@@ -1747,7 +1747,11 @@ def sync() -> dict:
                                 "WHERE plaid_transaction_id=?",
                                 (
                                     str(date) if date is not None else None,
-                                    str(authorized_datetime) if authorized_datetime is not None else None,
+                                    (
+                                        str(authorized_datetime)
+                                        if authorized_datetime is not None
+                                        else None
+                                    ),
                                     merchant,
                                     amount,
                                     1 if pending else 0,
@@ -2023,12 +2027,27 @@ def remove_hint(id: str) -> dict:
 # call ``setup_interview`` with any string here — these are the
 # recommended ones the SKILL.md onboarding hook will use.
 SETUP_INTERVIEW_QUESTIONS: list[dict] = [
-    {"key": "account_owners", "prompt": "Who's on these accounts? Just you, a partner, shared family accounts?"},
-    {"key": "employer",       "prompt": "Who is your employer? (So payroll deposits can be correctly identified.)"},
-    {"key": "subscriptions",  "prompt": "What subscriptions do you pay for? (Netflix, Disney+, Spotify, iCloud, etc.)"},
-    {"key": "utilities",      "prompt": "Who are your utility providers? (Hydro, gas, internet, phone.)"},
-    {"key": "properties",     "prompt": "Do you have any rental properties or investment accounts?"},
-    {"key": "recurring_other", "prompt": "Anything else you pay regularly that might be hard to recognise? (Obscure merchant names, foreign currency, etc.)"},
+    {
+        "key": "account_owners",
+        "prompt": "Who's on these accounts? Just you, a partner, shared family accounts?",
+    },
+    {
+        "key": "employer",
+        "prompt": "Who is your employer? (So payroll deposits can be correctly identified.)",
+    },
+    {
+        "key": "subscriptions",
+        "prompt": "What subscriptions do you pay for? (Netflix, Disney+, Spotify, iCloud, etc.)",
+    },
+    {
+        "key": "utilities",
+        "prompt": "Who are your utility providers? (Hydro, gas, internet, phone.)",
+    },
+    {"key": "properties", "prompt": "Do you have any rental properties or investment accounts?"},
+    {
+        "key": "recurring_other",
+        "prompt": "Anything else you pay regularly that might be hard to recognise? (Obscure merchant names, foreign currency, etc.)",
+    },
 ]
 
 
