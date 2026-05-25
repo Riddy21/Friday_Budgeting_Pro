@@ -30,7 +30,8 @@ def _plist_path() -> Path:
 
 
 def _openclaw_config_path() -> Path:
-    return Path.home() / ".openclaw" / "config.json"
+    # OpenClaw uses openclaw.json as its primary config file
+    return Path.home() / ".openclaw" / "openclaw.json"
 
 
 def _render_plist(install_dir: Path) -> str:
@@ -83,13 +84,16 @@ def _register_mcp(install_dir: Path) -> None:
     else:
         config = {}
 
-    mcp_servers = config.get("mcpServers", {})
-    mcp_servers["friday-budgeting-pro"] = {
+    # OpenClaw MCP servers live under mcp.servers
+    if "mcp" not in config:
+        config["mcp"] = {}
+    if "servers" not in config["mcp"]:
+        config["mcp"]["servers"] = {}
+    config["mcp"]["servers"]["friday-budgeting-pro"] = {
         "command": sys.executable,
         "args": ["-m", "server.main"],
         "cwd": str(install_dir),
     }
-    config["mcpServers"] = mcp_servers
     config_path.write_text(json.dumps(config, indent=2) + "\n")
 
 

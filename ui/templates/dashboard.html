@@ -10,11 +10,7 @@
     <h2>Sync</h2>
     <p>
       <strong>Last synced:</strong>
-      {% if last_synced_at %}
-        {{ last_synced_at }}
-      {% else %}
-        Never
-      {% endif %}
+      <span id="last-synced">{% if last_synced_at %}{{ last_synced_at }}{% else %}Never{% endif %}</span>
     </p>
     {% if action_result %}
       {% if action_result.ok %}
@@ -24,12 +20,34 @@
       {% endif %}
     {% endif %}
     <div class="action-row">
-      <form method="post" action="/profile" style="display:inline">
-        <input type="hidden" name="action" value="sync_now">
-        <button type="submit" class="btn-primary" id="btn-sync-now">Sync Now</button>
-      </form>
+      <button class="btn-primary" id="btn-sync-now" onclick="doSync(this)">Sync Now</button>
       <a href="/export/excel" class="btn-secondary">Export to Excel</a>
     </div>
+    <div id="sync-result" style="margin-top:0.75rem"></div>
+    <script>
+    async function doSync(btn) {
+      btn.disabled = true;
+      btn.textContent = 'Syncing…';
+      document.getElementById('sync-result').innerHTML = '';
+      try {
+        const r = await fetch('/api/sync', {method: 'POST'});
+        const d = await r.json();
+        const el = document.getElementById('sync-result');
+        if (d.status === 'ok') {
+          el.innerHTML = '<div class="alert alert-success">✅ Synced — ' + (d.added || 0) + ' new transactions across ' + (d.connections_synced || 0) + ' accounts.</div>';
+          // Update last synced timestamp
+          const ts = document.getElementById('last-synced');
+          if (ts) ts.textContent = 'Just now';
+        } else {
+          el.innerHTML = '<div class="alert alert-error">❌ ' + (d.detail || d.message || 'Sync failed') + '</div>';
+        }
+      } catch(e) {
+        document.getElementById('sync-result').innerHTML = '<div class="alert alert-error">❌ Network error</div>';
+      }
+      btn.disabled = false;
+      btn.textContent = 'Sync Now';
+    }
+    </script>
   </section>
 
   <section>

@@ -1537,6 +1537,8 @@ def sync() -> dict:
                                 "name": acct_name,
                                 "type": acct_type,
                                 "currency": acct_currency,
+                                "balance_current": _get(balances, "current"),
+                                "balance_available": _get(balances, "available"),
                             }
 
                     now = int(_time.time())
@@ -1544,6 +1546,28 @@ def sync() -> dict:
                     conn_modified = 0
                     conn_removed = 0
                     conn_classified = 0
+
+                    # Always update account names, types, currencies, and balances
+                    # from the accounts list — even when no new transactions
+                    with db_txn(db_conn):
+                        for plaid_acct_id, meta in account_meta.items():
+                            db_conn.execute(
+                                "UPDATE bank_accounts SET "
+                                "name = COALESCE(NULLIF(name, ''), ?), "
+                                "type = COALESCE(NULLIF(type, ''), ?), "
+                                "currency = ?, "
+                                "balance_current = ?, "
+                                "balance_available = ? "
+                                "WHERE plaid_account_id = ?",
+                                (
+                                    meta.get("name"),
+                                    meta.get("type"),
+                                    meta.get("currency") or "CAD",
+                                    meta.get("balance_current"),
+                                    meta.get("balance_available"),
+                                    plaid_acct_id,
+                                ),
+                            )
 
                     with db_txn(db_conn):
                         # --- Added transactions ---
@@ -1587,12 +1611,18 @@ def sync() -> dict:
                                         "WHERE plaid_account_id = ? AND (type IS NULL OR type = '')",
                                         (meta["type"], plaid_account_id),
                                     )
-                                # Always update currency from Plaid (authoritative source)
+                                # Always update currency + balances from Plaid (authoritative)
                                 acct_currency = meta.get("currency") or "CAD"
                                 db_conn.execute(
-                                    "UPDATE bank_accounts SET currency = ? "
+                                    "UPDATE bank_accounts SET currency = ?, "
+                                    "balance_current = ?, balance_available = ? "
                                     "WHERE plaid_account_id = ?",
-                                    (acct_currency, plaid_account_id),
+                                    (
+                                        acct_currency,
+                                        meta.get("balance_current"),
+                                        meta.get("balance_available"),
+                                        plaid_account_id,
+                                    ),
                                 )
 
                             txn_id = str(uuid.uuid4())

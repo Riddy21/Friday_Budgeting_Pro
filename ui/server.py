@@ -856,6 +856,20 @@ def _get_last_synced_at() -> Optional[str]:
         return str(ts)
 
 
+@app.post("/api/sync")
+def api_sync(request: Request):
+    """AJAX sync — returns JSON, no redirect."""
+    if not _is_authenticated(request):
+        return JSONResponse({"error": "Unauthorized"}, status_code=401)
+    import server.main as _sm
+    try:
+        result = _sm.sync()
+        return JSONResponse(result)
+    except Exception as exc:
+        import logging; logging.getLogger(__name__).error("api_sync: %s", exc)
+        return JSONResponse({"status": "error", "detail": str(exc)}, status_code=500)
+
+
 @app.get("/dashboard", response_class=HTMLResponse)
 def dashboard_get(request: Request):
     """Main dashboard page.  Requires authentication."""
@@ -930,6 +944,42 @@ def accounts_get(request: Request):
         "accounts.html",
         {"current_page": "accounts", "grouped_accounts": grouped},
     )
+
+
+@app.get("/accounts/{account_id}/transactions")
+def account_transactions_get(request: Request, account_id: str, limit: int = 50):
+    """Return recent transactions for an account with classification info.
+
+    Requires authentication.  Returns JSON:
+    {"transactions": [{id, date, merchant, amount, currency, entry_type,
+                        source, uncertain, line_item_name, ledger_name}, ...]}
+    """
+    if not _is_authenticated(request):
+        return JSONResponse({"error": "not authenticated"}, status_code=401)
+    conn = get_db(_db_path())
+    try:
+        rows = conn.execute(
+            """
+            SELECT t.id, t.date, t.merchant, t.amount,
+                   COALESCE(t.currency, 'CAD') AS currency,
+                   te.entry_type, te.source, te.uncertain,
+                   li.name AS line_item_name,
+                   l.name  AS ledger_name
+              FROM transactions t
+              LEFT JOIN transaction_entries te ON te.transaction_id = t.id
+              LEFT JOIN line_items li ON li.id = te.line_item_id
+              LEFT JOIN ledgers    l  ON l.id  = te.ledger_id
+             WHERE t.bank_account_id = ?
+             ORDER BY t.date DESC, t.rowid DESC
+             LIMIT ?
+            """,
+            (account_id, limit),
+        ).fetchall()
+        return JSONResponse({"transactions": [dict(r) for r in rows]})
+    except Exception as exc:
+        return JSONResponse({"error": str(exc)}, status_code=500)
+    finally:
+        conn.close()
 
 
 @app.patch("/accounts/{account_id}/name")
