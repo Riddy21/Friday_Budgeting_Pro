@@ -70,12 +70,19 @@ logger = logging.getLogger(__name__)
 # Constants / env helpers
 # ---------------------------------------------------------------------------
 
-_DEFAULT_OPENCLAW_URL = "http://127.0.0.1:7531/v1/completions"
+_DEFAULT_OPENCLAW_URL = "http://127.0.0.1:7531/v1/chat/completions"
 _OPENCLAW_TIMEOUT = 60  # seconds — agent turns can take time
 
 
 def _openclaw_url() -> str:
-    return os.environ.get("OPENCLAW_API_URL", _DEFAULT_OPENCLAW_URL)
+    explicit = os.environ.get("OPENCLAW_API_URL")
+    if explicit:
+        return explicit
+    # Fall back to OPENCLAW_GATEWAY_PORT env var (set by OpenClaw in the
+    # MCP server process environment) so the MCP server can find the gateway
+    # without needing OPENCLAW_API_URL explicitly configured.
+    port = os.environ.get("OPENCLAW_GATEWAY_PORT", "7531")
+    return f"http://127.0.0.1:{port}/v1/chat/completions"
 
 
 def _openclaw_model() -> str:
