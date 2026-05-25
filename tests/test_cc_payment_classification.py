@@ -9,22 +9,21 @@ Verifies:
   3. The accounts page template contains the .txn-toggle-btn class and
      the "Transfer" colour definition in its JS.
 """
+
 from __future__ import annotations
 
-import json
 import sqlite3
 import time
 import uuid
 from pathlib import Path
 from unittest.mock import patch
 
-import pytest
 from fastapi.testclient import TestClient
-
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _make_db(tmp_path: Path) -> Path:
     """Create a minimal DB with one user, one account, and some transactions."""
@@ -81,8 +80,16 @@ def _make_db(tmp_path: Path) -> Path:
     conn.execute(
         "INSERT INTO transactions (id, bank_account_id, plaid_transaction_id,"
         " date, merchant, amount, currency, pending) VALUES (?,?,?,?,?,?,?,?)",
-        (txn_cc_pay_id, chq_id, "ptxn_1", "2026-05-20",
-         "BMO MASTERCARD PAYMENT - THANK YOU", 350.00, "CAD", 0),
+        (
+            txn_cc_pay_id,
+            chq_id,
+            "ptxn_1",
+            "2026-05-20",
+            "BMO MASTERCARD PAYMENT - THANK YOU",
+            350.00,
+            "CAD",
+            0,
+        ),
     )
     te_id_1 = str(uuid.uuid4())
     conn.execute(
@@ -129,6 +136,7 @@ def _make_db(tmp_path: Path) -> Path:
 # Test: /accounts/{id}/transactions returns correct entry_type
 # ---------------------------------------------------------------------------
 
+
 def test_account_transactions_endpoint_returns_entry_type(tmp_path):
     """GET /accounts/{id}/transactions includes entry_type for each transaction."""
     db_path, user_id, chq_id, cc_id, txn_cc_id, txn_groc_id, txn_unc_id = _make_db(tmp_path)
@@ -139,6 +147,7 @@ def test_account_transactions_endpoint_returns_entry_type(tmp_path):
     with patch.object(_paths, "DB_PATH", db_path):
         # Create a live session for auth
         from ui.auth import create_session
+
         stoken = create_session(db_path, user_id=user_id)
 
         client = TestClient(srv.app, raise_server_exceptions=True)
@@ -152,9 +161,9 @@ def test_account_transactions_endpoint_returns_entry_type(tmp_path):
 
     # CC payment must be entry_type='transfer'
     assert txn_cc_id in txns, "CC payment transaction missing from results"
-    assert txns[txn_cc_id]["entry_type"] == "transfer", (
-        f"Expected 'transfer' for CC payment, got {txns[txn_cc_id]['entry_type']!r}"
-    )
+    assert (
+        txns[txn_cc_id]["entry_type"] == "transfer"
+    ), f"Expected 'transfer' for CC payment, got {txns[txn_cc_id]['entry_type']!r}"
 
     # Grocery is spending
     assert txns[txn_groc_id]["entry_type"] == "spending"
@@ -180,13 +189,15 @@ def test_account_transactions_endpoint_requires_auth(tmp_path):
 # Test: credit card payment rule description is rich enough
 # ---------------------------------------------------------------------------
 
+
 def test_cc_payment_rule_description_covers_key_patterns(tmp_path):
     """Rule #4 in a seeded DB must mention the common payment label patterns."""
     db_path, *_ = _make_db(tmp_path)
 
-    import server.paths as _paths
-    import server.main as sm
     from unittest.mock import patch as _patch
+
+    import server.main as sm
+    import server.paths as _paths
 
     # Seed the credit card payment rule (mirrors what apply_initial_setup seeds)
     conn2 = sqlite3.connect(str(db_path))
@@ -240,6 +251,7 @@ def test_cc_payment_rule_description_covers_key_patterns(tmp_path):
 # Test: accounts.html template has the new JS infrastructure
 # ---------------------------------------------------------------------------
 
+
 def test_accounts_template_has_transaction_toggle():
     """accounts.html must have the txn-toggle-btn class and Transfer colour."""
     tmpl = Path(__file__).parent.parent / "ui" / "templates" / "accounts.html"
@@ -247,12 +259,12 @@ def test_accounts_template_has_transaction_toggle():
 
     assert "txn-toggle-btn" in content, "Missing .txn-toggle-btn class"
     assert "txn-expand-" in content, "Missing txn-expand-* row IDs"
-    assert "/accounts/" in content and "transactions" in content, (
-        "Missing /accounts/{id}/transactions fetch URL"
-    )
+    assert (
+        "/accounts/" in content and "transactions" in content
+    ), "Missing /accounts/{id}/transactions fetch URL"
     # Transfer badge colour definition
     assert "transfer" in content.lower(), "Missing 'transfer' entry type in template"
     # entry_type rendering
-    assert "entry_type" in content or "Transfer" in content, (
-        "Template doesn't reference entry_type or Transfer label"
-    )
+    assert (
+        "entry_type" in content or "Transfer" in content
+    ), "Template doesn't reference entry_type or Transfer label"
