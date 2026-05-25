@@ -126,10 +126,10 @@ def server_url(tmp_path_factory):
         pytest.skip(reason)
 
     port = _find_free_port()
-    db_path = tmp_path_factory.mktemp("ui_db") / "test.db"
+    app_dir = tmp_path_factory.mktemp("ui_app")
 
     env = os.environ.copy()
-    env["FRIDAY_BP_DB_PATH"] = str(db_path)
+    env["FRIDAY_BP_APP_DIR"] = str(app_dir)
     env["FRIDAY_BP_UI_PORT"] = str(port)
     env.setdefault("PLAID_CLIENT_ID", "test-client-id")
     env.setdefault("PLAID_SECRET", "test-secret")
