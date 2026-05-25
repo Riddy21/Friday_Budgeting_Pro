@@ -261,6 +261,28 @@ Only what HAL actually needs to call. Grouped:
   - `rental_properties`: list of `{name, description?, account_id?}` — each creates a property ledger and optionally links the bank account.
   - `investment_account_ids`: list of account IDs — creates a single "Investments" ledger (if non-empty) and links all accounts.
 
+### Guided Onboarding (#206)
+For agents that want to walk the user through a richer onboarding
+conversation (instead of, or after, `apply_initial_setup`):
+- `list_setup_interview_questions()` → the canonical interview prompts
+  the SKILL.md `onInstall` hook walks through (employer, subscriptions,
+  utilities, properties, account owners, other recurring charges).
+- `setup_interview(question_key, answer_text)` → persists the user's
+  answer.  Upserts on `(user_id, question_key)` so re-answering replaces.
+- `list_setup_interview()` → returns all stored answers for the active
+  user.
+- `analyze_recurring_merchants(min_occurrences?, lookback_days?)` →
+  scans recent transactions and returns recurring merchants with their
+  current classification (when any).  Used to cross-reference interview
+  answers against what's actually in the user's accounts before the
+  agent calls `add_rule` / `add_hint` to seed personalised rules.
+
+The `SKILL.md` openclaw metadata now ships an `onInstall` prompt string
+that instructs the agent to drive this flow end-to-end after install:
+bank link → interview → cross-reference → generate `[onboarding]`-tagged
+rules + hints → sync → surface review queue.  All steps are pure MCP
+tool calls; nothing new is required from the UI.
+
 ### Banks
 - `start_link()` → returns URL to open Plaid Link
 - `complete_link(public_token)` → exchange + store

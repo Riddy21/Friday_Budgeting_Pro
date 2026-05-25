@@ -159,6 +159,23 @@ def init_db(path: str | Path) -> None:
         _add_col_if_missing(conn, "transaction_entries", "corrected_at", "INTEGER")
         conn.commit()
 
+        # Migration: setup_interview (#206 — guided onboarding answers).
+        # Stores answers from the personalisation interview keyed by
+        # (user_id, question_key).  Idempotent on (user_id, question_key)
+        # so re-answering the same question replaces the previous value.
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS setup_interview (
+                id           TEXT PRIMARY KEY,
+                user_id      TEXT,
+                question_key TEXT NOT NULL,
+                answer_text  TEXT NOT NULL,
+                created_at   INTEGER NOT NULL,
+                updated_at   INTEGER NOT NULL,
+                UNIQUE(user_id, question_key)
+            )
+            """)
+        conn.commit()
+
         # Migration: create default user only when there is existing data to migrate
         # (i.e. rows exist that need a user_id) but no users have been created yet.
         # On truly fresh DBs, we leave users empty so the setup wizard can create
