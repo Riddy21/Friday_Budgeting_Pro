@@ -760,19 +760,88 @@ def dashboard_get(request: Request):
     )
 
 
-# ── /accounts (stub — #158 will implement) ────────────────────────────────────
+# ── /accounts (#158) ────────────────────────────────────────────────────────
+
+
+def _get_accounts_grouped(user_id: Optional[str] = None) -> dict:
+    """Return bank accounts grouped by institution, with balances.
+
+    Returns a dict of {institution_name: {connection_id: str, accounts: [...]}}.
+    """
+    conn = get_db(_db_path())
+    try:
+        if user_id:
+            rows = conn.execute(
+                "SELECT ba.id, ba.name, ba.type, ba.subtype, ba.mask,"
+                "       ba.balance_current, ba.balance_available,"
+                "       bc.id AS connection_id, bc.institution_name"
+                "  FROM bank_accounts ba"
+                "  JOIN bank_connections bc ON bc.id = ba.connection_id"
+                " WHERE bc.user_id = ?"
+                " ORDER BY bc.institution_name, ba.name",
+                (user_id,),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT ba.id, ba.name, ba.type, ba.subtype, ba.mask,"
+                "       ba.balance_current, ba.balance_available,"
+                "       bc.id AS connection_id, bc.institution_name"
+                "  FROM bank_accounts ba"
+                "  JOIN bank_connections bc ON bc.id = ba.connection_id"
+                " ORDER BY bc.institution_name, ba.name"
+            ).fetchall()
+        grouped: dict = {}
+        for r in rows:
+            inst = r["institution_name"] or "Unknown Institution"
+            if inst not in grouped:
+                grouped[inst] = {"connection_id": r["connection_id"], "accounts": []}
+            grouped[inst]["accounts"].append(dict(r))
+        return grouped
+    except Exception:
+        return {}
+    finally:
+        conn.close()
 
 
 @app.get("/accounts", response_class=HTMLResponse)
 def accounts_get(request: Request):
-    """Accounts stub page.  Requires authentication.  Full implementation: #158."""
+    """Accounts page — bank accounts grouped by institution with balances (#158)."""
     if not _is_authenticated(request):
         return _redirect("/login")
+    uid = _current_user_id(request)
+    grouped = _get_accounts_grouped(uid)
     return templates.TemplateResponse(
         request,
         "accounts.html",
-        {"current_page": "accounts"},
+        {"current_page": "accounts", "grouped_accounts": grouped},
     )
+
+
+@app.patch("/accounts/{account_id}/name")
+async def accounts_name_patch(request: Request, account_id: str):
+    """Update the display name for a bank account (inline rename).  Requires auth.
+
+    Reads JSON body: {"name": "<new name>"}.
+    Returns {"status": "ok", "account_id": ..., "name": ...} or 404.
+    """
+    if not _is_authenticated(request):
+        return JSONResponse({"error": "not authenticated"}, status_code=401)
+    body = await request.json()
+    name = (body.get("name") or "").strip()
+    if not name:
+        return JSONResponse({"error": "name is required"}, status_code=400)
+    conn = get_db(_db_path())
+    try:
+        result = conn.execute(
+            "UPDATE bank_accounts SET name = ? WHERE id = ?",
+            (name, account_id),
+        )
+        conn.commit()
+        if result.rowcount == 0:
+            return JSONResponse({"error": f"account {account_id!r} not found"}, status_code=404)
+    finally:
+        conn.close()
+    return JSONResponse({"status": "ok", "account_id": account_id, "name": name})
 
 
 # ── /settings (stub — #159 will implement) ────────────────────────────────────
@@ -793,6 +862,18 @@ def settings_get(request: Request):
 # ── /profile ─────────────────────────────────────────────────────────────────
 
 
+def _fmt_last_synced(ts) -> str:
+    """Convert a Unix timestamp integer to a human-readable string, or 'Never'."""
+    from datetime import datetime
+
+    if not ts:
+        return "Never"
+    try:
+        return datetime.fromtimestamp(int(ts)).strftime("%b %-d, %Y %-I:%M %p")
+    except Exception:
+        return "Never"
+
+
 def _get_connections(user_id: Optional[str] = None) -> list[dict]:
     """Query bank_connections for *user_id* and return a list of dicts."""
     conn = get_db(_db_path())
@@ -808,7 +889,12 @@ def _get_connections(user_id: Optional[str] = None) -> list[dict]:
                 "SELECT id, institution_name, status, last_synced_at "
                 "FROM bank_connections ORDER BY rowid"
             ).fetchall()
-        return [dict(r) for r in rows]
+        result = []
+        for r in rows:
+            d = dict(r)
+            d["last_synced_at"] = _fmt_last_synced(d.get("last_synced_at"))
+            result.append(d)
+        return result
     finally:
         conn.close()
 

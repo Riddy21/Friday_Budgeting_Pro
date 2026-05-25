@@ -58,7 +58,10 @@
 
   <!-- Linked Accounts (#47) -->
   <section id="linked-accounts">
-    <h2>Linked Accounts</h2>
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:0.75rem">
+      <h2 style="margin:0">Linked Accounts</h2>
+      <a href="/link/start" class="btn-primary" id="connect-bank-btn">+ Connect a bank</a>
+    </div>
     {% if connections %}
     <table class="connections-table">
       <thead>
@@ -78,7 +81,7 @@
               {{ conn.status }}
             </span>
           </td>
-          <td>{{ conn.last_synced_at if conn.last_synced_at else "Never" }}</td>
+          <td>{{ conn.last_synced_at }}</td>
           <td class="action-cell">
             {% if conn.status == "needs_reauth" %}
             <form method="post" action="/profile" style="display:inline">
@@ -160,9 +163,6 @@
     <p class="hint">No bank accounts connected yet.</p>
     {% endif %}
 
-    <div style="margin-top:1rem">
-      <a href="/link/start" class="btn-primary">+ Connect a bank</a>
-    </div>
   </section>
 </div>
 {% endblock %}
