@@ -178,6 +178,23 @@
               data-ledger-id="{{ ledger.id }}" data-section="expenses">
           </div>
         </div>
+
+        {# ── Income/Expenses/Net totals footer (#166) ── #}
+        <div class="ledger-totals-row" data-ledger-totals="{{ ledger.id }}">
+          <span>
+            <span class="total-label">Total income:</span>
+            <span class="total-value" data-total="income">C${{ "%.2f"|format(ledger.totals.income) }}</span>
+          </span>
+          <span>
+            <span class="total-label">Total expenses:</span>
+            <span class="total-value" data-total="expenses">C${{ "%.2f"|format(ledger.totals.expenses) }}</span>
+          </span>
+          <span>
+            <span class="total-label">Net:</span>
+            <span class="total-value {% if ledger.totals.net > 0 %}net-positive{% elif ledger.totals.net < 0 %}net-negative{% else %}net-zero{% endif %}"
+              data-total="net">C${{ "%.2f"|format(ledger.totals.net) }}</span>
+          </span>
+        </div>
       </section>
       {% endfor %}
     {% else %}

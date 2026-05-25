@@ -153,6 +153,11 @@ preset period: *This month* (default), *Last month*, *Last 3 months*, *This year
 or *All time*. The selected period is reflected in the URL (`/ledgers?period=…`)
 so views are shareable and bookmarkable.
 
+Each ledger shows an **income vs expense breakdown**: line items are split into
+an *Income* section and an *Expenses* section, with a footer row showing total
+income, total expenses, and the **net** (income − expenses). The net is
+highlighted green when positive (surplus) and red when negative (deficit).
+
 Ledgers come in three types:
 - **Personal** (default) — standard household budget with line items like Salary, Groceries, Dining, etc.
 - **Property** — rental/investment property ledger with pre-seeded items: Rent income, Mortgage, Property tax, Maintenance & repairs, Insurance, Utilities.
