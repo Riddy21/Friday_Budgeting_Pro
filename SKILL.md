@@ -51,6 +51,8 @@ metadata:
               "label": "Remove daemon",
             },
           ],
+        "onInstall":
+          "Friday Budgeting Pro is installed.  Walk the user through the guided onboarding flow:\n1. Call setup_status — if not 'complete', send the URL from get_ui_url() and instruct the user to set a password and connect their first bank.  Poll setup_status until it returns 'complete'.\n2. Once banks are connected and an initial sync has run, run the personalisation interview.  Use list_setup_interview_questions to get the canonical question list, then ask each one conversationally (skip ones the user already volunteered).  Call setup_interview(question_key, answer_text) to persist each answer.\n3. Call analyze_recurring_merchants to cross-reference the user's interview answers with recently-synced transactions.  Reconcile gaps (e.g. user mentioned Netflix but it's not in transactions yet, or there's a recurring charge they didn't mention).\n4. For each identified pattern, propose and create a classification rule via add_rule (use a description that starts with '[onboarding]' so the user can see what was auto-generated) and add classification hints via add_hint.  Examples: 'Deposits from TENSTORRENT are Salary & Income', 'Disney Plus charges are Entertainment & Subscriptions'.\n5. Call sync once more so the newly-installed rules classify any remaining transactions, then surface get_needs_review items to the user.\n6. After setup the user can update rules at any time via natural language ('add a rule that Home Depot over $200 goes to Rental Maintenance', 'remove the Netflix rule') — wire those to add_rule / update_rule / delete_rule directly.  No UI needed for rule management.",
       },
   }
 ---
@@ -121,6 +123,12 @@ Invoke for any personal finance request:
 - `add_hint(text)` — add a natural-language classification hint for the LLM
 - `list_hints` — list all classification hints
 - `remove_hint(id)` — remove a classification hint
+
+### Onboarding (issue #206)
+- `list_setup_interview_questions` — return the canonical onboarding interview prompts (employer, subscriptions, utilities, etc.)
+- `setup_interview(question_key, answer_text)` — persist a user answer for a given question key (upsert on `(user_id, question_key)`)
+- `list_setup_interview` — return all stored interview answers for the active user
+- `analyze_recurring_merchants(min_occurrences?, lookback_days?)` — scan recent transactions and return recurring merchants with their inferred category for cross-referencing during onboarding
 
 ### Corrections
 - `find_transactions(merchant?, date?, amount?, account?, days_window?)` — fuzzy-search transactions by merchant name, ISO date (±`days_window` days), amount (±$0.50), or account name; returns up to 10 matches with their current classification

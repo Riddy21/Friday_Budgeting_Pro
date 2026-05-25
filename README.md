@@ -123,6 +123,29 @@ The system picks sensible defaults for everything else (Personal ledger
 with standard rows, daily 6 AM sync, LLM confidence threshold 0.75).
 Adjust any of it later from the Profile page or via MCP.
 
+### Guided onboarding via your agent (issue #206)
+
+After the wizard, your agent can walk you through a short conversational
+interview — employer, subscriptions, utilities, rental properties —
+then cross-reference your answers against what's actually in your
+accounts and generate a personalised set of classification rules tagged
+`[onboarding]`.  The whole flow is pure MCP:
+
+- `list_setup_interview_questions` — the canonical question set
+- `setup_interview(question_key, answer_text)` — persist an answer
+  (upserts on `(user_id, question_key)`)
+- `list_setup_interview` — read back the stored answers
+- `analyze_recurring_merchants(min_occurrences?, lookback_days?)` —
+  surface recurring merchants for the agent to reconcile with the
+  interview answers
+- `add_rule` / `add_hint` — create personalised rules + hints
+- `sync` — re-classify with the new rules
+
+The SKILL.md `onInstall` hook tells the agent to drive this flow
+automatically after `clawhub install friday-budgeting-pro` completes.
+You can also re-run it at any time by asking your agent to "redo my
+Friday setup" or "update my profile".
+
 ---
 
 ## What the UI Looks Like (v0.1)

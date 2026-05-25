@@ -2015,6 +2015,262 @@ def remove_hint(id: str) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# Onboarding tools (issue #206)
+# ---------------------------------------------------------------------------
+
+
+# Canonical question keys used by the guided onboarding flow.  Agents can
+# call ``setup_interview`` with any string here — these are the
+# recommended ones the SKILL.md onboarding hook will use.
+SETUP_INTERVIEW_QUESTIONS: list[dict] = [
+    {"key": "account_owners", "prompt": "Who's on these accounts? Just you, a partner, shared family accounts?"},
+    {"key": "employer",       "prompt": "Who is your employer? (So payroll deposits can be correctly identified.)"},
+    {"key": "subscriptions",  "prompt": "What subscriptions do you pay for? (Netflix, Disney+, Spotify, iCloud, etc.)"},
+    {"key": "utilities",      "prompt": "Who are your utility providers? (Hydro, gas, internet, phone.)"},
+    {"key": "properties",     "prompt": "Do you have any rental properties or investment accounts?"},
+    {"key": "recurring_other", "prompt": "Anything else you pay regularly that might be hard to recognise? (Obscure merchant names, foreign currency, etc.)"},
+]
+
+
+@mcp.tool
+def list_setup_interview_questions() -> dict:
+    """Return the recommended onboarding interview questions.
+
+    The guided onboarding hook in ``SKILL.md`` walks the user through these
+    questions one at a time; answers are persisted via
+    :func:`setup_interview`.  Agents are free to ask additional questions
+    — the canonical list is purely a starting point so every install gets
+    a consistent baseline.
+
+    Returns
+    -------
+    dict
+        ``{"questions": [{"key": str, "prompt": str}, ...]}``
+    """
+    return {"questions": [dict(q) for q in SETUP_INTERVIEW_QUESTIONS]}
+
+
+@mcp.tool
+def setup_interview(question_key: str, answer_text: str) -> dict:
+    """Persist an onboarding interview answer for the active user.
+
+    Stores the answer in the ``setup_interview`` table, scoped to the
+    active user.  Re-answering the same ``question_key`` replaces the
+    previous answer (the UNIQUE constraint on ``(user_id, question_key)``
+    makes this an upsert).
+
+    Parameters
+    ----------
+    question_key : str
+        Short identifier for the question (e.g. ``"employer"``,
+        ``"subscriptions"``).  Recommended keys live in
+        ``SETUP_INTERVIEW_QUESTIONS``, but any non-empty string is allowed
+        so agents can ask follow-ups.
+    answer_text : str
+        The user's answer in natural language.
+
+    Returns
+    -------
+    dict
+        ``{"id": <row id>, "question_key": str, "answer_text": str,
+           "created": bool}``  — ``created`` is True for inserts and
+        False for updates.
+    """
+    qk = (question_key or "").strip()
+    ans = (answer_text or "").strip()
+    if not qk:
+        raise ValueError("question_key must be non-empty")
+    if not ans:
+        raise ValueError("answer_text must be non-empty")
+
+    import time as _time
+
+    uid = get_active_user_id(server.paths.DB_PATH)
+    conn = get_db(server.paths.DB_PATH)
+    try:
+        existing = conn.execute(
+            "SELECT id FROM setup_interview WHERE user_id IS ? AND question_key = ?",
+            (uid, qk),
+        ).fetchone()
+        now = int(_time.time())
+        if existing:
+            conn.execute(
+                "UPDATE setup_interview SET answer_text = ?, updated_at = ? WHERE id = ?",
+                (ans, now, existing["id"]),
+            )
+            conn.commit()
+            return {
+                "id": existing["id"],
+                "question_key": qk,
+                "answer_text": ans,
+                "created": False,
+            }
+        new_id = str(uuid.uuid4())
+        conn.execute(
+            "INSERT INTO setup_interview "
+            "(id, user_id, question_key, answer_text, created_at, updated_at) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (new_id, uid, qk, ans, now, now),
+        )
+        conn.commit()
+        return {
+            "id": new_id,
+            "question_key": qk,
+            "answer_text": ans,
+            "created": True,
+        }
+    finally:
+        conn.close()
+
+
+@mcp.tool
+def list_setup_interview() -> dict:
+    """Return all stored onboarding interview answers for the active user.
+
+    Returns
+    -------
+    dict
+        ``{"answers": [{"id", "question_key", "answer_text",
+           "created_at", "updated_at"}, ...]}``
+    """
+    uid = get_active_user_id(server.paths.DB_PATH)
+    conn = get_db(server.paths.DB_PATH)
+    try:
+        if uid:
+            rows = conn.execute(
+                "SELECT id, question_key, answer_text, created_at, updated_at "
+                "FROM setup_interview WHERE user_id = ? ORDER BY created_at",
+                (uid,),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT id, question_key, answer_text, created_at, updated_at "
+                "FROM setup_interview WHERE user_id IS NULL ORDER BY created_at"
+            ).fetchall()
+        return {
+            "answers": [
+                {
+                    "id": r["id"],
+                    "question_key": r["question_key"],
+                    "answer_text": r["answer_text"],
+                    "created_at": r["created_at"],
+                    "updated_at": r["updated_at"],
+                }
+                for r in rows
+            ]
+        }
+    finally:
+        conn.close()
+
+
+@mcp.tool
+def analyze_recurring_merchants(min_occurrences: int = 2, lookback_days: int = 90) -> dict:
+    """Scan recent transactions and surface recurring merchants.
+
+    The guided onboarding flow (#206) uses this to cross-reference the
+    user's interview answers against what's actually in their accounts —
+    e.g. confirming that a "Netflix" subscription answer is backed by a
+    real recurring charge.
+
+    A merchant is considered *recurring* when it appears at least
+    ``min_occurrences`` times in the last ``lookback_days`` days.  Each
+    returned entry also includes an inferred category derived from the
+    most common Plaid category and current classification (when any).
+
+    Parameters
+    ----------
+    min_occurrences : int
+        Minimum number of transactions for a merchant to be returned.
+        Defaults to 2.
+    lookback_days : int
+        How far back to look.  Defaults to 90 days.
+
+    Returns
+    -------
+    dict
+        ``{"merchants": [{"merchant": str, "occurrences": int,
+          "avg_amount": float, "last_seen": str (ISO date),
+          "plaid_category": str | None,
+          "current_line_item": str | None,
+          "current_ledger": str | None}, ...]}``
+        Sorted by occurrences descending.
+    """
+    import datetime as _dt
+
+    if min_occurrences < 1:
+        raise ValueError("min_occurrences must be >= 1")
+    if lookback_days < 1:
+        raise ValueError("lookback_days must be >= 1")
+
+    uid = get_active_user_id(server.paths.DB_PATH)
+    cutoff = (_dt.date.today() - _dt.timedelta(days=lookback_days)).isoformat()
+
+    conn = get_db(server.paths.DB_PATH)
+    try:
+        if uid:
+            base_filter = (
+                "  JOIN bank_accounts ba ON ba.id = t.bank_account_id\n"
+                "  JOIN bank_connections bc ON bc.id = ba.connection_id\n"
+                " WHERE bc.user_id = ?\n"
+                "   AND t.merchant IS NOT NULL\n"
+                "   AND TRIM(t.merchant) != ''\n"
+                "   AND t.date >= ?\n"
+            )
+            params = (uid, cutoff)
+        else:
+            base_filter = (
+                " WHERE t.merchant IS NOT NULL\n"
+                "   AND TRIM(t.merchant) != ''\n"
+                "   AND t.date >= ?\n"
+            )
+            params = (cutoff,)
+
+        rows = conn.execute(
+            f"""
+            SELECT t.merchant,
+                   COUNT(*) AS occurrences,
+                   AVG(t.amount) AS avg_amount,
+                   MAX(t.date) AS last_seen,
+                   MAX(t.plaid_category) AS plaid_category
+              FROM transactions t
+              {base_filter}
+             GROUP BY t.merchant
+            HAVING COUNT(*) >= {int(min_occurrences)}
+             ORDER BY occurrences DESC, last_seen DESC
+            """,
+            params,
+        ).fetchall()
+
+        merchants: list[dict] = []
+        for r in rows:
+            # Best-effort lookup of how this merchant is currently classified.
+            cls_row = conn.execute(
+                "SELECT li.name AS li_name, l.name AS ledger_name"
+                "  FROM transaction_entries te"
+                "  JOIN transactions t  ON t.id  = te.transaction_id"
+                "  JOIN line_items   li ON li.id = te.line_item_id"
+                "  JOIN ledgers      l  ON l.id  = te.ledger_id"
+                " WHERE t.merchant = ?"
+                " ORDER BY t.date DESC LIMIT 1",
+                (r["merchant"],),
+            ).fetchone()
+            merchants.append(
+                {
+                    "merchant": r["merchant"],
+                    "occurrences": int(r["occurrences"]),
+                    "avg_amount": float(r["avg_amount"]) if r["avg_amount"] is not None else 0.0,
+                    "last_seen": r["last_seen"],
+                    "plaid_category": r["plaid_category"],
+                    "current_line_item": cls_row["li_name"] if cls_row else None,
+                    "current_ledger": cls_row["ledger_name"] if cls_row else None,
+                }
+            )
+        return {"merchants": merchants}
+    finally:
+        conn.close()
+
+
+# ---------------------------------------------------------------------------
 # Report tools
 # ---------------------------------------------------------------------------
 
