@@ -101,7 +101,7 @@ Link modal and authenticate normally.
 ## First Run
 
 When you visit `http://127.0.0.1:6789` for the first time, you see a
-small setup wizard (4 short screens):
+small setup wizard (6 short screens):
 
 1. **Set a password** - protects your local dashboard.
 2. **Pick how you want to be notified** about ambiguous transactions:
@@ -110,7 +110,14 @@ small setup wizard (4 short screens):
    - "Just show me a banner in the UI"
 3. **Connect your first bank** - click **+ Connect a bank** and follow
    the Plaid login.
-4. **Done.** Lands on your Profile page.
+4. **Rental properties** *(optional)* - add any rental properties you want to
+   track. Each property gets its own ledger (Rent income, Mortgage, Property tax,
+   Maintenance, Insurance, Utilities) and can be linked to a specific bank account
+   so its transactions auto-route there.
+5. **Investment accounts** *(optional)* - Friday detects Wealthsimple, Questrade,
+   and other investment accounts you’ve linked. Check any you want tracked in a
+   shared **Investments** ledger.
+6. **Done.** Lands on your Dashboard.
 
 The system picks sensible defaults for everything else (Personal ledger
 with standard rows, daily 6 AM sync, LLM confidence threshold 0.75).

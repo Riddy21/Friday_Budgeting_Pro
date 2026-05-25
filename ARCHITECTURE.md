@@ -254,8 +254,10 @@ Only what HAL actually needs to call. Grouped:
 
 ### Setup (one-shot)
 - `setup_status()` → returns `not_started | in_progress | complete`
-- `apply_initial_setup(banks_to_link[], extra_ledgers[], hints[])` → does the
+- `apply_initial_setup(banks_to_link[], extra_ledgers[], hints[], rental_properties[], investment_account_ids[])` → does the
   whole setup in one call. HAL asks 2-3 questions, then calls this.
+  - `rental_properties`: list of `{name, description?, account_id?}` — each creates a property ledger and optionally links the bank account.
+  - `investment_account_ids`: list of account IDs — creates a single "Investments" ledger (if non-empty) and links all accounts.
 
 ### Banks
 - `start_link()` → returns URL to open Plaid Link
@@ -504,11 +506,20 @@ transaction review, classification rules editor, charts.
 
 ### What each page does
 
-**Setup wizard** (`/setup`) — one-time, four short steps
+**Setup wizard** (`/setup`) — one-time, six short steps
 1. Welcome + set password
 2. Pick notification preference (OpenClaw chat / macOS notifications / in-UI)
 3. Connect first bank via Plaid Link
-4. Done — redirects to `/dashboard`
+4. Rental properties — optional; enter name, description, and linked bank account
+   per property; creates a property ledger and links the account
+5. Investment accounts — optional; auto-detects Wealthsimple/Questrade/etc. accounts;
+   checking any creates a shared "Investments" ledger and links the accounts
+6. Done — redirects to `/dashboard`
+
+Wizard state is held in `_wizard_state` (server-side dict keyed by a random
+cookie token). Steps 4 and 5 store `rental_properties` and
+`investment_account_ids` in wizard state; step 6 passes them to
+`apply_initial_setup`.
 
 After completion, `/setup` returns 404. Re-running setup means resetting
 the DB (a future operation, not a v0.1 feature).

@@ -80,13 +80,21 @@ def _complete_setup(client: TestClient, password: str = "testpassword123") -> No
     r = client.post("/setup/2", data={"notification_pref": "openclaw"})
     assert r.status_code == 200, f"Setup step 2 failed: {r.status_code}"
 
-    # Step 3: ledger name
+    # Step 3: bank link (skip)
     r = client.post("/setup/3", data={"ledger_name": "Personal"})
     assert r.status_code == 200, f"Setup step 3 failed: {r.status_code}"
 
-    # Step 4: final — should redirect to /profile
-    r = client.post("/setup/4", data={})
-    assert r.status_code == 302, f"Setup step 4 failed: {r.status_code}"
+    # Step 4: rental properties (skip)
+    r = client.post("/setup/4", data={"action": "skip"})
+    assert r.status_code == 200, f"Setup step 4 failed: {r.status_code}"
+
+    # Step 5: investment accounts (skip)
+    r = client.post("/setup/5", data={"action": "skip"})
+    assert r.status_code == 200, f"Setup step 5 failed: {r.status_code}"
+
+    # Step 6: final — should redirect to /dashboard
+    r = client.post("/setup/6", data={})
+    assert r.status_code == 302, f"Setup step 6 failed: {r.status_code}"
     assert r.headers["location"] == "/dashboard"
 
 
