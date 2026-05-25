@@ -208,6 +208,10 @@ Default rules can be **disabled** but not deleted.  You can add your own rules
 (priority 100+) and reorder them via MCP tools: `list_rules`, `add_rule`,
 `update_rule`, `reorder_rules`, `disable_rule`, `enable_rule`, `delete_rule`.
 
+All active rules are visible in the **Settings page** (`/settings`) under
+*Classification Rules*, shown in priority order.  The table is read-only —
+editing is done via MCP/chat.
+
 ---
 
 ## With OpenClaw (and any other MCP client)

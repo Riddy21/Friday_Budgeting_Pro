@@ -44,6 +44,7 @@ from fastapi.templating import Jinja2Templates
 
 import server.paths as _paths
 from server.db import get_db
+from server.main import list_rules as _list_rules
 
 # ── Recovery token store (in-memory, 10-min TTL) ──────────────────────────
 # Shared with the MCP tools (reset_ui_password) via ui.auth so both operate
@@ -978,6 +979,11 @@ def settings_get(request: Request):
     finally:
         conn.close()
     saved = request.query_params.get("saved") == "1"
+    # Load classification rules (gracefully degrade if DB not ready)
+    try:
+        rules = _list_rules().get("rules", [])
+    except Exception:
+        rules = []
     return templates.TemplateResponse(
         request,
         "settings.html",
@@ -988,6 +994,7 @@ def settings_get(request: Request):
             "timezone": timezone,
             "timezones": _VALID_TIMEZONES,
             "saved": saved,
+            "rules": rules,
         },
     )
 
