@@ -214,29 +214,114 @@ def test_list_filter_source_manual(seeded_db):
 # ---------------------------------------------------------------------------
 
 
-def test_get_needs_review_returns_only_unreviewed(seeded_db):
-    result = main_module.get_needs_review()
-    entries = result["entries"]
-    assert len(entries) == 2
-    for e in entries:
-        assert e["reviewed"] == 0
+def _seed_needs_review_db(db_path: Path) -> dict:
+    """Seed a DB with bank infra + uncertain/unrouted entries for get_needs_review tests."""
+    import time
+
+    conn = get_db(db_path)
+
+    user_id = _uid()
+    conn.execute(
+        "INSERT INTO users (id, username, password_hash, created_at) VALUES (?, ?, ?, ?)",
+        (user_id, "testuser", "hash", int(time.time())),
+    )
+    conn_id = _uid()
+    conn.execute(
+        "INSERT INTO bank_connections "
+        "(id, plaid_access_token_encrypted, institution_name, user_id, plaid_env) "
+        "VALUES (?, ?, ?, ?, ?)",
+        (conn_id, "enc", "RBC", user_id, "sandbox"),
+    )
+    acct_id = _uid()
+    conn.execute(
+        "INSERT INTO bank_accounts (id, connection_id, plaid_account_id, name) VALUES (?, ?, ?, ?)",
+        (acct_id, conn_id, _uid(), "Chequing"),
+    )
+
+    # 2 uncertain transactions, 1 reviewed (should not appear)
+    txn1 = _uid()
+    txn2 = _uid()
+    txn3 = _uid()
+    for txn_id, merchant in [(txn1, "Mystery A"), (txn2, "Mystery B"), (txn3, "Known")]:
+        conn.execute(
+            "INSERT INTO transactions (id, bank_account_id, plaid_transaction_id, date, merchant, amount) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (txn_id, acct_id, _uid(), "2024-01-01", merchant, 10.0),
+        )
+
+    # Uncertain entry (uncertain=1, unreviewed)
+    e1 = _uid()
+    conn.execute(
+        "INSERT INTO transaction_entries "
+        "(id, transaction_id, ledger_id, line_item_id, amount, entry_type, source, "
+        " confidence, uncertain, reasoning, reviewed) "
+        "VALUES (?, ?, NULL, NULL, 10.0, 'spending', 'llm', 0.4, 1, 'Not sure', 0)",
+        (e1, txn1),
+    )
+    # Unrouted entry (line_item_id IS NULL, uncertain=0 but still unrouted)
+    e2 = _uid()
+    conn.execute(
+        "INSERT INTO transaction_entries "
+        "(id, transaction_id, ledger_id, line_item_id, amount, entry_type, source, "
+        " confidence, uncertain, reasoning, reviewed) "
+        "VALUES (?, ?, NULL, NULL, 10.0, 'spending', 'llm', 0.5, 0, 'Unrouted', 0)",
+        (e2, txn2),
+    )
+    # Reviewed entry (should NOT appear)
+    ledger_id = _uid()
+    li_id = _uid()
+    conn.execute("INSERT INTO ledgers (id, name) VALUES (?, ?)", (ledger_id, "Household"))
+    conn.execute(
+        "INSERT INTO line_items (id, ledger_id, name) VALUES (?, ?, ?)",
+        (li_id, ledger_id, "Groceries"),
+    )
+    e3 = _uid()
+    conn.execute(
+        "INSERT INTO transaction_entries "
+        "(id, transaction_id, ledger_id, line_item_id, amount, entry_type, source, "
+        " confidence, uncertain, reviewed) "
+        "VALUES (?, ?, ?, ?, 10.0, 'spending', 'llm', 0.95, 1, 1)",
+        (e3, txn3, ledger_id, li_id),
+    )
+
+    conn.commit()
+    conn.close()
+    return {"user_id": user_id}
 
 
-def test_get_needs_review_shape(seeded_db):
-    """Each entry must have the joined fields from both tables."""
+@pytest.fixture
+def needs_review_db(tmp_path: Path, monkeypatch):
+    """DB seeded with uncertain/unrouted entries for get_needs_review tests."""
+    db_path = tmp_path / "nr_test.db"
+    init_db(db_path)
+    ids = _seed_needs_review_db(db_path)
+    monkeypatch.setattr(server.paths, "DB_PATH", db_path)
+    monkeypatch.setattr("server.main.get_active_user_id", lambda _: ids["user_id"])
+    return ids
+
+
+def test_get_needs_review_returns_only_unreviewed(needs_review_db):
+    """get_needs_review returns uncertain + unrouted transactions, not reviewed ones."""
     result = main_module.get_needs_review()
-    entries = result["entries"]
-    assert len(entries) > 0
+    assert "transactions" in result
+    transactions = result["transactions"]
+    assert len(transactions) == 2
+
+
+def test_get_needs_review_shape(needs_review_db):
+    """Each transaction must have the expected fields."""
+    result = main_module.get_needs_review()
+    transactions = result["transactions"]
+    assert len(transactions) > 0
     required_fields = {
         "id",
-        "transaction_id",
-        "ledger_id",
-        "line_item_id",
-        "amount",
-        "source",
-        "reviewed",
-        "date",
         "merchant",
+        "amount",
+        "date",
+        "account_name",
+        "reasoning",
     }
-    for e in entries:
-        assert required_fields.issubset(e.keys()), f"Missing fields: {required_fields - e.keys()}"
+    for txn in transactions:
+        assert required_fields.issubset(
+            txn.keys()
+        ), f"Missing fields: {required_fields - txn.keys()}"

@@ -164,6 +164,10 @@ other MCP client).
 
 ## What AI Does for You
 
+After every sync, `classify_pending_transactions` automatically routes all
+newly imported transactions into your ledger line items.  No manual step
+needed — just sync and your budget is up to date.
+
 Every transaction goes through a three-tier classifier:
 
 1. **Rules (LLM-first)** - the LLM evaluates your priority-ordered
@@ -175,7 +179,13 @@ Every transaction goes through a three-tier classifier:
    reasons about the transaction using your hints, full ledger tree, and
    recent similar transactions, and auto-routes if confident enough.
 3. **Review queue** - if it's unsure, the transaction lands in a review
-   queue. You'll get a notification through your chosen channel.
+   queue (`get_needs_review`). You'll get a notification through your
+   chosen channel.
+
+**Transfer detection**: before classification, each transaction is checked
+against internal transfer pairs (same amount, different accounts, within
+3 days). Detected transfers are passed as context to the LLM so they are
+classified as `transfer` rather than `spending`.
 
 After 3 successful classifications of the same merchant, it becomes a
 Tier 1 legacy rule automatically. The longer you use it, the less it asks.
