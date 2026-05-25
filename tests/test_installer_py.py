@@ -142,9 +142,9 @@ def test_install_creates_config_when_missing(tmp_path: Path) -> None:
 
     assert config_path.exists(), "config.json was not created"
     data = json.loads(config_path.read_text())
-    assert "mcpServers" in data
-    assert "friday-budgeting-pro" in data["mcpServers"]
-    entry = data["mcpServers"]["friday-budgeting-pro"]
+    assert "mcp" in data
+    assert "friday-budgeting-pro" in data["mcp"]["servers"]
+    entry = data["mcp"]["servers"]["friday-budgeting-pro"]
     assert entry["command"] == sys.executable
     assert "-m" in entry["args"]
     assert "server.main" in entry["args"]
@@ -157,8 +157,10 @@ def test_install_adds_to_existing_config_without_clobbering(tmp_path: Path) -> N
     config_path = tmp_path / ".openclaw" / "config.json"
     config_path.parent.mkdir(parents=True, exist_ok=True)
     existing = {
-        "mcpServers": {
-            "other-server": {"command": "node", "args": ["index.js"]},
+        "mcp": {
+            "servers": {
+                "other-server": {"command": "node", "args": ["index.js"]},
+            }
         },
         "someOtherKey": "preserved",
     }
@@ -168,8 +170,8 @@ def test_install_adds_to_existing_config_without_clobbering(tmp_path: Path) -> N
         installer.install(install_dir=tmp_path)
 
     data = json.loads(config_path.read_text())
-    assert "friday-budgeting-pro" in data["mcpServers"]
-    assert "other-server" in data["mcpServers"], "pre-existing entry was clobbered"
+    assert "friday-budgeting-pro" in data["mcp"]["servers"]
+    assert "other-server" in data["mcp"]["servers"], "pre-existing entry was clobbered"
     assert data["someOtherKey"] == "preserved", "non-mcpServers key was clobbered"
 
 
@@ -184,8 +186,8 @@ def test_install_adds_when_no_mcp_servers_key(tmp_path: Path) -> None:
         installer.install(install_dir=tmp_path)
 
     data = json.loads(config_path.read_text())
-    assert "mcpServers" in data
-    assert "friday-budgeting-pro" in data["mcpServers"]
+    assert "mcp" in data
+    assert "friday-budgeting-pro" in data["mcp"]["servers"]
     assert data["someOtherKey"] == 42
 
 
@@ -239,9 +241,9 @@ def test_install_is_idempotent(tmp_path: Path) -> None:
     config_path = tmp_path / ".openclaw" / "config.json"
     data = json.loads(config_path.read_text())
     assert isinstance(
-        data["mcpServers"]["friday-budgeting-pro"], dict
+        data["mcp"]["servers"]["friday-budgeting-pro"], dict
     ), "Re-running install() corrupted the mcpServers entry"
-    # Ensure there's exactly one top-level "mcpServers" key (no duplication).
+    # Ensure there's exactly one top-level "mcp" key (no duplication).
     raw = config_path.read_text()
-    assert raw.count('"mcpServers"') == 1, "mcpServers key duplicated"
+    assert raw.count('"mcp"') == 1, "mcpServers key duplicated"
     assert raw.count('"friday-budgeting-pro"') == 1, "friday-budgeting-pro entry duplicated"

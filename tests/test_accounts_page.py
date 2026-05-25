@@ -272,3 +272,102 @@ class TestAccountsNamePatch:
         _, acct1_id, _ = _seed_accounts(db_path, user_id)
         r = client.patch(f"/accounts/{acct1_id}/name", json={"name": ""})
         assert r.status_code == 400
+
+
+# ---------------------------------------------------------------------------
+# Balance display: credit card negation and multi-currency
+# ---------------------------------------------------------------------------
+
+
+def _seed_credit_account(
+    db_path, user_id, *, balance: float = 434.11, currency: str = "CAD"
+) -> tuple[str, str]:
+    """Insert a credit-type account; return (connection_id, account_id)."""
+    from server.db import get_db
+
+    conn_id = str(uuid.uuid4())
+    acct_id = str(uuid.uuid4())
+    db = get_db(db_path)
+    db.execute(
+        "INSERT INTO bank_connections "
+        "(id, plaid_item_id, plaid_access_token_encrypted, institution_name, status, user_id) "
+        "VALUES (?, ?, ?, ?, ?, ?)",
+        (conn_id, "item-cc", "enc-cc", "Visa Bank", "active", user_id),
+    )
+    db.execute(
+        "INSERT INTO bank_accounts "
+        "(id, connection_id, plaid_account_id, name, type, subtype, currency, balance_current) "
+        "VALUES (?, ?, ?, ?, 'credit', 'credit card', ?, ?)",
+        (acct_id, conn_id, "plaid-cc-acct", "Visa Infinite", currency, balance),
+    )
+    db.commit()
+    db.close()
+    return conn_id, acct_id
+
+
+def _seed_usd_account(db_path, user_id, *, balance: float = 1802.13) -> tuple[str, str]:
+    """Insert a USD depository account; return (connection_id, account_id)."""
+    from server.db import get_db
+
+    conn_id = str(uuid.uuid4())
+    acct_id = str(uuid.uuid4())
+    db = get_db(db_path)
+    db.execute(
+        "INSERT INTO bank_connections "
+        "(id, plaid_item_id, plaid_access_token_encrypted, institution_name, status, user_id) "
+        "VALUES (?, ?, ?, ?, ?, ?)",
+        (conn_id, "item-usd", "enc-usd", "US Bank", "active", user_id),
+    )
+    db.execute(
+        "INSERT INTO bank_accounts "
+        "(id, connection_id, plaid_account_id, name, type, subtype, currency, balance_current) "
+        "VALUES (?, ?, ?, ?, 'depository', 'checking', 'USD', ?)",
+        (acct_id, conn_id, "plaid-usd-acct", "US Chequing", balance),
+    )
+    db.commit()
+    db.close()
+    return conn_id, acct_id
+
+
+class TestBalanceDisplay:
+    def test_credit_card_balance_is_negative(self, authed_client):
+        """Credit card balance (434.11 owed) must show as -434.11 on the page."""
+        client, db_path, user_id = authed_client
+        _seed_credit_account(db_path, user_id, balance=434.11)
+        r = client.get("/accounts")
+        assert r.status_code == 200
+        assert "-434.11" in r.text, "Credit card balance should be displayed as negative"
+
+    def test_credit_card_no_owing_label(self, authed_client):
+        """Credit card balance must NOT include an 'owing' label."""
+        client, db_path, user_id = authed_client
+        _seed_credit_account(db_path, user_id, balance=434.11)
+        r = client.get("/accounts")
+        assert "owing" not in r.text.lower()
+
+    def test_depository_balance_is_positive(self, authed_client):
+        """Regular chequing balance must remain positive."""
+        client, db_path, user_id = authed_client
+        _, acct1_id, _ = _seed_accounts(db_path, user_id)
+        r = client.get("/accounts")
+        assert "4992.34" in r.text, "Depository balance should be shown as-is (positive)"
+
+    def test_usd_account_shows_us_dollar_symbol(self, authed_client):
+        """USD accounts must display with US$ prefix in native currency."""
+        client, db_path, user_id = authed_client
+        _seed_usd_account(db_path, user_id, balance=1802.13)
+        r = client.get("/accounts")
+        assert r.status_code == 200
+        assert "US$" in r.text, "USD account should show US$ prefix"
+        assert "1802.13" in r.text or "1,802.13" in r.text
+
+    def test_usd_account_no_cad_conversion(self, authed_client):
+        """USD account must show the native USD amount, not a CAD-converted value."""
+        client, db_path, user_id = authed_client
+        # Use a round number easy to detect if conversion (e.g. ×1.36) occurred
+        _seed_usd_account(db_path, user_id, balance=1000.00)
+        r = client.get("/accounts")
+        # The page must contain the raw USD amount
+        assert "1000.00" in r.text or "1,000.00" in r.text
+        # And should not show a suspiciously converted CAD amount instead
+        assert "US$" in r.text

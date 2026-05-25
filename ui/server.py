@@ -862,11 +862,14 @@ def api_sync(request: Request):
     if not _is_authenticated(request):
         return JSONResponse({"error": "Unauthorized"}, status_code=401)
     import server.main as _sm
+
     try:
         result = _sm.sync()
         return JSONResponse(result)
     except Exception as exc:
-        import logging; logging.getLogger(__name__).error("api_sync: %s", exc)
+        import logging
+
+        logging.getLogger(__name__).error("api_sync: %s", exc)
         return JSONResponse({"status": "error", "detail": str(exc)}, status_code=500)
 
 
