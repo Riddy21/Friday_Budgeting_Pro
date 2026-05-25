@@ -20,7 +20,6 @@ from pathlib import Path
 
 import pytest
 
-import server.paths
 from server.db import get_db, init_db
 from ui.auth import create_session, create_user  # noqa: F401 (create_session used in authed_user)
 
