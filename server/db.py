@@ -149,6 +149,10 @@ def init_db(path: str | Path) -> None:
         conn.execute("UPDATE transactions SET currency = 'CAD' WHERE currency IS NULL")
         conn.commit()
 
+        # Migration: authorized_datetime for time-accurate ordering
+        _add_col_if_missing(conn, "transactions", "authorized_datetime", "TEXT")
+        conn.commit()
+
         # Migration: natural-language corrections (#173)
         _add_col_if_missing(conn, "transaction_entries", "source", "TEXT")
         _add_col_if_missing(conn, "transaction_entries", "corrected_from_line_item_id", "TEXT")

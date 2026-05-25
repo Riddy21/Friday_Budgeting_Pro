@@ -89,6 +89,7 @@ CREATE TABLE IF NOT EXISTS transactions (
   bank_account_id TEXT REFERENCES bank_accounts(id),
   plaid_transaction_id TEXT UNIQUE,
   date TEXT NOT NULL,                          -- YYYY-MM-DD (Plaid-localised, no conversion needed)
+  authorized_datetime TEXT,                    -- ISO-8601 datetime with time (e.g. 2024-01-15T14:23:00Z); NULL when Plaid omits it
   merchant TEXT,
   amount REAL NOT NULL,                        -- original amount in account's native currency
   currency TEXT DEFAULT 'CAD',                 -- ISO 4217 (from Plaid iso_currency_code)

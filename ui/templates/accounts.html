@@ -142,7 +142,7 @@ function buildTxnTable(txns) {
     const sign     = amt < 0 ? '+' : '\u2212';
     const category = t.line_item_name ? escHtml((t.ledger_name ? t.ledger_name + ' · ' : '') + t.line_item_name) : '<span style="color:#94a3b8">—</span>';
     return `<tr style="border-top:1px solid #f1f5f9">
-      <td style="padding:0.3rem 0.5rem;color:#64748b;white-space:nowrap;font-size:0.82rem">${escHtml(t.date||'')}</td>
+      <td style="padding:0.3rem 0.5rem;color:#64748b;white-space:nowrap;font-size:0.82rem" title="${escHtml(t.authorized_datetime||t.date||'')}">${(()=>{ if(t.authorized_datetime){ const d=new Date(t.authorized_datetime); if(!isNaN(d)){return escHtml(d.toLocaleDateString('en-CA')+' '+d.toLocaleTimeString('en-CA',{hour:'2-digit',minute:'2-digit'}));} } return escHtml(t.date||''); })()}</td>
       <td style="padding:0.3rem 0.5rem;font-size:0.85rem">${escHtml(t.merchant||'(unknown)')}</td>
       <td style="padding:0.3rem 0.5rem;text-align:right;font-weight:600;color:${amtColor};white-space:nowrap;font-size:0.85rem;font-variant-numeric:tabular-nums">${sign}${amtStr}</td>
       <td style="padding:0.3rem 0.5rem">${badge}</td>

@@ -963,7 +963,7 @@ def account_transactions_get(request: Request, account_id: str, limit: int = 50)
     try:
         rows = conn.execute(
             """
-            SELECT t.id, t.date, t.merchant, t.amount,
+            SELECT t.id, t.date, t.authorized_datetime, t.merchant, t.amount,
                    COALESCE(t.currency, 'CAD') AS currency,
                    te.entry_type, te.source, te.uncertain,
                    li.name AS line_item_name,
@@ -973,7 +973,9 @@ def account_transactions_get(request: Request, account_id: str, limit: int = 50)
               LEFT JOIN line_items li ON li.id = te.line_item_id
               LEFT JOIN ledgers    l  ON l.id  = te.ledger_id
              WHERE t.bank_account_id = ?
-             ORDER BY t.date DESC, t.rowid DESC
+             ORDER BY
+               COALESCE(t.authorized_datetime, t.date) DESC,
+               t.rowid DESC
              LIMIT ?
             """,
             (account_id, limit),
