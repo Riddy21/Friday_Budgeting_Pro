@@ -50,17 +50,27 @@
             {% set balance = acct.balance_current if acct.balance_current is not none else acct.balance_available %}
             {% if balance is not none %}
               {% set currency = acct.currency or 'CAD' %}
+              {# Credit cards: Plaid returns amount owed as positive — negate for display #}
+              {% set display_balance = -balance if acct.type == 'credit' else balance %}
               {% if currency == 'CAD' %}C$
               {% elif currency == 'USD' %}US$
               {% elif currency == 'GBP' %}£
               {% elif currency == 'EUR' %}€
-              {% else %}{{ currency }} {% endif %}{{ "%.2f"|format(balance) }}
+              {% else %}{{ currency }} {% endif %}{{ "%.2f"|format(display_balance) }}
             {% else %}
               <span style="color:#94a3b8">—</span>
             {% endif %}
           </td>
           <td style="padding:0.55rem 0.6rem;text-align:right">
             <button class="btn btn-sm btn-secondary rename-btn" data-id="{{ acct.id }}">rename</button>
+            <button class="btn btn-sm btn-secondary txn-toggle-btn" data-id="{{ acct.id }}" style="margin-left:0.25rem">transactions</button>
+          </td>
+        </tr>
+        <tr class="txn-expand-row" id="txn-expand-{{ acct.id }}" style="display:none">
+          <td colspan="4" style="padding:0;background:#f8fafc;border-top:1px solid #e2e8f0">
+            <div id="txn-content-{{ acct.id }}" style="padding:0.5rem 1rem 0.75rem">
+              <span style="color:#94a3b8;font-size:0.85rem">Loading…</span>
+            </div>
           </td>
         </tr>
         {% endfor %}
@@ -101,6 +111,82 @@
 </style>
 
 <script>
+// ── Transaction list toggle ──────────────────────────────────────────────
+const TXN_ENTRY_COLORS = {
+  transfer: { bg: '#eff6ff', fg: '#2563eb', border: '#93c5fd' },
+  spending:  { bg: '#fff1f2', fg: '#dc2626', border: '#fca5a5' },
+  income:    { bg: '#f0fdf4', fg: '#16a34a', border: '#86efac' },
+  savings:   { bg: '#fffbeb', fg: '#d97706', border: '#fcd34d' },
+  skip:      { bg: '#f8fafc', fg: '#94a3b8', border: '#e2e8f0' },
+};
+
+function escHtml(s) {
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+function buildTxnTable(txns) {
+  if (!txns || txns.length === 0) {
+    return '<p style="color:#94a3b8;margin:0.25rem 0;font-size:0.85rem">No transactions found for this account.</p>';
+  }
+  let rows = txns.map(t => {
+    const et  = t.entry_type || null;
+    const clr = et ? (TXN_ENTRY_COLORS[et] || { bg:'#f8fafc', fg:'#64748b', border:'#e2e8f0' }) : null;
+    const badge = et
+      ? `<span style="background:${clr.bg};color:${clr.fg};border:1px solid ${clr.border};padding:0.1rem 0.45rem;border-radius:3px;font-size:0.75rem;font-weight:700;letter-spacing:0.02em">${et.charAt(0).toUpperCase()+et.slice(1)}</span>${t.uncertain ? ' <span title="Uncertain classification" style="color:#f59e0b">&#9888;</span>' : ''}`
+      : '<span style="color:#94a3b8;font-size:0.8rem">—</span>';
+    const currency = t.currency || 'CAD';
+    const prefix   = currency === 'CAD' ? 'C$' : currency === 'USD' ? 'US$' : currency === 'GBP' ? '\u00a3' : currency === 'EUR' ? '\u20ac' : currency + '\u00a0';
+    const amt      = t.amount;
+    const amtStr   = prefix + Math.abs(amt).toFixed(2);
+    const amtColor = amt < 0 ? '#16a34a' : '#64748b';
+    const sign     = amt < 0 ? '+' : '\u2212';
+    const category = t.line_item_name ? escHtml((t.ledger_name ? t.ledger_name + ' · ' : '') + t.line_item_name) : '<span style="color:#94a3b8">—</span>';
+    return `<tr style="border-top:1px solid #f1f5f9">
+      <td style="padding:0.3rem 0.5rem;color:#64748b;white-space:nowrap;font-size:0.82rem">${escHtml(t.date||'')}</td>
+      <td style="padding:0.3rem 0.5rem;font-size:0.85rem">${escHtml(t.merchant||'(unknown)')}</td>
+      <td style="padding:0.3rem 0.5rem;text-align:right;font-weight:600;color:${amtColor};white-space:nowrap;font-size:0.85rem;font-variant-numeric:tabular-nums">${sign}${amtStr}</td>
+      <td style="padding:0.3rem 0.5rem">${badge}</td>
+      <td style="padding:0.3rem 0.5rem;color:#94a3b8;font-size:0.8rem">${category}</td>
+    </tr>`;
+  }).join('');
+  return `<table style="width:100%;border-collapse:collapse">
+    <thead><tr style="color:#94a3b8;font-size:0.75rem;text-transform:uppercase;letter-spacing:0.04em">
+      <th style="padding:0.3rem 0.5rem;text-align:left">Date</th>
+      <th style="padding:0.3rem 0.5rem;text-align:left">Merchant</th>
+      <th style="padding:0.3rem 0.5rem;text-align:right">Amount</th>
+      <th style="padding:0.3rem 0.5rem;text-align:left">Type</th>
+      <th style="padding:0.3rem 0.5rem;text-align:left">Category</th>
+    </tr></thead>
+    <tbody>${rows}</tbody>
+  </table>`;
+}
+
+document.querySelectorAll('.txn-toggle-btn').forEach(btn => {
+  let loaded = false;
+  btn.addEventListener('click', async function() {
+    const id      = btn.dataset.id;
+    const expRow  = document.getElementById('txn-expand-' + id);
+    const content = document.getElementById('txn-content-' + id);
+    if (expRow.style.display !== 'none') {
+      expRow.style.display = 'none';
+      btn.textContent = 'transactions';
+      return;
+    }
+    expRow.style.display = '';
+    btn.textContent = 'hide';
+    if (loaded) return;
+    try {
+      const resp = await fetch('/accounts/' + id + '/transactions');
+      const data = await resp.json();
+      content.innerHTML = buildTxnTable(data.transactions || []);
+      loaded = true;
+    } catch(e) {
+      content.innerHTML = '<p style="color:#dc2626;font-size:0.85rem;margin:0.25rem 0">Failed to load transactions.</p>';
+    }
+  });
+});
+
+// ── Rename ───────────────────────────────────────────────────────────────
 document.querySelectorAll('.rename-btn').forEach(btn => {
   btn.addEventListener('click', function handleRename() {
     const id = btn.dataset.id;
