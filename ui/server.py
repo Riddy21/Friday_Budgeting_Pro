@@ -490,99 +490,44 @@ async def setup_post(request: Request, step: int):
         raw = form.get("notification_channel") or form.get("notification_pref") or "openclaw_chat"
         ch = _PREF_TO_CHANNEL.get(raw, raw)
         _set_notification_channel(ch)
+        # Try to generate a Plaid link token for step 3.
+        link_token = None
+        try:
+            import server.main as _sm_link
+
+            result = _sm_link.start_link()
+            url = result.get("url", "")
+            if "token=" in url:
+                link_token = url.split("token=", 1)[1]
+        except Exception:
+            pass
         ns = {**state, "step": 3, "notification_channel": ch, "error": None}
-        resp = templates.TemplateResponse(request, "setup.html", {"step": 3, "error": None})
+        resp = templates.TemplateResponse(
+            request, "setup.html", {"step": 3, "error": None, "link_token": link_token}
+        )
         _update_wizard(resp, tok, ns)
         return resp
     elif step == 3:
-        bl = (form.get("action") or "").strip() == "done"
-        ch = state.get("notification_channel", _get_notification_channel())
-        # Gather linked accounts for the property step dropdown.
-        uid = _current_user_id(request)
-        accounts = _get_accounts(uid)
-        ns = {**state, "step": 4, "bank_linked": bl, "error": None}
-        resp = templates.TemplateResponse(
-            request,
-            "setup.html",
-            {
-                "step": 4,
-                "error": None,
-                "notification_channel": ch,
-                "bank_linked": bl,
-                "accounts": accounts,
-            },
-        )
-        _update_wizard(resp, tok, ns)
-        return resp
-    elif step == 4:
-        # Rental properties step.
+        # Final wizard step — bank linked (via Plaid) or skipped.
+        # Either way: run apply_initial_setup and go to the dashboard.
         action = (form.get("action") or "").strip()
-        rental_properties: list[dict] = []
-        if action != "skip" and form.get("has_properties") == "yes":
-            names = form.getlist("property_name[]")
-            descriptions = form.getlist("property_description[]")
-            account_ids = form.getlist("property_account_id[]")
-            for name_val, desc_val, acct_val in zip(names, descriptions, account_ids):
-                name_val = name_val.strip()
-                if name_val:
-                    rental_properties.append(
-                        {
-                            "name": name_val,
-                            "description": desc_val.strip() or None,
-                            "account_id": acct_val.strip() or None,
-                        }
-                    )
-        # Gather investment-candidate accounts for the next step.
-        uid = _current_user_id(request)
-        accounts = _get_accounts(uid)
-        investment_accounts = [
-            a
-            for a in accounts
-            if (
-                (a.get("type") or "").lower() == "investment"
-                or any(
-                    kw in (a.get("institution_name") or "").lower()
-                    for kw in ("wealthsimple", "questrade", "fidelity", "vanguard", "schwab")
-                )
-            )
-        ]
-        ns = {**state, "step": 5, "rental_properties": rental_properties, "error": None}
-        resp = templates.TemplateResponse(
-            request,
-            "setup.html",
-            {
-                "step": 5,
-                "error": None,
-                "investment_accounts": investment_accounts,
-            },
-        )
-        _update_wizard(resp, tok, ns)
-        return resp
-    elif step == 5:
-        # Investment accounts step.
-        action = (form.get("action") or "").strip()
-        investment_account_ids: list[str] = []
-        if action != "skip":
-            investment_account_ids = [v for v in form.getlist("investment_account_id") if v]
-        ns = {**state, "step": 6, "investment_account_ids": investment_account_ids, "error": None}
-        resp = templates.TemplateResponse(
-            request,
-            "setup.html",
-            {"step": 6, "error": None},
-        )
-        _update_wizard(resp, tok, ns)
-        return resp
-    elif step == 6:
+        if action == "bank_linked":
+            public_token = (form.get("public_token") or "").strip()
+            if public_token:
+                try:
+                    import server.main as _sm_cl
+
+                    _sm_cl.complete_link(public_token=public_token)
+                except Exception:
+                    pass
         import server.main as _sm
 
-        rental_properties = state.get("rental_properties") or []
-        investment_account_ids = state.get("investment_account_ids") or []
         _sm.apply_initial_setup(
             banks_to_link=[],
             extra_ledgers=[],
             hints=[],
-            rental_properties=rental_properties,
-            investment_account_ids=investment_account_ids,
+            rental_properties=[],
+            investment_account_ids=[],
         )
         redir = _redirect("/dashboard")
         st = state.get("session_token")

@@ -54,8 +54,9 @@ def _complete_setup(client: TestClient, password: str = "testpassword123") -> No
     r = client.post("/setup/1", data={"password": password, "password_confirm": password})
     assert r.status_code == 200
     r = client.post("/setup/2", data={"notification_pref": "openclaw"})
-    # Accept any 2xx or redirect — wizard may have more steps
-    assert r.status_code in (200, 302, 303)
+    assert r.status_code == 200
+    r = client.post("/setup/3", data={"action": "skip"})
+    assert r.status_code == 302
 
 
 def _login(client: TestClient, password: str = "testpassword123") -> TestClient:

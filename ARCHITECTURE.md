@@ -608,20 +608,17 @@ transaction review, classification rules editor, charts.
 
 ### What each page does
 
-**Setup wizard** (`/setup`) — one-time, six short steps
+**Setup wizard** (`/setup`) — one-time, three short steps
 1. Welcome + set password
 2. Pick notification preference (OpenClaw chat / macOS notifications / in-UI)
-3. Connect first bank via Plaid Link
-4. Rental properties — optional; enter name, description, and linked bank account
-   per property; creates a property ledger and links the account
-5. Investment accounts — optional; auto-detects Wealthsimple/Questrade/etc. accounts;
-   checking any creates a shared "Investments" ledger and links the accounts
-6. Done — redirects to `/dashboard`
+3. Connect first bank via Plaid Link (optional — can skip and connect later)
+   → calls `apply_initial_setup` and redirects to `/dashboard`
 
 Wizard state is held in `_wizard_state` (server-side dict keyed by a random
-cookie token). Steps 4 and 5 store `rental_properties` and
-`investment_account_ids` in wizard state; step 6 passes them to
-`apply_initial_setup`.
+cookie token). Step 3 always calls `apply_initial_setup` on completion
+(bank linked or skipped). Rental properties and investment ledgers are set
+up later via the MCP tools (`create_property_ledger`, `create_investment_ledger`)
+at the user’s request through chat.
 
 After completion, `/setup` returns 404. Re-running setup means resetting
 the DB (a future operation, not a v0.1 feature).
@@ -915,7 +912,7 @@ friday-budgeting-pro/
     ├── auth.py              ← argon2 + session cookies + rate limit
     ├── templates/
     │   ├── base.html
-    │   ├── setup.html           ← first-run wizard (4 steps)
+    │   ├── setup.html           ← first-run wizard (3 steps)
     │   ├── login.html           ← password login + forgot link
     │   ├── profile.html         ← settings + sync/export + linked accounts
     │   ├── ledgers.html         ← minimal ledger / line-item editor

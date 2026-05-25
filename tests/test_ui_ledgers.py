@@ -56,13 +56,7 @@ def _complete_setup(client: TestClient, password: str = "testpass123") -> None:
     assert r.status_code == 200
     r = client.post("/setup/2", data={"notification_pref": "openclaw"})
     assert r.status_code == 200
-    r = client.post("/setup/3", data={"ledger_name": "Personal"})
-    assert r.status_code == 200
-    r = client.post("/setup/4", data={"action": "skip"})
-    assert r.status_code == 200
-    r = client.post("/setup/5", data={"action": "skip"})
-    assert r.status_code == 200
-    r = client.post("/setup/6", data={})
+    r = client.post("/setup/3", data={"action": "skip"})
     assert r.status_code == 302
 
 

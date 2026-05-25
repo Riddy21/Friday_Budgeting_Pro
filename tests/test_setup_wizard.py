@@ -1,15 +1,13 @@
 """
-tests/test_setup_wizard.py — Tests for the 6-step setup wizard.
+tests/test_setup_wizard.py — Tests for the 3-step setup wizard.
 
 Covers:
   - GET /setup on empty DB → step 1
   - POST /setup/1 validation errors (mismatch, too short)
   - POST /setup/1 success → password hash set, session cookie returned, advance to step 2
   - POST /setup/2 → notification_channel persisted, advance to step 3
-  - POST /setup/3 skip → advance to step 4 (rental properties)
-  - POST /setup/4 skip → advance to step 5 (investments)
-  - POST /setup/5 skip → advance to step 6 (done)
-  - POST /setup/6 → apply_initial_setup called, redirect to /dashboard
+  - POST /setup/3 skip → apply_initial_setup called, redirect to /dashboard
+  - POST /setup/3 bank_linked → complete_link called, apply_initial_setup called, redirect to /dashboard
   - After complete → GET /setup → 404
   - Redirect-to-setup middleware regression (non-setup routes redirect when no password)
 """
@@ -64,10 +62,22 @@ def _wizard_through_step2(client: TestClient, channel: str = "openclaw_chat") ->
     assert r.status_code == 200, f"step 2 returned {r.status_code}"
 
 
-def _wizard_through_step3(client: TestClient) -> None:
+def _wizard_complete(client: TestClient) -> None:
+    """Drive wizard through all 3 steps (skip bank) and mock apply_initial_setup."""
     _wizard_through_step2(client)
-    r = client.post("/setup/3", data={"action": "skip"})
-    assert r.status_code == 200, f"step 3 returned {r.status_code}"
+    with patch("server.main.apply_initial_setup") as mock_setup:
+        mock_setup.return_value = {
+            "status": "ok",
+            "ledgers_created": [],
+            "line_items_created": 0,
+            "hints_created": 0,
+            "banks_to_link": [],
+            "properties_created": 0,
+            "investment_ledger_id": None,
+            "cron_registered": False,
+        }
+        r = client.post("/setup/3", data={"action": "skip"})
+    assert r.status_code == 302, f"step 3 expected redirect, got {r.status_code}"
 
 
 # ---------------------------------------------------------------------------
@@ -259,67 +269,14 @@ class TestSetupStep2:
 
 
 # ---------------------------------------------------------------------------
-# Tests — POST /setup/3 skip
+# Tests — POST /setup/3 (bank connection — final wizard step)
 # ---------------------------------------------------------------------------
 
 
 class TestSetupStep3:
-    def test_skip_advances_to_step4(self, client):
+    def test_skip_calls_apply_initial_setup_and_redirects(self, client):
+        """Skipping bank at step 3 should run apply_initial_setup and redirect to /dashboard."""
         _wizard_through_step2(client)
-        r = client.post("/setup/3", data={"action": "skip"})
-        assert r.status_code == 200
-        # Step 4 (rental properties) content should be rendered.
-        assert (
-            b"rental" in r.content.lower()
-            or b"propert" in r.content.lower()
-            or b"Properties" in r.content
-        )
-
-    def test_no_action_treated_as_skip(self, client):
-        """Sending no action field (e.g. legacy ledger_name form) advances to step 4."""
-        _wizard_through_step2(client)
-        r = client.post("/setup/3", data={"ledger_name": "Personal"})
-        assert r.status_code == 200
-
-
-# ---------------------------------------------------------------------------
-# Tests — POST /setup/4 (rental properties)
-# ---------------------------------------------------------------------------
-
-
-class TestSetupStep4:
-    def test_skip_advances_to_step5(self, client):
-        _wizard_through_step3(client)
-        r = client.post("/setup/4", data={"action": "skip"})
-        assert r.status_code == 200
-        assert b"Investment" in r.content or b"investment" in r.content.lower()
-
-    def test_continue_without_checkbox_advances_to_step5(self, client):
-        _wizard_through_step3(client)
-        r = client.post("/setup/4", data={"action": "continue"})
-        assert r.status_code == 200
-        assert b"Investment" in r.content or b"investment" in r.content.lower()
-
-
-# ---------------------------------------------------------------------------
-# Tests — POST /setup/5 (investments) + /setup/6 (final)
-# ---------------------------------------------------------------------------
-
-
-class TestSetupStep5And6:
-    def _through_step4(self, client):
-        _wizard_through_step3(client)
-        client.post("/setup/4", data={"action": "skip"})
-
-    def test_step5_skip_advances_to_step6(self, client):
-        self._through_step4(client)
-        r = client.post("/setup/5", data={"action": "skip"})
-        assert r.status_code == 200
-        assert b"set" in r.content.lower() or b"Dashboard" in r.content
-
-    def test_apply_initial_setup_called_at_step6(self, client):
-        self._through_step4(client)
-        client.post("/setup/5", data={"action": "skip"})
         with patch("server.main.apply_initial_setup") as mock_setup:
             mock_setup.return_value = {
                 "status": "ok",
@@ -331,15 +288,57 @@ class TestSetupStep5And6:
                 "investment_ledger_id": None,
                 "cron_registered": False,
             }
-            r = client.post("/setup/6", data={})
+            r = client.post("/setup/3", data={"action": "skip"})
+        mock_setup.assert_called_once()
+        assert r.status_code == 302
+        assert r.headers["location"] == "/dashboard"
+
+    def test_no_action_treated_as_skip(self, client):
+        """Sending no action field advances to dashboard (same as skip)."""
+        _wizard_through_step2(client)
+        with patch("server.main.apply_initial_setup") as mock_setup:
+            mock_setup.return_value = {
+                "status": "ok",
+                "ledgers_created": [],
+                "line_items_created": 0,
+                "hints_created": 0,
+                "banks_to_link": [],
+                "properties_created": 0,
+                "investment_ledger_id": None,
+                "cron_registered": False,
+            }
+            r = client.post("/setup/3", data={})
+        assert r.status_code == 302
+
+    def test_bank_linked_action_calls_complete_link_and_apply_setup(self, client):
+        """bank_linked action should call complete_link then apply_initial_setup."""
+        _wizard_through_step2(client)
+        with (
+            patch("server.main.complete_link") as mock_cl,
+            patch("server.main.apply_initial_setup") as mock_setup,
+        ):
+            mock_cl.return_value = {"status": "ok"}
+            mock_setup.return_value = {
+                "status": "ok",
+                "ledgers_created": [],
+                "line_items_created": 0,
+                "hints_created": 0,
+                "banks_to_link": [],
+                "properties_created": 0,
+                "investment_ledger_id": None,
+                "cron_registered": False,
+            }
+            r = client.post(
+                "/setup/3", data={"action": "bank_linked", "public_token": "public-sandbox-abc"}
+            )
+        mock_cl.assert_called_once_with(public_token="public-sandbox-abc")
         mock_setup.assert_called_once()
         assert r.status_code == 302
         assert r.headers["location"] == "/dashboard"
 
     def test_session_allows_profile_access_after_setup(self, client):
         """Session set during step 1 should let the client reach /profile."""
-        self._through_step4(client)
-        client.post("/setup/5", data={"action": "skip"})
+        _wizard_through_step2(client)
         with patch("server.main.apply_initial_setup") as mock_setup:
             mock_setup.return_value = {
                 "status": "ok",
@@ -351,7 +350,7 @@ class TestSetupStep5And6:
                 "investment_ledger_id": None,
                 "cron_registered": False,
             }
-            client.post("/setup/6", data={})
+            client.post("/setup/3", data={"action": "skip"})
         r = client.get("/profile")
         assert r.status_code == 200
 
@@ -363,21 +362,7 @@ class TestSetupStep5And6:
 
 class TestSetupAfterComplete:
     def _complete(self, client):
-        _wizard_through_step3(client)
-        client.post("/setup/4", data={"action": "skip"})
-        client.post("/setup/5", data={"action": "skip"})
-        with patch("server.main.apply_initial_setup") as mock_setup:
-            mock_setup.return_value = {
-                "status": "ok",
-                "ledgers_created": [],
-                "line_items_created": 0,
-                "hints_created": 0,
-                "banks_to_link": [],
-                "properties_created": 0,
-                "investment_ledger_id": None,
-                "cron_registered": False,
-            }
-            client.post("/setup/6", data={})
+        _wizard_complete(client)
 
     def test_get_setup_returns_404(self, client):
         self._complete(client)

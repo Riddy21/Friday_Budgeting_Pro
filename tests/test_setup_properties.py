@@ -1,6 +1,11 @@
 """
 tests/test_setup_properties.py — Tests for rental property and investment
-account setup flows added in #176.
+account MCP flows (apply_initial_setup).
+
+Note: wizard UI steps 4 (rental properties) and 5 (investments) were removed
+when the setup wizard was simplified from 6 steps to 3 steps (#feat/simplify-ui-wizard).
+Properties and investment ledgers are now set up post-setup via MCP tools
+(create_property_ledger / create_investment_ledger).
 
 Covers:
   MCP layer (apply_initial_setup):
@@ -9,13 +14,6 @@ Covers:
     - both at once: properties first, then investments
     - empty lists are no-ops for the new params
     - missing account_id in property dict skips set_account_ledger
-  UI wizard:
-    - POST /setup/4 renders step 5 (investment step)
-    - POST /setup/4 with properties populates wizard state
-    - POST /setup/4 skip → investment step with empty rental_properties
-    - POST /setup/5 renders step 6 (done)
-    - POST /setup/5 skip → step 6
-    - POST /setup/6 calls apply_initial_setup with stored properties/investments
 """
 
 from __future__ import annotations
@@ -230,170 +228,6 @@ class TestApplyInitialSetupCombined:
         conn.close()
 
 
-# ---------------------------------------------------------------------------
-# Fixtures — UI layer
-# ---------------------------------------------------------------------------
-
-
-@pytest.fixture()
-def db_path(tmp_path: Path, monkeypatch) -> Path:
-    import server.paths as paths
-
-    db = tmp_path / "ui_setup_test.db"
-    init_db(db)
-    monkeypatch.setattr(paths, "DB_PATH", db)
-    monkeypatch.setattr(paths, "APP_DIR", tmp_path)
-    return db
-
-
-@pytest.fixture()
-def client(db_path: Path) -> TestClient:
-    from ui.server import app
-
-    return TestClient(app, follow_redirects=False)
-
-
-def _wizard_through_step3(client: TestClient) -> None:
-    """Drive through steps 1→3 (bank skip)."""
-    client.post("/setup/1", data={"password": "securepass1", "password_confirm": "securepass1"})
-    client.post("/setup/2", data={"notification_channel": "openclaw_chat"})
-    client.post("/setup/3", data={"action": "skip"})
-
-
-# ---------------------------------------------------------------------------
-# UI tests — step 4 (properties)
-# ---------------------------------------------------------------------------
-
-
-class TestSetupWizardStep4Properties:
-    def test_step4_renders_after_step3(self, client):
-        _wizard_through_step3(client)
-        # The last call already returned step 4 HTML; call again from step 3.
-        r = client.post("/setup/3", data={"action": "skip"})
-        assert r.status_code == 200
-        assert b"Rental properties" in r.content or b"rental" in r.content.lower()
-
-    def test_step4_skip_goes_to_step5(self, client):
-        _wizard_through_step3(client)
-        r = client.post("/setup/4", data={"action": "skip"})
-        assert r.status_code == 200
-        assert b"Investment" in r.content
-
-    def test_step4_continue_without_checkbox_goes_to_step5(self, client):
-        _wizard_through_step3(client)
-        r = client.post("/setup/4", data={"action": "continue"})
-        assert r.status_code == 200
-        assert b"Investment" in r.content
-
-    def test_step4_with_properties_stores_in_wizard_state(self, client):
-        _wizard_through_step3(client)
-        r = client.post(
-            "/setup/4",
-            data={
-                "action": "continue",
-                "has_properties": "yes",
-                "property_name[]": "Oak Ave",
-                "property_description[]": "Cottage",
-                "property_account_id[]": "",
-            },
-        )
-        assert r.status_code == 200
-        # Step 5 page rendered
-        assert b"Investment" in r.content
-
-
-# ---------------------------------------------------------------------------
-# UI tests — step 5 (investments)
-# ---------------------------------------------------------------------------
-
-
-class TestSetupWizardStep5Investments:
-    def _through_step4(self, client):
-        _wizard_through_step3(client)
-        client.post("/setup/4", data={"action": "skip"})
-
-    def test_step5_skip_goes_to_step6(self, client):
-        self._through_step4(client)
-        r = client.post("/setup/5", data={"action": "skip"})
-        assert r.status_code == 200
-        assert b"all set" in r.content.lower() or b"Done" in r.content or b"Dashboard" in r.content
-
-    def test_step5_continue_with_accounts_goes_to_step6(self, client):
-        self._through_step4(client)
-        r = client.post(
-            "/setup/5",
-            data={"action": "continue", "investment_account_id": "fake-uuid-123"},
-        )
-        assert r.status_code == 200
-        # Step 6 rendered
-        assert b"set" in r.content.lower() or b"Dashboard" in r.content
-
-
-# ---------------------------------------------------------------------------
-# UI tests — step 6 (final — calls apply_initial_setup with stored data)
-# ---------------------------------------------------------------------------
-
-
-class TestSetupWizardStep6Final:
-    def _through_step5(self, client):
-        _wizard_through_step3(client)
-        client.post("/setup/4", data={"action": "skip"})
-        client.post("/setup/5", data={"action": "skip"})
-
-    def test_step6_calls_apply_initial_setup(self, client):
-        self._through_step5(client)
-        with patch("server.main.apply_initial_setup") as mock_setup:
-            mock_setup.return_value = {
-                "status": "ok",
-                "ledgers_created": [],
-                "line_items_created": 0,
-                "hints_created": 0,
-                "banks_to_link": [],
-                "properties_created": 0,
-                "investment_ledger_id": None,
-                "cron_registered": False,
-            }
-            r = client.post("/setup/6", data={})
-        assert r.status_code == 302
-        mock_setup.assert_called_once()
-
-    def test_step6_passes_properties_to_apply(self, client):
-        """If properties were entered at step 4, step 6 passes them through."""
-        _wizard_through_step3(client)
-        client.post(
-            "/setup/4",
-            data={
-                "action": "continue",
-                "has_properties": "yes",
-                "property_name[]": "Maple St",
-                "property_description[]": "",
-                "property_account_id[]": "",
-            },
-        )
-        client.post("/setup/5", data={"action": "skip"})
-
-        with patch("server.main.apply_initial_setup") as mock_setup:
-            mock_setup.return_value = {
-                "status": "ok",
-                "ledgers_created": ["Personal", "Maple St"],
-                "line_items_created": 10,
-                "hints_created": 0,
-                "banks_to_link": [],
-                "properties_created": 1,
-                "investment_ledger_id": None,
-                "cron_registered": False,
-            }
-            client.post("/setup/6", data={})
-
-        call_kwargs = mock_setup.call_args[1] if mock_setup.call_args.kwargs else {}
-        call_args = mock_setup.call_args
-        # Extract rental_properties from positional or keyword args.
-        try:
-            props = (
-                call_args.kwargs.get("rental_properties")
-                or call_args[1].get("rental_properties")
-                or []
-            )
-        except Exception:
-            props = []
-        assert any(p.get("name") == "Maple St" for p in props)
+# (UI wizard tests for steps 4 and 5 were removed in feat/simplify-ui-wizard.
+#  Properties and investments are now configured post-setup via MCP tools.
+#  See TestApplyInitialSetupRentalProperties / TestApplyInitialSetupInvestments above.)

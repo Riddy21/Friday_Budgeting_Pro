@@ -133,10 +133,7 @@ def client(db_path: Path):
     # Run the setup wizard to create a user, then log in
     c.post("/setup/1", data={"password": "testpass123", "password_confirm": "testpass123"})
     c.post("/setup/2", data={"notification_pref": "openclaw"})
-    c.post("/setup/3", data={"ledger_name": "Personal"})
-    c.post("/setup/4", data={})
-    c.post("/setup/5", data={})
-    c.post("/setup/6", data={})
+    c.post("/setup/3", data={"action": "skip"})  # terminal step — redirects to /dashboard
     c.post("/login", data={"password": "testpass123"})
     return c
 
