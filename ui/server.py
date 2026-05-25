@@ -946,9 +946,18 @@ async def accounts_name_patch(request: Request, account_id: str):
     return JSONResponse({"status": "ok", "account_id": account_id, "name": name})
 
 
-# ── /settings (#159) ─────────────────────────────────────────────────────────
+# ── /settings (#159, #161) ───────────────────────────────────────────────────
 
 _VALID_CURRENCIES = ["CAD", "USD", "EUR", "GBP"]
+_VALID_TIMEZONES = [
+    "America/Toronto",
+    "America/New_York",
+    "America/Los_Angeles",
+    "Europe/London",
+    "Europe/Berlin",
+    "Asia/Tokyo",
+    "UTC",
+]
 
 
 @app.get("/settings", response_class=HTMLResponse)
@@ -959,8 +968,11 @@ def settings_get(request: Request):
     uid = _current_user_id(request)
     conn = get_db(_db_path())
     try:
-        row = conn.execute("SELECT home_currency FROM users WHERE id = ?", (uid,)).fetchone()
+        row = conn.execute(
+            "SELECT home_currency, timezone FROM users WHERE id = ?", (uid,)
+        ).fetchone()
         home_currency = row["home_currency"] if row and row["home_currency"] else "CAD"
+        timezone = row["timezone"] if row and row["timezone"] else "America/Toronto"
     finally:
         conn.close()
     saved = request.query_params.get("saved") == "1"
@@ -971,6 +983,8 @@ def settings_get(request: Request):
             "current_page": "settings",
             "home_currency": home_currency,
             "currencies": _VALID_CURRENCIES,
+            "timezone": timezone,
+            "timezones": _VALID_TIMEZONES,
             "saved": saved,
         },
     )
@@ -984,28 +998,50 @@ async def settings_post(request: Request):
     uid = _current_user_id(request)
     form = await request.form()
     home_currency = (form.get("home_currency") or "").strip().upper()
+    # timezone is optional in the form: if not submitted keep the existing value
+    submitted_tz = (form.get("timezone") or "").strip()
+
+    # Load current values for fallback + error re-render
+    conn = get_db(_db_path())
+    try:
+        row = conn.execute(
+            "SELECT home_currency, timezone FROM users WHERE id = ?", (uid,)
+        ).fetchone()
+        current_currency = row["home_currency"] if row and row["home_currency"] else "CAD"
+        current_tz = row["timezone"] if row and row["timezone"] else "America/Toronto"
+    finally:
+        conn.close()
+
+    # Use submitted timezone if provided, otherwise keep existing value
+    timezone = submitted_tz if submitted_tz else current_tz
+
+    # Validate
+    errors = []
     if home_currency not in _VALID_CURRENCIES:
-        # Invalid value — reload with error, keep existing value
-        conn = get_db(_db_path())
-        try:
-            row = conn.execute("SELECT home_currency FROM users WHERE id = ?", (uid,)).fetchone()
-            current = row["home_currency"] if row and row["home_currency"] else "CAD"
-        finally:
-            conn.close()
+        errors.append(f"Invalid currency: {home_currency!r}. Choose one of {_VALID_CURRENCIES}.")
+    if not timezone:
+        errors.append("Timezone must not be empty.")
+
+    if errors:
         return templates.TemplateResponse(
             request,
             "settings.html",
             {
                 "current_page": "settings",
-                "home_currency": current,
+                "home_currency": current_currency,
                 "currencies": _VALID_CURRENCIES,
+                "timezone": current_tz,
+                "timezones": _VALID_TIMEZONES,
                 "saved": False,
-                "error": f"Invalid currency: {home_currency!r}. Choose one of {_VALID_CURRENCIES}.",
+                "error": " ".join(errors),
             },
         )
     conn = get_db(_db_path())
     try:
-        conn.execute("UPDATE users SET home_currency = ? WHERE id = ?", (home_currency, uid))
+        conn.execute(
+            "UPDATE users SET home_currency = ?, timezone = ? WHERE id = ?",
+            (home_currency, timezone, uid),
+        )
         conn.commit()
     finally:
         conn.close()
@@ -1016,7 +1052,11 @@ async def settings_post(request: Request):
 
 
 def _fmt_last_synced(ts) -> str:
-    """Convert a Unix timestamp integer to a human-readable string, or 'Never'."""
+    """Convert a Unix timestamp integer to a human-readable string, or 'Never'.
+
+    Kept as a server-side fallback (e.g. for tests / non-JS contexts).
+    The UI renders timestamps client-side via data-utc spans instead.
+    """
     from datetime import datetime
 
     if not ts:
@@ -1045,7 +1085,10 @@ def _get_connections(user_id: Optional[str] = None) -> list[dict]:
         result = []
         for r in rows:
             d = dict(r)
-            d["last_synced_at"] = _fmt_last_synced(d.get("last_synced_at"))
+            # Keep last_synced_at as raw UTC integer; profile template renders
+            # it client-side via .datetime-local[data-utc] JS.  Zero / None → 0.
+            raw = d.get("last_synced_at")
+            d["last_synced_at"] = int(raw) if raw else 0
             result.append(d)
         return result
     finally:

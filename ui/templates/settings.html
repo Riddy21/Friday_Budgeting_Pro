@@ -25,6 +25,16 @@
       <p class="hint">Used for summaries, totals, and reports.</p>
     </div>
 
+    <div class="form-group">
+      <label for="timezone">Timezone</label>
+      <select id="timezone" name="timezone">
+        {% for tz in timezones %}
+        <option value="{{ tz }}" {% if tz == timezone %}selected{% endif %}>{{ tz }}</option>
+        {% endfor %}
+      </select>
+      <p class="hint">Used for date display and &ldquo;this month&rdquo; boundaries.</p>
+    </div>
+
     <button type="submit">Save</button>
   </form>
 </div>

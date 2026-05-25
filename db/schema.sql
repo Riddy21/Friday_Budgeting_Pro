@@ -14,7 +14,9 @@ CREATE TABLE IF NOT EXISTS users (
   id TEXT PRIMARY KEY,
   username TEXT UNIQUE NOT NULL,
   password_hash TEXT NOT NULL,     -- argon2id hash
-  created_at INTEGER NOT NULL
+  created_at INTEGER NOT NULL,
+  home_currency TEXT DEFAULT 'CAD',            -- ISO 4217; used for all totals and display
+  timezone TEXT DEFAULT 'America/Toronto'      -- IANA timezone; used for date-boundary queries
 );
 
 CREATE TABLE IF NOT EXISTS sessions (

@@ -6,7 +6,7 @@ from fastapi.testclient import TestClient
 # Helpers to patch DB and session auth so we can render /profile
 # ---------------------------------------------------------------------------
 
-FAKE_TS = 1779649905  # a specific raw Unix timestamp we must NOT see as-is
+FAKE_TS = 1779649905  # a specific raw Unix timestamp
 
 
 def _make_fake_connections():
@@ -15,7 +15,7 @@ def _make_fake_connections():
             "id": "conn-1",
             "institution_name": "Test Bank",
             "status": "active",
-            "last_synced_at": "May 24, 2026 3:17 PM",  # already formatted
+            "last_synced_at": FAKE_TS,  # raw UTC integer; JS renders client-side
         }
     ]
 
@@ -26,7 +26,7 @@ def _make_never_connections():
             "id": "conn-2",
             "institution_name": "Empty Bank",
             "status": "active",
-            "last_synced_at": "Never",
+            "last_synced_at": 0,  # zero → "Never" in JS
         }
     ]
 
@@ -90,43 +90,33 @@ def _render_profile_html(monkeypatch, connections):
     return resp.text
 
 
-def test_raw_timestamp_not_in_html(monkeypatch):
-    """Raw integer timestamp must never appear in rendered profile HTML."""
-    # Inject a connection whose last_synced_at is the formatted string (as _get_connections returns)
+def test_data_utc_attribute_in_html(monkeypatch):
+    """Profile HTML must include data-utc attribute with the raw timestamp.
+
+    Client-side JS reads data-utc and converts to local datetime string.
+    """
     connections = [
         {
             "id": "conn-1",
             "institution_name": "Test Bank",
             "status": "active",
-            "last_synced_at": "May 24, 2026 3:17 PM",
+            "last_synced_at": FAKE_TS,
         }
     ]
     html = _render_profile_html(monkeypatch, connections)
-    assert str(FAKE_TS) not in html, "Raw Unix timestamp integer leaked into profile HTML"
-
-
-def test_last_synced_shows_readable_date(monkeypatch):
-    """Last Synced column must show a human-readable date string."""
-    connections = [
-        {
-            "id": "conn-1",
-            "institution_name": "Test Bank",
-            "status": "active",
-            "last_synced_at": "May 24, 2026 3:17 PM",
-        }
-    ]
-    html = _render_profile_html(monkeypatch, connections)
-    assert "May 24, 2026" in html, "Human-readable date not found in profile HTML"
+    assert (
+        f'data-utc="{FAKE_TS}"' in html
+    ), f'data-utc attribute not found in profile HTML (expected data-utc="{FAKE_TS}")'
 
 
 def test_last_synced_shows_never_when_none(monkeypatch):
-    """When last_synced_at is None/0, display 'Never'."""
+    """When last_synced_at is 0, display 'Never' server-side (JS also handles it)."""
     connections = [
         {
             "id": "conn-2",
             "institution_name": "Empty Bank",
             "status": "active",
-            "last_synced_at": "Never",
+            "last_synced_at": 0,
         }
     ]
     html = _render_profile_html(monkeypatch, connections)

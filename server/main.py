@@ -2321,9 +2321,18 @@ def delete_rule(id: str) -> dict:
 # Settings tools (#159)
 # ---------------------------------------------------------------------------
 
-_SETTING_KEYS = {"home_currency"}
+_SETTING_KEYS = {"home_currency", "timezone"}
 _SETTING_VALID_VALUES: dict[str, list[str]] = {
     "home_currency": ["CAD", "USD", "EUR", "GBP"],
+    # timezone: any non-empty IANA string is valid; we enumerate common ones here
+    # but do NOT restrict to this list (open-ended for power users).
+    "timezone": [],  # empty = accept any non-empty value (validated in set_setting)
+}
+
+
+_SETTING_DEFAULTS = {
+    "home_currency": "CAD",
+    "timezone": "America/Toronto",
 }
 
 
@@ -2331,7 +2340,7 @@ _SETTING_VALID_VALUES: dict[str, list[str]] = {
 def get_setting(key: str) -> dict:
     """Get an app setting for the active user.
 
-    Currently supported keys: 'home_currency'.
+    Currently supported keys: 'home_currency', 'timezone'.
 
     Returns
     -------
@@ -2349,8 +2358,8 @@ def get_setting(key: str) -> dict:
         return {"status": "error", "message": "No active user found"}
     conn = get_db(server.paths.DB_PATH)
     try:
-        row = conn.execute("SELECT home_currency FROM users WHERE id = ?", (uid,)).fetchone()
-        value = row["home_currency"] if row and row["home_currency"] else "CAD"
+        row = conn.execute(f"SELECT {key} FROM users WHERE id = ?", (uid,)).fetchone()  # noqa: S608
+        value = row[key] if row and row[key] else _SETTING_DEFAULTS.get(key, "")
     finally:
         conn.close()
     return {"status": "ok", "key": key, "value": value}
@@ -2360,7 +2369,9 @@ def get_setting(key: str) -> dict:
 def set_setting(key: str, value: str) -> dict:
     """Set an app setting for the active user.
 
-    Currently supported keys: 'home_currency' (allowed values: CAD, USD, EUR, GBP).
+    Currently supported keys:
+    - 'home_currency' (allowed values: CAD, USD, EUR, GBP)
+    - 'timezone' (any non-empty IANA timezone string, e.g. 'America/Toronto')
 
     Returns
     -------
@@ -2373,18 +2384,24 @@ def set_setting(key: str, value: str) -> dict:
             "status": "error",
             "message": f"Unknown setting key: {key!r}. Supported keys: {sorted(_SETTING_KEYS)!r}",
         }
+    # For keys with an explicit allowed list, validate; timezone is open-ended.
     allowed = _SETTING_VALID_VALUES.get(key, [])
-    if value not in allowed:
+    if allowed and value not in allowed:
         return {
             "status": "error",
             "message": f"Invalid value {value!r} for {key!r}. Allowed: {allowed!r}",
+        }
+    if not value:
+        return {
+            "status": "error",
+            "message": f"Value for {key!r} must not be empty.",
         }
     uid = get_active_user_id(server.paths.DB_PATH)
     if uid is None:
         return {"status": "error", "message": "No active user found"}
     conn = get_db(server.paths.DB_PATH)
     try:
-        conn.execute("UPDATE users SET home_currency = ? WHERE id = ?", (value, uid))
+        conn.execute(f"UPDATE users SET {key} = ? WHERE id = ?", (value, uid))  # noqa: S608
         conn.commit()
     finally:
         conn.close()

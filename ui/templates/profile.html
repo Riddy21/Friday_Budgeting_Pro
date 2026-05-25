@@ -81,7 +81,13 @@
               {{ conn.status }}
             </span>
           </td>
-          <td>{{ conn.last_synced_at }}</td>
+          <td>
+            {% if conn.last_synced_at %}
+            <span class="datetime-local" data-utc="{{ conn.last_synced_at }}">Loading…</span>
+            {% else %}
+            Never
+            {% endif %}
+          </td>
           <td class="action-cell">
             {% if conn.status == "needs_reauth" %}
             <form method="post" action="/profile" style="display:inline">

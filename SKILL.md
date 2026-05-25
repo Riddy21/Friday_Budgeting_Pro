@@ -138,8 +138,10 @@ Invoke for any personal finance request:
 - `export_excel(years?)` — generate Excel workbook and return download URL
 
 ### Settings
-- `get_setting(key)` — get an app setting (e.g. `home_currency`, `timezone`, `notification_channel`)
+- `get_setting(key)` — get an app setting; valid keys: `home_currency`, `timezone`
 - `set_setting(key, value)` — update an app setting
+  - `home_currency`: one of `CAD`, `USD`, `EUR`, `GBP`
+  - `timezone`: any non-empty IANA timezone string (e.g. `America/Toronto`, `UTC`, `Asia/Tokyo`)
 
 ### UI & Auth
 - `get_ui_url(page?)` — return the local dashboard URL, optionally deep-linked to a page

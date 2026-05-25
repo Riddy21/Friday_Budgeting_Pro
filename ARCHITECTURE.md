@@ -546,7 +546,14 @@ the DB (a future operation, not a v0.1 feature).
 
 **Accounts** (`/accounts`) — stub page (#158 will implement full accounts management)
 
-**Settings** (`/settings`) — stub page (#159 will implement profile/app settings)
+**Settings** (`/settings`) — app + user settings (#159, #161)
+- **Home Currency** — ISO 4217 selector (CAD, USD, EUR, GBP); used for totals and reports
+- **Timezone** — IANA timezone selector (America/Toronto, UTC, etc.); used for
+  date-boundary queries ("this month") and as a hint for the UI's JS renderer
+- All timestamps in the DB are stored as UTC Unix seconds.  The UI renders
+  them client-side via `<span class="datetime-local" data-utc="<int>">` elements
+  and a small JS snippet in `base.html` that calls `new Date(ts*1000).toLocaleString()`.
+  The server never applies timezone offsets — it always sends UTC to the browser.
 
 **Ledgers** (`/ledgers`) — minimal structure editor
 - One row per ledger (default: Personal). Click a ledger to view items.
