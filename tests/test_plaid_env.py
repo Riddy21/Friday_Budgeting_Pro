@@ -108,7 +108,6 @@ def test_two_connections_different_envs(conn: sqlite3.Connection) -> None:
 
 
 class TestPlaidProviderEnvParam:
-
     def test_explicit_sandbox_env(self) -> None:
         """PlaidProvider(env='sandbox') stores env='sandbox'."""
         from server.providers.plaid import PlaidProvider
@@ -208,7 +207,6 @@ class TestPlaidProviderEnvParam:
 
 
 class TestEnvMismatch:
-
     def test_mismatch_raises_value_error(self) -> None:
         """Simulates the mismatch guard in the sync loop."""
         from server.providers.plaid import PlaidProvider

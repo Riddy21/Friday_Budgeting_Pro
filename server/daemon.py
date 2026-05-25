@@ -53,7 +53,9 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-_DEFAULT_HOST = "127.0.0.1"  # localhost-only — Design Constraint #6 (never bind all-interfaces)
+_DEFAULT_HOST = os.environ.get(
+    "FRIDAY_BP_UI_HOST", "127.0.0.1"
+)  # localhost-only by default; override via FRIDAY_BP_UI_HOST
 _DEFAULT_PORT = 6789
 
 

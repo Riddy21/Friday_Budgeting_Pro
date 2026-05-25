@@ -58,9 +58,7 @@ def _make_fake_repo(tmp_path: Path, extra_code_tool: str = "", extra_doc_tool: s
 
     extra_code_block = ""
     if extra_code_tool:
-        extra_code_block = (
-            f"\n@mcp.tool\n" f"def {extra_code_tool}() -> dict:\n" f"    return {{}}\n"
-        )
+        extra_code_block = f"\n@mcp.tool\ndef {extra_code_tool}() -> dict:\n    return {{}}\n"
 
     # Build main.py without textwrap.dedent so embedded extra_code_block
     # (which has no leading indent) does not confuse the common-prefix calc.

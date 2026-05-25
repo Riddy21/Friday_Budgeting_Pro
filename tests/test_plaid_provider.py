@@ -36,7 +36,6 @@ def _mock_plaid_api(mock_api_cls: MagicMock) -> MagicMock:
 
 
 class TestCreateLinkToken(unittest.TestCase):
-
     @patch("server.providers.plaid.plaid_api.PlaidApi")
     def test_returns_link_token(self, mock_api_cls):
         api = _mock_plaid_api(mock_api_cls)
@@ -73,7 +72,6 @@ class TestCreateLinkToken(unittest.TestCase):
 
 
 class TestExchangePublicToken(unittest.TestCase):
-
     @patch("server.providers.plaid.plaid_api.PlaidApi")
     def test_returns_access_token_and_item_id(self, mock_api_cls):
         api = _mock_plaid_api(mock_api_cls)
@@ -98,7 +96,6 @@ class TestExchangePublicToken(unittest.TestCase):
 
 
 class TestSyncTransactions(unittest.TestCase):
-
     @patch("server.providers.plaid.plaid_api.PlaidApi")
     def test_sync_without_cursor(self, mock_api_cls):
         api = _mock_plaid_api(mock_api_cls)
@@ -179,7 +176,6 @@ class TestSyncTransactions(unittest.TestCase):
 
 
 class TestEnvValidation(unittest.TestCase):
-
     def test_bad_plaid_env_raises_value_error(self):
         bad_env = _env({"PLAID_ENV": "staging"})
         with patch.dict(os.environ, bad_env, clear=False):

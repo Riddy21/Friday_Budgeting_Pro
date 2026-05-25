@@ -17,7 +17,6 @@ from server.providers.wealthsimple import WealthsimpleProvider
 
 
 class TestPlaidProviderInterface:
-
     def test_is_bank_provider_subclass(self):
         """PlaidProvider must be a subclass of BankProvider."""
         assert issubclass(PlaidProvider, BankProvider)
@@ -33,7 +32,6 @@ class TestPlaidProviderInterface:
 
 
 class TestWealthsimpleProviderInterface:
-
     def test_is_bank_provider_subclass(self):
         """WealthsimpleProvider must be a subclass of BankProvider."""
         assert issubclass(WealthsimpleProvider, BankProvider)

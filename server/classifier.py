@@ -22,6 +22,25 @@ from __future__ import annotations
 import json
 import sqlite3
 
+
+def _strip_markdown_json(raw: str) -> str:
+    """Strip markdown code fences from an LLM response before JSON parsing.
+
+    The LLM sometimes wraps JSON in ```json ... ``` or ``` ... ``` fences
+    even when told not to.  Strip them so json.loads always gets clean input.
+    """
+    s = raw.strip()
+    if s.startswith("```"):
+        # Drop the opening fence line
+        lines = s.splitlines()
+        lines = lines[1:]  # remove ```json or ```
+        # Drop the closing fence if present
+        if lines and lines[-1].strip() == "```":
+            lines = lines[:-1]
+        s = "\n".join(lines).strip()
+    return s
+
+
 # ---------------------------------------------------------------------------
 # Batch LLM classification (issue #207)
 # ---------------------------------------------------------------------------
@@ -421,8 +440,8 @@ def classify_transaction(
             li_note = f" → line_item_id={r['line_item_id']}" if r.get("line_item_id") else ""
             rules_lines.append(
                 f"  [{r['priority']:>3}] id={r['id']}  type={r['rule_type']}"
-                f"  name=\"{r['name']}\""
-                f"  desc=\"{r['description']}\"{li_note}"
+                f'  name="{r["name"]}"'
+                f'  desc="{r["description"]}"{li_note}'
             )
         rules_text = "\n".join(rules_lines)
     else:
@@ -491,8 +510,8 @@ def classify_transaction(
         corrections = context.get("recent_corrections") or []
         if corrections:
             corr_lines = [
-                f"  - {c.get('date','?')}  "
-                f"{c.get('from_line_item','?')} → {c.get('to_line_item','?')}"
+                f"  - {c.get('date', '?')}  "
+                f"{c.get('from_line_item', '?')} → {c.get('to_line_item', '?')}"
                 for c in corrections
             ]
             context_parts.append(
@@ -654,8 +673,8 @@ def classify_with_rules(
             li_note = f" → line_item_id={r['line_item_id']}" if r.get("line_item_id") else ""
             rules_lines.append(
                 f"  [{r['priority']:>3}] id={r['id']}  type={r['rule_type']}"
-                f"  name=\"{r['name']}\""
-                f"  desc=\"{r['description']}\"{li_note}"
+                f'  name="{r["name"]}"'
+                f'  desc="{r["description"]}"{li_note}'
             )
         rules_text = "\n".join(rules_lines)
     else:
@@ -697,8 +716,8 @@ def classify_with_rules(
         corrections = context.get("recent_corrections") or []
         if corrections:
             corr_lines = [
-                f"  - {c.get('date','?')}  "
-                f"{c.get('from_line_item','?')} → {c.get('to_line_item','?')}"
+                f"  - {c.get('date', '?')}  "
+                f"{c.get('from_line_item', '?')} → {c.get('to_line_item', '?')}"
                 for c in corrections
             ]
             context_parts.append(
@@ -747,7 +766,7 @@ def classify_with_rules(
     raw = chat(messages, temperature=0.0)
 
     try:
-        parsed = json.loads(raw)
+        parsed = json.loads(_strip_markdown_json(raw))
     except json.JSONDecodeError as exc:
         raise ValueError(f"LLM returned non-JSON response: {raw!r}") from exc
 
@@ -1002,7 +1021,7 @@ def classify_with_llm(
     raw = chat(messages, temperature=0.0)
 
     try:
-        parsed = json.loads(raw)
+        parsed = json.loads(_strip_markdown_json(raw))
     except json.JSONDecodeError as exc:
         raise ValueError(f"LLM returned non-JSON response: {raw!r}") from exc
 

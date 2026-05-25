@@ -188,7 +188,7 @@ def _seed_account(env, ledger_id_out: list | None = None):
         )
         acct_id = str(uuid.uuid4())
         conn.execute(
-            "INSERT INTO bank_accounts (id, connection_id, name) " "VALUES (?, ?, ?)",
+            "INSERT INTO bank_accounts (id, connection_id, name) VALUES (?, ?, ?)",
             (acct_id, conn_id, "Test Checking"),
         )
         # Also seed a ledger + line item so we can classify one of the txns.
@@ -199,7 +199,7 @@ def _seed_account(env, ledger_id_out: list | None = None):
         )
         li_id = str(uuid.uuid4())
         conn.execute(
-            "INSERT INTO line_items (id, ledger_id, name, item_type) " "VALUES (?, ?, ?, ?)",
+            "INSERT INTO line_items (id, ledger_id, name, item_type) VALUES (?, ?, ?, ?)",
             (li_id, ledger_id, "Subscriptions", "expense"),
         )
         conn.commit()

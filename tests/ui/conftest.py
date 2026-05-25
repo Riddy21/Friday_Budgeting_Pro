@@ -74,8 +74,7 @@ def _skip_reason() -> str | None:
     """Return a skip reason string, or None if tests should run."""
     if not _PLAYWRIGHT_INSTALLED:
         return (
-            "Playwright not installed. "
-            "Run: pip install playwright && playwright install chromium"
+            "Playwright not installed. Run: pip install playwright && playwright install chromium"
         )
     if not _ensure_chromium_checked():
         return "Chromium binary not installed. Run: playwright install chromium"

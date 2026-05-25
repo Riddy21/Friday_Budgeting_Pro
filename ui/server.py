@@ -42,8 +42,18 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Resp
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
+# Load .env before any server imports so Plaid credentials are available
+try:
+    import pathlib as _pathlib
+
+    from dotenv import load_dotenv as _load_dotenv
+
+    _load_dotenv(_pathlib.Path(__file__).parent.parent / ".env")
+except ImportError:
+    pass
+
 import server.paths as _paths
-from server.db import get_db
+from server.db import get_db, init_db
 from server.main import list_rules as _list_rules
 
 # ── Recovery token store (in-memory, 10-min TTL) ──────────────────────────
@@ -70,6 +80,10 @@ from ui.auth import (
 )
 
 # ── App setup ───────────────────────────────────────────────────────────────
+
+# Run DB migrations on startup so schema is always up to date
+# (safe to call repeatedly — all operations are idempotent)
+init_db(_paths.DB_PATH)
 
 app = FastAPI(title="Friday Budgeting Pro UI", version="0.1.0")
 
@@ -964,6 +978,7 @@ def account_transactions_get(request: Request, account_id: str, limit: int = 50)
         rows = conn.execute(
             """
             SELECT t.id, t.date, t.authorized_datetime, t.merchant, t.amount,
+                   t.pending,
                    COALESCE(t.currency, 'CAD') AS currency,
                    te.entry_type, te.source, te.uncertain,
                    li.name AS line_item_name,
@@ -974,6 +989,7 @@ def account_transactions_get(request: Request, account_id: str, limit: int = 50)
               LEFT JOIN ledgers    l  ON l.id  = te.ledger_id
              WHERE t.bank_account_id = ?
              ORDER BY
+               t.pending DESC,
                COALESCE(t.authorized_datetime, t.date) DESC,
                t.rowid DESC
              LIMIT ?
