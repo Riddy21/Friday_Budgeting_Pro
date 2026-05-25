@@ -310,6 +310,33 @@ New transaction
 After 3 successful LLM classifications of the same merchant, auto-promote
 to a Tier 1 rule. System gets cheaper and faster over time.
 
+### Transfer Detection
+
+Implemented in `server/transfer_detect.py`. Independent of the main classifier
+so it can run as a pre-pass without touching `classifier.py`.
+
+**`detect_internal_transfers(db_conn, user_id, lookback_days=7)`**
+- Fetches all non-pending transactions for accounts belonging to `user_id`.
+- Pairs an outflow (positive amount) with an inflow (negative amount) when:
+  - They belong to **different** bank accounts owned by the same user.
+  - `|outflow.amount − |inflow.amount|| < 0.01` (penny-level tolerance).
+  - `|outflow.date − inflow.date| ≤ 3 days`.
+- Returns a list of `{outflow_tx_id, inflow_tx_id, amount, days_apart, account_a, account_b}` dicts.
+- Matching is one-to-one: once a transaction is paired it is not reused.
+
+**`get_transfer_hint(tx_id, db_path)`**
+- Convenience wrapper: opens the DB, resolves the owner, calls
+  `detect_internal_transfers`, and returns
+  `{is_possible_transfer: True, matched_account: str, matched_amount: float}`
+  if the transaction appears in a detected pair, or `None` otherwise.
+
+**`is_investment_account(account)`**
+- Returns `True` if `account["institution_name"]` is a substring (case-insensitive)
+  of a known investment platform: Wealthsimple, Questrade, Robinhood, Vanguard,
+  Fidelity, Schwab.
+- Used by callers that want to tag investment outflows as `savings` rather than
+  `spending`.
+
 ---
 
 ## OpenClaw Integration
