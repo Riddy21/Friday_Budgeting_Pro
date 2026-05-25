@@ -1078,7 +1078,7 @@ def sync() -> dict:
                     next_cursor = result.get("next_cursor") if isinstance(result, dict) else None
                     accounts_list = result.get("accounts", []) if isinstance(result, dict) else []
 
-                    # Build a lookup map: plaid_account_id -> {name, type}
+                    # Build a lookup map: plaid_account_id -> {name, type, balances}
                     # Use official_name if present, else fall back to name.
                     account_meta: dict[str, dict] = {}
                     for acct in accounts_list:
@@ -1089,9 +1089,21 @@ def sync() -> dict:
                             # type may come back as an enum object; coerce to string
                             if acct_type is not None and not isinstance(acct_type, str):
                                 acct_type = str(acct_type)
+                            acct_balances = _get(acct, "balances") or {}
+                            if not isinstance(acct_balances, dict):
+                                # balances may be an object with attribute access
+                                try:
+                                    acct_balances = {
+                                        "current": getattr(acct_balances, "current", None),
+                                        "available": getattr(acct_balances, "available", None),
+                                    }
+                                except Exception:
+                                    acct_balances = {}
                             account_meta[acct_id] = {
                                 "name": acct_name,
                                 "type": acct_type,
+                                "balance_current": acct_balances.get("current"),
+                                "balance_available": acct_balances.get("available"),
                             }
 
                     now = int(_time.time())
@@ -1141,6 +1153,17 @@ def sync() -> dict:
                                         "WHERE plaid_account_id = ? AND (type IS NULL OR type = '')",
                                         (meta["type"], plaid_account_id),
                                     )
+                                # Always update balances with latest Plaid data (idempotent)
+                                db_conn.execute(
+                                    "UPDATE bank_accounts "
+                                    "SET balance_current = ?, balance_available = ? "
+                                    "WHERE plaid_account_id = ?",
+                                    (
+                                        meta["balance_current"],
+                                        meta["balance_available"],
+                                        plaid_account_id,
+                                    ),
+                                )
 
                             txn_id = str(uuid.uuid4())
                             cur = db_conn.execute(
@@ -2049,6 +2072,80 @@ def delete_rule(id: str) -> dict:
         return {"status": "ok"}
     finally:
         conn.close()
+
+
+# ---------------------------------------------------------------------------
+# Settings tools (#159)
+# ---------------------------------------------------------------------------
+
+_SETTING_KEYS = {"home_currency"}
+_SETTING_VALID_VALUES: dict[str, list[str]] = {
+    "home_currency": ["CAD", "USD", "EUR", "GBP"],
+}
+
+
+@mcp.tool
+def get_setting(key: str) -> dict:
+    """Get an app setting for the active user.
+
+    Currently supported keys: 'home_currency'.
+
+    Returns
+    -------
+    dict
+        ``{"status": "ok", "key": key, "value": value}`` on success or
+        ``{"status": "error", "message": ...}`` for unsupported keys.
+    """
+    if key not in _SETTING_KEYS:
+        return {
+            "status": "error",
+            "message": f"Unknown setting key: {key!r}. Supported keys: {sorted(_SETTING_KEYS)!r}",
+        }
+    uid = get_active_user_id(server.paths.DB_PATH)
+    if uid is None:
+        return {"status": "error", "message": "No active user found"}
+    conn = get_db(server.paths.DB_PATH)
+    try:
+        row = conn.execute("SELECT home_currency FROM users WHERE id = ?", (uid,)).fetchone()
+        value = row["home_currency"] if row and row["home_currency"] else "CAD"
+    finally:
+        conn.close()
+    return {"status": "ok", "key": key, "value": value}
+
+
+@mcp.tool
+def set_setting(key: str, value: str) -> dict:
+    """Set an app setting for the active user.
+
+    Currently supported keys: 'home_currency' (allowed values: CAD, USD, EUR, GBP).
+
+    Returns
+    -------
+    dict
+        ``{"status": "ok", "key": key, "value": value}`` on success or
+        ``{"status": "error", "message": ...}`` for unsupported keys/values.
+    """
+    if key not in _SETTING_KEYS:
+        return {
+            "status": "error",
+            "message": f"Unknown setting key: {key!r}. Supported keys: {sorted(_SETTING_KEYS)!r}",
+        }
+    allowed = _SETTING_VALID_VALUES.get(key, [])
+    if value not in allowed:
+        return {
+            "status": "error",
+            "message": f"Invalid value {value!r} for {key!r}. Allowed: {allowed!r}",
+        }
+    uid = get_active_user_id(server.paths.DB_PATH)
+    if uid is None:
+        return {"status": "error", "message": "No active user found"}
+    conn = get_db(server.paths.DB_PATH)
+    try:
+        conn.execute("UPDATE users SET home_currency = ? WHERE id = ?", (value, uid))
+        conn.commit()
+    finally:
+        conn.close()
+    return {"status": "ok", "key": key, "value": value}
 
 
 # ---------------------------------------------------------------------------

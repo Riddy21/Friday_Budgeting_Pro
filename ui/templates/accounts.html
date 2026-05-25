@@ -4,7 +4,173 @@
 
 {% block content %}
 <div class="card">
-  <h1>Accounts</h1>
-  <p class="hint">Accounts — coming soon.</p>
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1.25rem">
+    <h1 style="margin:0">Accounts</h1>
+    <a href="/link/start" class="btn btn-primary">+ Connect a bank</a>
+  </div>
+
+  {% if not grouped_accounts %}
+  <p class="hint">No bank accounts connected yet. <a href="/link/start">Connect a bank</a> to get started.</p>
+  {% else %}
+  {% for institution, data in grouped_accounts.items() %}
+  <section class="institution-group" style="margin-bottom:2rem">
+    <div class="institution-header" style="display:flex;justify-content:space-between;align-items:center;border-bottom:2px solid #e2e8f0;padding-bottom:0.5rem;margin-bottom:0.75rem">
+      <h2 style="margin:0;font-size:1.1rem;font-weight:600">── {{ institution }}</h2>
+      <form method="post" action="/profile" style="display:inline;margin:0">
+        <input type="hidden" name="action" value="disconnect_bank">
+        <input type="hidden" name="bank_id" value="{{ data.connection_id }}">
+        <button type="submit" class="btn btn-sm btn-danger"
+          onclick="return confirm('Disconnect {{ institution }}? This will remove all linked accounts.')">
+          Disconnect
+        </button>
+      </form>
+    </div>
+    <table style="width:100%;border-collapse:collapse">
+      <thead>
+        <tr style="text-align:left;color:#64748b;font-size:0.8rem;text-transform:uppercase;letter-spacing:0.04em">
+          <th style="padding:0.35rem 0.6rem">Account</th>
+          <th style="padding:0.35rem 0.6rem">Type</th>
+          <th style="padding:0.35rem 0.6rem;text-align:right">Balance</th>
+          <th style="padding:0.35rem 0.6rem"></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for acct in data.accounts %}
+        <tr style="border-top:1px solid #f1f5f9" data-account-id="{{ acct.id }}">
+          <td style="padding:0.55rem 0.6rem">
+            <span class="acct-name" data-original="{{ acct.name or '' }}">{{ acct.name or '(unnamed)' }}</span>
+            {% if acct.mask %}
+            <span style="color:#94a3b8;font-size:0.78rem"> ···{{ acct.mask }}</span>
+            {% endif %}
+          </td>
+          <td style="padding:0.55rem 0.6rem;color:#64748b;font-size:0.875rem">
+            {{ acct.subtype or acct.type or '—' }}
+          </td>
+          <td style="padding:0.55rem 0.6rem;text-align:right;font-weight:600;font-variant-numeric:tabular-nums">
+            {% if acct.balance_current is not none %}
+              C${{ "%.2f"|format(acct.balance_current) }}
+            {% elif acct.balance_available is not none %}
+              C${{ "%.2f"|format(acct.balance_available) }}
+            {% else %}
+              <span style="color:#94a3b8">—</span>
+            {% endif %}
+          </td>
+          <td style="padding:0.55rem 0.6rem;text-align:right">
+            <button class="btn btn-sm btn-secondary rename-btn" data-id="{{ acct.id }}">rename</button>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </section>
+  {% endfor %}
+  {% endif %}
 </div>
+
+<style>
+.btn {
+  display: inline-block;
+  padding: 0.35rem 0.8rem;
+  border-radius: 5px;
+  border: none;
+  cursor: pointer;
+  font-size: 0.875rem;
+  text-decoration: none;
+  transition: background 0.15s;
+}
+.btn-primary { background: #3b82f6; color: #fff; }
+.btn-primary:hover { background: #2563eb; }
+.btn-secondary { background: #e2e8f0; color: #475569; }
+.btn-secondary:hover { background: #cbd5e1; }
+.btn-danger { background: #fee2e2; color: #dc2626; border: 1px solid #fca5a5; }
+.btn-danger:hover { background: #fecaca; }
+.btn-sm { padding: 0.2rem 0.5rem; font-size: 0.8rem; }
+.rename-input {
+  font-size: 0.93rem;
+  padding: 0.2rem 0.4rem;
+  border: 1px solid #60a5fa;
+  border-radius: 3px;
+  width: 15rem;
+  outline: none;
+}
+.rename-input:focus { box-shadow: 0 0 0 2px #bfdbfe; }
+</style>
+
+<script>
+document.querySelectorAll('.rename-btn').forEach(btn => {
+  btn.addEventListener('click', function handleRename() {
+    const id = btn.dataset.id;
+    const row = btn.closest('tr');
+    const nameSpan = row.querySelector('.acct-name');
+    const currentName = nameSpan.dataset.original || nameSpan.textContent.trim();
+
+    // Already in edit mode? cancel.
+    if (btn.dataset.editing === '1') {
+      return;
+    }
+
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.value = currentName;
+    input.className = 'rename-input';
+    input.setAttribute('aria-label', 'Account name');
+
+    nameSpan.replaceWith(input);
+    btn.textContent = 'cancel';
+    btn.dataset.editing = '1';
+    input.focus();
+    input.select();
+
+    let saved = false;
+
+    const restore = (newName) => {
+      if (saved) return;
+      saved = true;
+      nameSpan.textContent = newName || currentName;
+      nameSpan.dataset.original = newName || currentName;
+      input.replaceWith(nameSpan);
+      btn.textContent = 'rename';
+      delete btn.dataset.editing;
+    };
+
+    const save = async () => {
+      const newName = input.value.trim();
+      if (!newName || newName === currentName) {
+        restore(currentName);
+        return;
+      }
+      try {
+        const resp = await fetch(`/accounts/${id}/name`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name: newName })
+        });
+        if (resp.ok) {
+          restore(newName);
+        } else {
+          restore(currentName);
+        }
+      } catch (e) {
+        restore(currentName);
+      }
+    };
+
+    input.addEventListener('keydown', e => {
+      if (e.key === 'Enter') { e.preventDefault(); save(); }
+      if (e.key === 'Escape') { restore(currentName); }
+    });
+    input.addEventListener('blur', () => { if (!saved) save(); });
+
+    // Cancel button click
+    btn.addEventListener('click', () => {
+      if (btn.dataset.editing === '1') {
+        saved = true;
+        input.replaceWith(nameSpan);
+        btn.textContent = 'rename';
+        delete btn.dataset.editing;
+      }
+    }, { once: true });
+  });
+});
+</script>
 {% endblock %}

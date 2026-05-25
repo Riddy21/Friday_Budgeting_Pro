@@ -772,8 +772,8 @@ def _get_accounts_grouped(user_id: Optional[str] = None) -> dict:
     try:
         if user_id:
             rows = conn.execute(
-                "SELECT ba.id, ba.name, ba.type, ba.subtype, ba.mask,"
-                "       ba.balance_current, ba.balance_available,"
+                "SELECT ba.id, ba.name, ba.mask, ba.type, ba.subtype,"
+                "       ba.balance_current, ba.balance_available, ba.description,"
                 "       bc.id AS connection_id, bc.institution_name"
                 "  FROM bank_accounts ba"
                 "  JOIN bank_connections bc ON bc.id = ba.connection_id"
@@ -783,8 +783,8 @@ def _get_accounts_grouped(user_id: Optional[str] = None) -> dict:
             ).fetchall()
         else:
             rows = conn.execute(
-                "SELECT ba.id, ba.name, ba.type, ba.subtype, ba.mask,"
-                "       ba.balance_current, ba.balance_available,"
+                "SELECT ba.id, ba.name, ba.mask, ba.type, ba.subtype,"
+                "       ba.balance_current, ba.balance_available, ba.description,"
                 "       bc.id AS connection_id, bc.institution_name"
                 "  FROM bank_accounts ba"
                 "  JOIN bank_connections bc ON bc.id = ba.connection_id"
