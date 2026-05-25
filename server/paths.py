@@ -24,7 +24,11 @@ logger = logging.getLogger(__name__)
 
 # FRIDAY_BP_APP_DIR env var lets tests (and CI) redirect all on-disk artefacts
 # to a temporary directory without touching ~/.friday-bp/.
-APP_DIR: Path = Path(os.environ["FRIDAY_BP_APP_DIR"]) if "FRIDAY_BP_APP_DIR" in os.environ else Path.home() / ".friday-bp"
+APP_DIR: Path = (
+    Path(os.environ["FRIDAY_BP_APP_DIR"])
+    if "FRIDAY_BP_APP_DIR" in os.environ
+    else Path.home() / ".friday-bp"
+)
 DB_PATH: Path = APP_DIR / "data.db"
 SYNC_LOCK_PATH: Path = APP_DIR / "sync.lock"
 EXPORTS_DIR: Path = APP_DIR / "exports"

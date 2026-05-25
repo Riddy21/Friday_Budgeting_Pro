@@ -40,14 +40,13 @@ init_db(_db)
 
 # ── Seed test data ─────────────────────────────────────────────────────────
 
+
 def _seed():
     """Seed testuser + Personal ledger + 10 sample transactions."""
     conn = get_db(_db)
     try:
         # Check if testuser already exists (idempotent)
-        existing = conn.execute(
-            "SELECT id FROM users WHERE username = 'testuser'"
-        ).fetchone()
+        existing = conn.execute("SELECT id FROM users WHERE username = 'testuser'").fetchone()
         if existing:
             return
 
@@ -55,6 +54,7 @@ def _seed():
 
         # ── User ──────────────────────────────────────────────────────────
         from argon2 import PasswordHasher
+
         _ph = PasswordHasher()
         password_hash = _ph.hash("testpass")
         user_id = "test-user-001"
@@ -88,8 +88,15 @@ def _seed():
 
         # Standard line items
         income_items = ["Salary", "Freelance", "Other Income"]
-        expense_items = ["Rent / Mortgage", "Groceries", "Utilities", "Transport",
-                         "Dining Out", "Entertainment", "Healthcare"]
+        expense_items = [
+            "Rent / Mortgage",
+            "Groceries",
+            "Utilities",
+            "Transport",
+            "Dining Out",
+            "Entertainment",
+            "Healthcare",
+        ]
 
         for name in income_items:
             conn.execute(
