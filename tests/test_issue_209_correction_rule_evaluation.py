@@ -24,7 +24,6 @@ import server.paths
 from server.db import get_db, init_db
 from ui.auth import create_session, create_user
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -284,8 +283,9 @@ class TestCreateRuleSuggestion:
 
     def test_create_rule_true_suppresses_create_rule_suggestion(self, db_path, authed_user):
         """When create_rule=True is passed, create_rule suggestion is suppressed."""
-        from server.main import correct_transaction
         from unittest.mock import patch
+
+        from server.main import correct_transaction
 
         ids = _seed_base(db_path, authed_user["user_id"])
         tx_id1 = _add_transaction(db_path, ids["account_id"], "DoorDash", 18.0)
@@ -330,11 +330,19 @@ class TestRuleSuggestionFields:
         _add_entry(db_path, tx_id, ids["ledger_id"], ids["li_groceries"])
 
         result = correct_transaction(tx_id, ids["li_dining"])
-        suggestions = [s for s in result["rule_suggestions"] if s["action"] == "update_or_disable_rule"]
+        suggestions = [
+            s for s in result["rule_suggestions"] if s["action"] == "update_or_disable_rule"
+        ]
         assert len(suggestions) == 1
         s = suggestions[0]
-        required_fields = {"action", "rule_id", "merchant_pattern", "current_line_item_id",
-                           "suggested_line_item_id", "reason"}
+        required_fields = {
+            "action",
+            "rule_id",
+            "merchant_pattern",
+            "current_line_item_id",
+            "suggested_line_item_id",
+            "reason",
+        }
         assert required_fields.issubset(s.keys())
 
     def test_create_suggestion_has_required_fields(self, db_path, authed_user):
@@ -351,6 +359,12 @@ class TestRuleSuggestionFields:
         suggestions = [s for s in result["rule_suggestions"] if s["action"] == "create_rule"]
         assert len(suggestions) == 1
         s = suggestions[0]
-        required_fields = {"action", "merchant", "suggested_line_item_id",
-                           "occurrence_count", "suggested_description", "reason"}
+        required_fields = {
+            "action",
+            "merchant",
+            "suggested_line_item_id",
+            "occurrence_count",
+            "suggested_description",
+            "reason",
+        }
         assert required_fields.issubset(s.keys())

@@ -53,6 +53,7 @@ PLAID_CREDS = bool(os.environ.get("PLAID_CLIENT_ID")) and bool(os.environ.get("P
 
 try:
     from playwright.sync_api import sync_playwright  # noqa: F401
+
     PLAYWRIGHT_AVAILABLE = True
 except Exception:
     PLAYWRIGHT_AVAILABLE = False
@@ -73,6 +74,7 @@ pytestmark = [
 # Fixtures
 # ---------------------------------------------------------------------------
 
+
 @pytest.fixture()
 def tmp_app_dir(tmp_path, monkeypatch):
     """Redirect ~/.friday-bp/ to a temp directory and reload server.paths."""
@@ -83,12 +85,16 @@ def tmp_app_dir(tmp_path, monkeypatch):
     import importlib
 
     import server.paths as _paths
+
     importlib.reload(_paths)
     import server.db as _db
+
     importlib.reload(_db)
     import ui.auth as _auth
+
     importlib.reload(_auth)
     import server.main as _main
+
     importlib.reload(_main)
 
     _db.init_db(_paths.DB_PATH)
@@ -115,6 +121,7 @@ def _uid() -> str:
 # ---------------------------------------------------------------------------
 # End-to-end test
 # ---------------------------------------------------------------------------
+
 
 def test_issue_209_correction_rule_evaluation(tmp_app_dir, monkeypatch):
     """Sync → correct → rule suggestions returned; Playwright screenshots Accounts."""
@@ -146,15 +153,16 @@ def test_issue_209_correction_rule_evaluation(tmp_app_dir, monkeypatch):
 
     li_expense = next((r["id"] for r in rows if r["item_type"] == "expense"), None)
     li_income = next((r["id"] for r in rows if r["item_type"] == "income"), None)
-    assert li_expense and li_income, (
-        f"expected expense+income line items after apply_initial_setup; got {rows!r}"
-    )
+    assert (
+        li_expense and li_income
+    ), f"expected expense+income line items after apply_initial_setup; got {rows!r}"
 
     # ------------------------------------------------------------------
     # 2. Mint sandbox public token and sync.
     # ------------------------------------------------------------------
     from plaid.model.products import Products
     from plaid.model.sandbox_public_token_create_request import SandboxPublicTokenCreateRequest
+
     from server.providers.plaid import PlaidProvider
 
     provider = PlaidProvider(env="sandbox")
@@ -174,13 +182,15 @@ def test_issue_209_correction_rule_evaluation(tmp_app_dir, monkeypatch):
     import json
 
     def _fake_chat(messages, *, model=None, **kw):
-        return json.dumps({
-            "line_item_id": li_expense,
-            "reasoning": "test: patched to expense",
-            "confidence": 0.99,
-            "uncertain": False,
-            "entry_type": "expense",
-        })
+        return json.dumps(
+            {
+                "line_item_id": li_expense,
+                "reasoning": "test: patched to expense",
+                "confidence": 0.99,
+                "uncertain": False,
+                "entry_type": "expense",
+            }
+        )
 
     with patch("server.llm.chat", side_effect=_fake_chat):
         sync_result = main.sync()
@@ -279,15 +289,13 @@ def test_issue_209_correction_rule_evaluation(tmp_app_dir, monkeypatch):
     conflict_suggestions = [
         s for s in result_a["rule_suggestions"] if s["action"] == "update_or_disable_rule"
     ]
-    assert len(conflict_suggestions) >= 1, (
-        f"Expected at least 1 update_or_disable_rule suggestion; got {result_a['rule_suggestions']!r}"
-    )
-    matched = next(
-        (s for s in conflict_suggestions if s["rule_id"] == conflict_rule_id), None
-    )
-    assert matched is not None, (
-        f"Conflicting rule {conflict_rule_id!r} not in suggestions: {conflict_suggestions!r}"
-    )
+    assert (
+        len(conflict_suggestions) >= 1
+    ), f"Expected at least 1 update_or_disable_rule suggestion; got {result_a['rule_suggestions']!r}"
+    matched = next((s for s in conflict_suggestions if s["rule_id"] == conflict_rule_id), None)
+    assert (
+        matched is not None
+    ), f"Conflicting rule {conflict_rule_id!r} not in suggestions: {conflict_suggestions!r}"
     assert matched["suggested_line_item_id"] == li_income
     assert "reason" in matched
 
@@ -310,25 +318,24 @@ def test_issue_209_correction_rule_evaluation(tmp_app_dir, monkeypatch):
     assert result_b["status"] == "ok", result_b
     assert "rule_suggestions" in result_b
 
-    create_suggestions = [
-        s for s in result_b["rule_suggestions"] if s["action"] == "create_rule"
-    ]
-    assert len(create_suggestions) >= 1, (
-        f"Expected at least 1 create_rule suggestion; got {result_b['rule_suggestions']!r}"
-    )
+    create_suggestions = [s for s in result_b["rule_suggestions"] if s["action"] == "create_rule"]
+    assert (
+        len(create_suggestions) >= 1
+    ), f"Expected at least 1 create_rule suggestion; got {result_b['rule_suggestions']!r}"
     cs = create_suggestions[0]
     assert cs["merchant"] == recurring_merchant
     assert cs["suggested_line_item_id"] == li_income
     assert cs["occurrence_count"] >= 2
-    assert "[from-correction]" in cs["suggested_description"], (
-        f"suggested_description missing [from-correction] tag: {cs['suggested_description']!r}"
-    )
+    assert (
+        "[from-correction]" in cs["suggested_description"]
+    ), f"suggested_description missing [from-correction] tag: {cs['suggested_description']!r}"
 
     # ------------------------------------------------------------------
     # TEST C: Playwright — screenshot Accounts page as visual artefact.
     # ------------------------------------------------------------------
-    from ui.server import app as fastapi_app
     import uvicorn
+
+    from ui.server import app as fastapi_app
 
     screenshots_dir = Path(__file__).parent / "_screenshots"
     screenshots_dir.mkdir(exist_ok=True)
@@ -344,6 +351,7 @@ def test_issue_209_correction_rule_evaluation(tmp_app_dir, monkeypatch):
     while time.time() < deadline:
         try:
             import urllib.request
+
             urllib.request.urlopen(f"http://127.0.0.1:{port}/", timeout=1)
             break
         except Exception:

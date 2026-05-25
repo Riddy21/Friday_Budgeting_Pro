@@ -3341,25 +3341,29 @@ def correct_transaction(
             pattern = (rr["merchant_pattern"] or "").lower()
             if pattern and pattern in merchant.lower():
                 if rr["line_item_id"] != line_item_id:
-                    conflicting_rules.append({
-                        "rule_id": rr["id"],
-                        "merchant_pattern": rr["merchant_pattern"],
-                        "current_line_item_id": rr["line_item_id"],
-                    })
+                    conflicting_rules.append(
+                        {
+                            "rule_id": rr["id"],
+                            "merchant_pattern": rr["merchant_pattern"],
+                            "current_line_item_id": rr["line_item_id"],
+                        }
+                    )
 
         for bad_rule in conflicting_rules:
-            rule_suggestions.append({
-                "action": "update_or_disable_rule",
-                "rule_id": bad_rule["rule_id"],
-                "merchant_pattern": bad_rule["merchant_pattern"],
-                "current_line_item_id": bad_rule["current_line_item_id"],
-                "suggested_line_item_id": line_item_id,
-                "reason": (
-                    f"Routing rule for pattern {bad_rule['merchant_pattern']!r} would "
-                    f"mis-classify future transactions from {merchant!r}. "
-                    "Consider updating or disabling it."
-                ),
-            })
+            rule_suggestions.append(
+                {
+                    "action": "update_or_disable_rule",
+                    "rule_id": bad_rule["rule_id"],
+                    "merchant_pattern": bad_rule["merchant_pattern"],
+                    "current_line_item_id": bad_rule["current_line_item_id"],
+                    "suggested_line_item_id": line_item_id,
+                    "reason": (
+                        f"Routing rule for pattern {bad_rule['merchant_pattern']!r} would "
+                        f"mis-classify future transactions from {merchant!r}. "
+                        "Consider updating or disabling it."
+                    ),
+                }
+            )
 
         # 2. If no conflicting routing_rule exists and merchant appears 2+ times,
         #    suggest creating a new rule tagged [from-correction].
@@ -3373,20 +3377,22 @@ def correct_transaction(
             ).fetchone()[0]
 
             if merchant_count >= 2:
-                rule_suggestions.append({
-                    "action": "create_rule",
-                    "merchant": merchant,
-                    "suggested_line_item_id": line_item_id,
-                    "occurrence_count": merchant_count,
-                    "suggested_description": (
-                        f"[from-correction] Transactions from {merchant!r} should be "
-                        "classified under this line item"
-                    ),
-                    "reason": (
-                        f"{merchant!r} has appeared {merchant_count} times. "
-                        "Creating a rule will auto-classify future transactions."
-                    ),
-                })
+                rule_suggestions.append(
+                    {
+                        "action": "create_rule",
+                        "merchant": merchant,
+                        "suggested_line_item_id": line_item_id,
+                        "occurrence_count": merchant_count,
+                        "suggested_description": (
+                            f"[from-correction] Transactions from {merchant!r} should be "
+                            "classified under this line item"
+                        ),
+                        "reason": (
+                            f"{merchant!r} has appeared {merchant_count} times. "
+                            "Creating a rule will auto-classify future transactions."
+                        ),
+                    }
+                )
     finally:
         conn2.close()
 
