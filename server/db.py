@@ -129,8 +129,17 @@ def init_db(path: str | Path) -> None:
         # Migration: bank_accounts default_ledger_id (#174)
         _add_col_if_missing(conn, "bank_accounts", "default_ledger_id", "TEXT")
 
+        # Migration: bank_accounts balance columns (#158)
+        _add_col_if_missing(conn, "bank_accounts", "balance_current", "REAL")
+        _add_col_if_missing(conn, "bank_accounts", "balance_available", "REAL")
+
         # Migration: line_items item_type (#174)
         _add_col_if_missing(conn, "line_items", "item_type", "TEXT NOT NULL DEFAULT 'expense'")
+
+        # Migration: users.home_currency (#159)
+        _add_col_if_missing(conn, "users", "home_currency", "TEXT")
+        conn.execute("UPDATE users SET home_currency = 'CAD' WHERE home_currency IS NULL")
+        conn.commit()
 
         # Migration: create default user only when there is existing data to migrate
         # (i.e. rows exist that need a user_id) but no users have been created yet.
