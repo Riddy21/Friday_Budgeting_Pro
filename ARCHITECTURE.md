@@ -477,6 +477,11 @@ A small local-only web app. v0.1 scope:
   bank** buttons.
 - **Ledgers page** — a tiny structure editor: list ledgers, add /
   rename / remove line items inside each, add / remove ledgers.
+  A **period filter** (`?period=`) scopes all line-item totals to a
+  preset date range: `this_month` (default), `last_month`,
+  `last_3_months`, `this_year`, or `all`. Period filtering is applied
+  inside `_build_ledger_drilldown()` in `server/main.py` and passed
+  through `_get_ledgers()` in `ui/server.py`.
 - **Plaid Link page** — the browser-based bank-connection flow,
   used by the setup wizard, by the Profile Linked Accounts section,
   and by any MCP-issued "add a bank" link.

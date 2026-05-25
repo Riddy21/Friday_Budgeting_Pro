@@ -216,7 +216,11 @@ def _set_notification_pref(pref: str) -> None:
     _set_notification_channel(_PREF_TO_CHANNEL.get(pref, pref))
 
 
-def _get_ledgers(user_id: Optional[str] = None, with_drilldown: bool = False) -> list[dict]:
+def _get_ledgers(
+    user_id: Optional[str] = None,
+    with_drilldown: bool = False,
+    period: Optional[str] = "this_month",
+) -> list[dict]:
     """Query ledgers + line_items from the DB and return a list of dicts.
 
     Parameters
@@ -227,8 +231,14 @@ def _get_ledgers(user_id: Optional[str] = None, with_drilldown: bool = False) ->
     with_drilldown :
         When ``True`` each line-item dict includes ``total`` and
         ``transactions`` keys (used by the /ledgers page drilldown UI).
+    period :
+        Date filter applied to transactions: ``"this_month"``, ``"last_month"``,
+        ``"last_3_months"``, ``"this_year"``, ``"all"``, or ``None`` (all time).
     """
     from server.main import _build_ledger_drilldown
+
+    # Normalise: "all" sentinel → None so drilldown skips date filter
+    drilldown_period: Optional[str] = None if period == "all" else period
 
     conn = get_db(_db_path())
     try:
@@ -246,7 +256,7 @@ def _get_ledgers(user_id: Optional[str] = None, with_drilldown: bool = False) ->
         ledgers = []
         for lr in ledger_rows:
             if with_drilldown:
-                drilldown = _build_ledger_drilldown(conn, lr, period=None)
+                drilldown = _build_ledger_drilldown(conn, lr, period=drilldown_period)
                 ledgers.append(
                     {
                         "id": lr["id"],
@@ -1347,21 +1357,33 @@ def export_excel_download(request: Request):
     )
 
 
+_VALID_PERIODS = {"this_month", "last_month", "last_3_months", "this_year", "all"}
+
+
 @app.get("/ledgers", response_class=HTMLResponse)
-def ledgers_get(request: Request):
-    """Read-only ledger tree.  Requires authentication.
+def ledgers_get(request: Request, period: str = "this_month"):
+    """Read-only ledger tree with optional date-range filter.  Requires authentication.
 
     Queries the DB directly because server.main.list_ledgers() is still a
     stub returning {'status': 'not_implemented'}.  A minimal editor is #48.
+
+    Query params
+    ------------
+    period : str
+        One of ``this_month`` (default), ``last_month``, ``last_3_months``,
+        ``this_year``, ``all``.
     """
     if not _is_authenticated(request):
         return _redirect("/login")
+    # Reject unknown period values and fall back to default
+    if period not in _VALID_PERIODS:
+        period = "this_month"
     uid = _current_user_id(request)
-    ledgers = _get_ledgers(uid, with_drilldown=True)
+    ledgers = _get_ledgers(uid, with_drilldown=True, period=period)
     return templates.TemplateResponse(
         request,
         "ledgers.html",
-        {"current_page": "ledgers", "ledgers": ledgers},
+        {"current_page": "ledgers", "ledgers": ledgers, "period": period},
     )
 
 
