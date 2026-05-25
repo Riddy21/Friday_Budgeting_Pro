@@ -1450,11 +1450,12 @@ def classify_pending_transactions(user_id: str, limit: int | None = None) -> dic
                 continue
 
             # Write the classified entry.
-            # Normalise the stored amount to always be positive:
-            # - Plaid income (deposits) = negative raw amount → store as positive
-            # - Plaid expenses (debits) = positive raw amount → store as-is
-            # This ensures ledger totals are always additive and display correctly.
-            stored_amount = abs(amount) if classification_type == "income" else amount
+            # Normalise the stored amount to always be positive.
+            # Plaid uses negative amounts for money coming IN (income, refunds,
+            # transfers received, credit card payments). We always store ABS so
+            # ledger totals are additive and display correctly regardless of
+            # which direction the money flowed.
+            stored_amount = abs(amount)
             entry_id = str(uuid.uuid4())
             conn.execute(
                 "INSERT OR IGNORE INTO transaction_entries "
