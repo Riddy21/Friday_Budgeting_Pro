@@ -144,6 +144,7 @@ def test_issue_208_uncertain_review_end_to_end(tmp_app, monkeypatch):
     from plaid.model.sandbox_public_token_create_request import (
         SandboxPublicTokenCreateRequest,
     )
+
     from server.providers.plaid import PlaidProvider
 
     provider = PlaidProvider(env="sandbox")
@@ -238,9 +239,9 @@ def test_issue_208_uncertain_review_end_to_end(tmp_app, monkeypatch):
     summary_text = summary_result["summary"]
 
     # Summary must mention the count.
-    assert str(summary_result["count"]) in summary_text, (
-        f"Count {summary_result['count']} not found in summary:\n{summary_text}"
-    )
+    assert (
+        str(summary_result["count"]) in summary_text
+    ), f"Count {summary_result['count']} not found in summary:\n{summary_text}"
 
     # Summary must include merchant, amount, and date for at least the first transaction.
     first_tx = review_txns[0]
@@ -248,9 +249,9 @@ def test_issue_208_uncertain_review_end_to_end(tmp_app, monkeypatch):
     assert merchant in summary_text, f"Merchant {merchant!r} not found in summary"
 
     # Summary must include a closing prompt for the user.
-    assert "skip" in summary_text.lower() or "category" in summary_text.lower(), (
-        "Summary should include a closing prompt for the user"
-    )
+    assert (
+        "skip" in summary_text.lower() or "category" in summary_text.lower()
+    ), "Summary should include a closing prompt for the user"
 
     # ------------------------------------------------------------------
     # 6. correct_transaction reclassifies and removes from needs_review.
@@ -268,9 +269,9 @@ def test_issue_208_uncertain_review_end_to_end(tmp_app, monkeypatch):
     # Transaction should no longer appear in needs_review.
     after_correction = main.get_needs_review()
     corrected_ids = {tx["id"] for tx in after_correction["transactions"]}
-    assert target_tx_id not in corrected_ids, (
-        f"Transaction {target_tx_id} still in needs_review after correction"
-    )
+    assert (
+        target_tx_id not in corrected_ids
+    ), f"Transaction {target_tx_id} still in needs_review after correction"
 
     # ------------------------------------------------------------------
     # 7. correct_transaction with create_rule=True tags the rule [from-correction].
@@ -289,10 +290,12 @@ def test_issue_208_uncertain_review_end_to_end(tmp_app, monkeypatch):
         assert correction2["rule_created"] is True
 
         rules = main.list_rules()["rules"]
-        from_correction_rules = [r for r in rules if "[from-correction]" in r.get("description", "")]
-        assert from_correction_rules, (
-            "Expected at least one [from-correction]-tagged rule after correction with create_rule=True"
-        )
+        from_correction_rules = [
+            r for r in rules if "[from-correction]" in r.get("description", "")
+        ]
+        assert (
+            from_correction_rules
+        ), "Expected at least one [from-correction]-tagged rule after correction with create_rule=True"
 
     # ------------------------------------------------------------------
     # 8. find_transactions enables recurring-merchant detection.
@@ -307,22 +310,23 @@ def test_issue_208_uncertain_review_end_to_end(tmp_app, monkeypatch):
             else:
                 txns_found = found
             # At least the original transaction should be findable.
-            assert len(txns_found) >= 1, (
-                f"find_transactions(merchant={merchant_name!r}) returned nothing"
-            )
+            assert (
+                len(txns_found) >= 1
+            ), f"find_transactions(merchant={merchant_name!r}) returned nothing"
 
     # ------------------------------------------------------------------
     # 9. After correcting all, summary count decreases accordingly.
     # ------------------------------------------------------------------
     post_summary = main.get_needs_review_summary()
-    assert post_summary["count"] < summary_result["count"], (
-        "After correcting transactions, summary count should decrease"
-    )
+    assert (
+        post_summary["count"] < summary_result["count"]
+    ), "After correcting transactions, summary count should decrease"
 
     # ------------------------------------------------------------------
     # 10. Boot UI and screenshot the review state with Playwright.
     # ------------------------------------------------------------------
     import uvicorn
+
     from ui.server import app as ui_app
 
     port = _free_port()
@@ -574,8 +578,8 @@ class TestGetNeedsReviewSummaryUnit:
         assert result["status"] == "ok"
 
         after = main.get_needs_review_summary()
-        assert after["count"] == before["count"] - 1, (
-            f"Expected count to decrease by 1: before={before['count']}, after={after['count']}"
-        )
+        assert (
+            after["count"] == before["count"] - 1
+        ), f"Expected count to decrease by 1: before={before['count']}, after={after['count']}"
         corrected_ids = {tx["id"] for tx in after["transactions"]}
         assert tx_id not in corrected_ids
