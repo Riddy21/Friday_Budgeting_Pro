@@ -44,6 +44,7 @@ For each open PR (`gh pr list --state open`):
   - CONTRIBUTING.md anti-patterns
   - Interactive check line present in PR body (required for UI + MCP tickets)
 - **Documentation check:** verify the PR updates ARCHITECTURE.md, README.md, and the route overview comment where relevant. If docs are missing, request changes — do not merge undocumented behaviour changes.
+- **SKILL.md check:** if the PR adds, removes, or renames any `@mcp.tool` in `server/main.py`, verify SKILL.md is updated in the same commit. The `skill-md-sync` CI job catches this automatically — a green CI badge is sufficient; reject if it's red.
 - **Decide:**
   - ✅ Looks good + CI green → `gh pr review --approve`, then `gh pr merge --squash --delete-branch`
   - ❌ Issues → `gh pr review --request-changes --body "<specific feedback>"`, leave PR open. Worker will fix and re-push.

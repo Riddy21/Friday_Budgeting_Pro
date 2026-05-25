@@ -105,6 +105,7 @@ Invoke for any personal finance request:
 
 ### Ledgers
 - `list_ledgers` — show all ledgers (personal/property/investment) and their line items
+- `get_ledger(ledger_id, period?)` — get a single ledger with all line items and classified transactions for the period
 - `add_ledger(name)` — create a new ledger
 - `add_line_item(ledger_id, name, item_type)` — add a line item (`income | expense`) to a ledger
 - `remove_line_item(id)` — remove a line item

@@ -101,6 +101,16 @@ If nothing in these files needs updating for your ticket, add a note in the PR b
   queries, and response shapes end-to-end.  Run them with
   `python3 -m pytest tests/integration/ -v`.
 
+## MCP Tool Changes Require SKILL.md Updates
+
+Any PR that adds, removes, or renames an `@mcp.tool` in `server/main.py` **must** update `SKILL.md` in the same commit:
+
+- Add new tools to the correct section under `## Available MCP Tools`
+- Include: tool name, one-line description, and key parameters
+- Remove or correct entries for deleted/renamed tools
+
+The `skill-md-sync` CI job enforces this automatically — PRs that drift will fail CI.
+
 ## Anti-Patterns (Don't Do These)
 
 - ❌ Refactoring code outside your ticket
