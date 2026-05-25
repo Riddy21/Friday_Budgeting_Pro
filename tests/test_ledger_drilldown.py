@@ -329,7 +329,9 @@ def authed_ui_client(ui_db_path: Path):
     client.post("/setup/1", data={"password": "testpass123", "password_confirm": "testpass123"})
     client.post("/setup/2", data={"notification_pref": "openclaw"})
     client.post("/setup/3", data={"ledger_name": "Personal"})
-    client.post("/setup/4", data={})
+    client.post("/setup/4", data={})  # skip rental properties
+    client.post("/setup/5", data={})  # skip investment accounts
+    client.post("/setup/6", data={})  # done
     # Login
     client.post("/login", data={"password": "testpass123"})
     return client
