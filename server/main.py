@@ -653,11 +653,41 @@ def refresh_connection(id: str) -> dict:
 def disconnect(id: str) -> dict:
     """Disconnect and remove a Plaid bank connection.
 
-    Removes the connection row and any associated sync_cursor row from the
-    local database.  Calling Plaid's /item/remove endpoint to revoke the
-    access token on Plaid's side is out of scope for this PR (the local
-    database record is the authoritative store for this app).
+    Calls Plaid's /item/remove endpoint to revoke the access token on
+    Plaid's side (best-effort — a failure does not abort the local cleanup),
+    then removes the connection row and any associated sync_cursor row from
+    the local database.
     """
+    # ------------------------------------------------------------------ #
+    # Step 1: best-effort Plaid /item/remove                               #
+    # ------------------------------------------------------------------ #
+    plaid_revoked: bool = False
+    plaid_error: str | None = None
+
+    db = get_db(server.paths.DB_PATH)
+    try:
+        row = db.execute(
+            "SELECT plaid_access_token_encrypted, plaid_env "
+            "FROM bank_connections WHERE id = ?",
+            (id,),
+        ).fetchone()
+    finally:
+        db.close()
+
+    if row is not None:
+        try:
+            access_token = server.crypto.decrypt(row["plaid_access_token_encrypted"])
+            plaid_env = row["plaid_env"] or os.environ.get("PLAID_ENV", "sandbox")
+            provider = PlaidProvider(env=plaid_env)
+            result = provider.remove_item(access_token)
+            plaid_revoked = result.get("revoked", False)
+        except Exception as exc:  # noqa: BLE001
+            # Best-effort: log and continue so the local row is always removed.
+            plaid_error = str(exc)
+
+    # ------------------------------------------------------------------ #
+    # Step 2: remove local DB rows regardless of Plaid outcome             #
+    # ------------------------------------------------------------------ #
     conn = get_db(server.paths.DB_PATH)
     try:
         conn.execute(
@@ -672,7 +702,10 @@ def disconnect(id: str) -> dict:
     finally:
         conn.close()
 
-    return {"ok": True}
+    result_dict: dict = {"ok": True, "plaid_item_removed": plaid_revoked}
+    if plaid_error is not None:
+        result_dict["plaid_error"] = plaid_error
+    return result_dict
 
 
 # ---------------------------------------------------------------------------

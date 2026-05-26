@@ -74,3 +74,24 @@ class BankProvider(ABC):
             ``item_id``       — provider item ID
         """
         ...
+
+    def remove_item(self, access_token: str) -> dict:
+        """
+        Revoke the item associated with *access_token* on the provider side.
+
+        Providers that support item-level revocation should override this
+        method.  The default implementation is a no-op that returns
+        ``{"revoked": False, "reason": "not_supported"}`` so callers can
+        always call this without checking for provider capabilities.
+
+        Parameters
+        ----------
+        access_token : str
+            Plaintext provider access token.  Caller is responsible for
+            decrypting before passing here; see server.crypto.decrypt.
+
+        Returns a dict with at least:
+            ``revoked``   — True if the provider accepted the removal
+            ``request_id``— provider request ID string (when available)
+        """
+        return {"revoked": False, "reason": "not_supported"}
