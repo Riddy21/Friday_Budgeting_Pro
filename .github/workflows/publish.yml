@@ -67,6 +67,7 @@ jobs:
             --slug "friday-budgeting-pro" \
             --name "Friday Budgeting Pro" \
             --version "${{ steps.release.outputs.version }}" \
+            --tags "latest" \
             --changelog "${{ steps.release.outputs.changelog }}"
 
       - name: Confirm
