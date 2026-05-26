@@ -539,9 +539,7 @@ async def setup_post(request: Request, step: int):
         redir = _redirect("/dashboard")
         st = state.get("session_token")
         if st:
-            redir.set_cookie(
-                _SETUP_COMPLETE_COOKIE, st, httponly=True, samesite="lax", max_age=300
-            )
+            redir.set_cookie(_SETUP_COMPLETE_COOKIE, st, httponly=True, samesite="lax", max_age=300)
         _clear_wizard(redir, tok)
         return redir
     return HTMLResponse(status_code=404, content="Unknown step.")
