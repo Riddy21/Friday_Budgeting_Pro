@@ -16,14 +16,20 @@
   <section class="institution-group" style="margin-bottom:2rem">
     <div class="institution-header" style="display:flex;justify-content:space-between;align-items:center;border-bottom:2px solid #e2e8f0;padding-bottom:0.5rem;margin-bottom:0.75rem">
       <h2 style="margin:0;font-size:1.1rem;font-weight:600">── {{ institution }}</h2>
-      <form method="post" action="/profile" style="display:inline;margin:0">
-        <input type="hidden" name="action" value="disconnect_bank">
-        <input type="hidden" name="bank_id" value="{{ data.connection_id }}">
-        <button type="submit" class="btn btn-sm btn-danger"
-          onclick="return confirm('Disconnect {{ institution }}? This will remove all linked accounts.')">
-          Disconnect
+      <div style="display:flex;gap:0.4rem;align-items:center">
+        <button type="button" class="btn btn-sm btn-secondary copy-token-btn"
+          data-connection-id="{{ data.connection_id }}">
+          Copy token
         </button>
-      </form>
+        <form method="post" action="/profile" style="display:inline;margin:0">
+          <input type="hidden" name="action" value="disconnect_bank">
+          <input type="hidden" name="bank_id" value="{{ data.connection_id }}">
+          <button type="submit" class="btn btn-sm btn-danger"
+            onclick="return confirm('Disconnect {{ institution }}? This will remove all linked accounts.')">
+            Disconnect
+          </button>
+        </form>
+      </div>
     </div>
     <table style="width:100%;border-collapse:collapse">
       <thead>
@@ -266,6 +272,26 @@ document.querySelectorAll('.rename-btn').forEach(btn => {
         delete btn.dataset.editing;
       }
     }, { once: true });
+  });
+});
+
+// ── Copy access token ──────────────────────────────────────────────────────────────────────────────────────────────
+document.querySelectorAll('.copy-token-btn').forEach(btn => {
+  btn.addEventListener('click', async function(event) {
+    const connectionId = btn.dataset.connectionId;
+    try {
+      const resp = await fetch(`/accounts/${connectionId}/access-token`);
+      if (!resp.ok) {
+        throw new Error(`HTTP ${resp.status}`);
+      }
+      const data = await resp.json();
+      await navigator.clipboard.writeText(data.access_token);
+      btn.textContent = 'Copied!';
+      setTimeout(() => { btn.textContent = 'Copy token'; }, 2000);
+    } catch (e) {
+      btn.textContent = 'Failed!';
+      setTimeout(() => { btn.textContent = 'Copy token'; }, 2000);
+    }
   });
 });
 </script>

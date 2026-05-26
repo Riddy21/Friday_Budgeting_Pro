@@ -953,6 +953,36 @@ def account_transactions_get(request: Request, account_id: str, limit: int = 50)
         conn.close()
 
 
+@app.get("/accounts/{connection_id}/access-token")
+def accounts_access_token_get(request: Request, connection_id: str):
+    """Return the decrypted Plaid access token for a bank connection.
+
+    Requires authentication.  Intended for personal use only — this is a
+    local single-user app and the token is needed for direct Plaid API calls.
+
+    Returns JSON: {"access_token": "access-production-..."}
+    """
+    if not _is_authenticated(request):
+        return JSONResponse({"error": "not authenticated"}, status_code=401)
+    conn = get_db(_db_path())
+    try:
+        row = conn.execute(
+            "SELECT plaid_access_token_encrypted FROM bank_connections WHERE id = ?",
+            (connection_id,),
+        ).fetchone()
+    finally:
+        conn.close()
+    if row is None:
+        return JSONResponse({"error": "connection not found"}, status_code=404)
+    try:
+        import server.crypto
+
+        access_token = server.crypto.decrypt(row["plaid_access_token_encrypted"])
+    except Exception as exc:
+        return JSONResponse({"error": f"decrypt failed: {exc}"}, status_code=500)
+    return JSONResponse({"access_token": access_token})
+
+
 @app.patch("/accounts/{account_id}/name")
 async def accounts_name_patch(request: Request, account_id: str):
     """Update the display name for a bank account (inline rename).  Requires auth.
