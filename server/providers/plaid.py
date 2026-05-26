@@ -26,6 +26,7 @@ from plaid.api import plaid_api
 from plaid.model.country_code import CountryCode
 from plaid.model.item_get_request import ItemGetRequest
 from plaid.model.item_public_token_exchange_request import ItemPublicTokenExchangeRequest
+from plaid.model.item_remove_request import ItemRemoveRequest
 from plaid.model.link_token_create_request import LinkTokenCreateRequest
 from plaid.model.link_token_create_request_user import LinkTokenCreateRequestUser
 from plaid.model.products import Products
@@ -246,6 +247,38 @@ class PlaidProvider(BankProvider):
             "error_message": error_message,
             "item_id": item_id,
         }
+
+    def remove_item(self, access_token: str) -> dict:
+        """
+        Revoke the Plaid item associated with *access_token* via /item/remove.
+
+        After a successful call Plaid invalidates the access token and stops
+        billing for the item.  This is the authoritative revocation step;
+        the caller is responsible for deleting the local ``bank_connections``
+        row afterward.
+
+        Parameters
+        ----------
+        access_token : str
+            Plaintext Plaid access token (decrypt via server.crypto before
+            passing here).
+
+        Returns
+        -------
+        dict
+            ``{"revoked": True, "request_id": "<plaid-request-id>"}`` on
+            success.  Callers should treat any raised exception as a
+            best-effort failure and still clean up the local DB row.
+        """
+        client = self._build_client()
+        request = ItemRemoveRequest(access_token=access_token)
+        response = client.item_remove(request)
+        request_id = (
+            response.get("request_id")
+            if isinstance(response, dict)
+            else getattr(response, "request_id", None)
+        )
+        return {"revoked": True, "request_id": request_id}
 
     def get_institution_name(self, access_token: str) -> str:
         """Return institution name for an access token."""

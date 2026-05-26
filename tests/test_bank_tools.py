@@ -149,8 +149,16 @@ def test_disconnect_removes_connection_and_sync_cursor(db_path):
 
     from server.main import disconnect
 
-    disconnect_result = disconnect(connection_id)
-    assert disconnect_result == {"ok": True}
+    with patch("server.main.PlaidProvider") as mock_provider_cls:
+        mock_provider_instance = mock_provider_cls.return_value
+        mock_provider_instance.remove_item.return_value = {"revoked": True, "request_id": "req-abc"}
+        disconnect_result = disconnect(connection_id)
+    mock_remove = mock_provider_instance.remove_item
+
+    assert disconnect_result["ok"] is True
+    assert disconnect_result["plaid_item_removed"] is True
+    assert "plaid_error" not in disconnect_result
+    mock_remove.assert_called_once()
 
     # Verify both rows are gone
     conn = get_db(db_path)
@@ -164,6 +172,55 @@ def test_disconnect_removes_connection_and_sync_cursor(db_path):
 
     assert bc_row is None
     assert sc_row is None
+
+
+def test_disconnect_still_removes_local_row_when_plaid_remove_fails(db_path):
+    """Plaid /item/remove failure must not prevent the local DB row from being deleted."""
+    exchange_result = {"access_token": "access-fail", "item_id": "item-fail"}
+
+    with patch(
+        "server.providers.plaid.PlaidProvider.exchange_public_token", return_value=exchange_result
+    ):
+        from server.main import complete_link
+
+        result = complete_link("public-token-fail")
+
+    connection_id = result["connection_id"]
+
+    from server.main import disconnect
+
+    with patch(
+        "server.providers.plaid.PlaidProvider.remove_item",
+        side_effect=Exception("Plaid API error"),
+    ):
+        disconnect_result = disconnect(connection_id)
+
+    # ok=True because local cleanup succeeded
+    assert disconnect_result["ok"] is True
+    assert disconnect_result["plaid_item_removed"] is False
+    assert "plaid_error" in disconnect_result
+    assert "Plaid API error" in disconnect_result["plaid_error"]
+
+    # Row must be gone locally despite Plaid failure
+    conn = get_db(db_path)
+    bc_row = conn.execute(
+        "SELECT id FROM bank_connections WHERE id = ?", (connection_id,)
+    ).fetchone()
+    conn.close()
+    assert bc_row is None
+
+
+def test_disconnect_nonexistent_id_returns_ok(db_path):
+    """Disconnecting an ID that doesn't exist should be a silent no-op."""
+    from server.main import disconnect
+
+    # remove_item should never be called because there's no row to load
+    with patch("server.providers.plaid.PlaidProvider.remove_item") as mock_remove:
+        result = disconnect("nonexistent-id-xyz")
+
+    assert result["ok"] is True
+    assert result["plaid_item_removed"] is False
+    mock_remove.assert_not_called()
 
 
 # ---------------------------------------------------------------------------
