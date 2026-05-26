@@ -1,0 +1,31 @@
+# Python
+.venv/
+venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Tests (not needed by end users)
+tests/
+
+# Dev / CI
+.github/
+.git/
+*.log
+*.lock
+
+# Secrets / local config
+.env
+.tokens.json
+state.json
+
+# Misc
+.DS_Store
+*.swp
+*.swo
