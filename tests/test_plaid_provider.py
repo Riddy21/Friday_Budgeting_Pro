@@ -223,5 +223,181 @@ class TestEnvValidation(unittest.TestCase):
                 plaid_module.PlaidProvider().create_link_token()
 
 
+# ---------------------------------------------------------------------------
+# MCP tool env passthrough: start_link / complete_link must not hardcode env
+# ---------------------------------------------------------------------------
+
+
+class TestStartLinkReadsEnvFromEnvironment(unittest.TestCase):
+    """Bug #218-B2: start_link() must not hardcode 'sandbox'; it must read
+    PLAID_ENV from the environment so production deployments work correctly."""
+
+    @patch("server.providers.plaid.plaid_api.PlaidApi")
+    def test_start_link_reads_plaid_env_from_environment(self, mock_api_cls):
+        """start_link(plaid_env=None) must pass env=None (or the DB-resolved value)
+        to PlaidProvider so PLAID_ENV from os.environ is honoured — not 'sandbox'."""
+        import tempfile
+        from pathlib import Path
+        from unittest.mock import patch
+
+        # Set up a fresh temp DB with a registered user.
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "test.db"
+
+            with patch.dict(
+                os.environ,
+                {
+                    "PLAID_ENV": "production",
+                    "PLAID_CLIENT_ID": "ci-client-id",
+                    "PLAID_SECRET": "ci-secret",
+                    "FRIDAY_BP_APP_DIR": tmpdir,
+                },
+                clear=False,
+            ):
+                import server.paths as _paths
+
+                orig_db = _paths.DB_PATH
+                _paths.DB_PATH = db_path
+
+                try:
+                    from server.db import init_db
+
+                    init_db(db_path)
+
+                    # Ensure an active user exists.
+                    import sqlite3
+                    import time
+
+                    c = sqlite3.connect(str(db_path))
+                    c.execute(
+                        "INSERT INTO users (id, username, password_hash, created_at) "
+                        "VALUES ('u1', 'test', 'x', ?)",
+                        (int(time.time()),),
+                    )
+                    c.commit()
+                    c.close()
+
+                    captured_env: list[str] = []
+
+                    class CapturingPlaidProvider:
+                        """Thin wrapper that records the resolved env argument."""
+
+                        def __init__(self, env=None, client_id=None, secret=None):
+                            # Record what env was passed at construction time.
+                            captured_env.append(
+                                env if env is not None else os.environ.get("PLAID_ENV", "sandbox")
+                            )
+                            self.env = env or os.environ.get("PLAID_ENV", "sandbox")
+
+                        def create_link_token(self, user_id="default"):
+                            return "link-test-token"
+
+                    import server.main as _sm
+
+                    with patch.object(_sm, "PlaidProvider", CapturingPlaidProvider):
+                        result = _sm.start_link()  # plaid_env=None — must NOT hardcode sandbox
+
+                    self.assertGreater(len(captured_env), 0, "PlaidProvider was never constructed")
+                    # The env seen by PlaidProvider must NOT be hardcoded 'sandbox'
+                    # when PLAID_ENV=production is in os.environ.
+                    constructed_env = captured_env[0]
+                    self.assertNotEqual(
+                        constructed_env,
+                        "sandbox",
+                        "start_link() hardcoded 'sandbox' instead of reading PLAID_ENV "
+                        f"from environment (got '{constructed_env}', expected 'production')",
+                    )
+                    self.assertEqual(constructed_env, "production")
+                finally:
+                    _paths.DB_PATH = orig_db
+
+
+class TestCompleteLinkReadsEnvFromEnvironment(unittest.TestCase):
+    """Bug #218-B2: complete_link() must not hardcode 'sandbox'; it must read
+    PLAID_ENV from the environment so connections are tagged with the correct env."""
+
+    @patch("server.providers.plaid.plaid_api.PlaidApi")
+    def test_complete_link_reads_plaid_env_from_environment(self, mock_api_cls):
+        """complete_link(plaid_env=None) must derive the env from os.environ,
+        not fall back to a hardcoded 'sandbox'."""
+        import tempfile
+        from pathlib import Path
+        from unittest.mock import patch
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "test.db"
+
+            with patch.dict(
+                os.environ,
+                {
+                    "PLAID_ENV": "production",
+                    "PLAID_CLIENT_ID": "ci-client-id",
+                    "PLAID_SECRET": "ci-secret",
+                    "FRIDAY_BP_APP_DIR": tmpdir,
+                },
+                clear=False,
+            ):
+                import server.paths as _paths
+
+                orig_db = _paths.DB_PATH
+                _paths.DB_PATH = db_path
+
+                try:
+                    from server.db import init_db
+
+                    init_db(db_path)
+
+                    import sqlite3
+                    import time
+
+                    c = sqlite3.connect(str(db_path))
+                    c.execute(
+                        "INSERT INTO users (id, username, password_hash, created_at) "
+                        "VALUES ('u1', 'test', 'x', ?)",
+                        (int(time.time()),),
+                    )
+                    c.commit()
+                    c.close()
+
+                    captured_env: list[str] = []
+
+                    class CapturingPlaidProvider:
+                        def __init__(self, env=None, client_id=None, secret=None):
+                            captured_env.append(
+                                env if env is not None else os.environ.get("PLAID_ENV", "sandbox")
+                            )
+                            self.env = env or os.environ.get("PLAID_ENV", "sandbox")
+
+                        def exchange_public_token(self, token):
+                            return {
+                                "access_token": "access-production-abc",
+                                "item_id": "item-xyz",
+                            }
+
+                        def get_institution_name(self, access_token):
+                            return "Test Bank"
+
+                    import server.crypto as _crypto
+                    import server.main as _sm
+
+                    with (
+                        patch.object(_sm, "PlaidProvider", CapturingPlaidProvider),
+                        patch.object(_crypto, "encrypt", lambda t: t + "_encrypted"),
+                    ):
+                        _sm.complete_link(public_token="public-production-tok")  # env=None
+
+                    self.assertGreater(len(captured_env), 0, "PlaidProvider was never constructed")
+                    constructed_env = captured_env[0]
+                    self.assertNotEqual(
+                        constructed_env,
+                        "sandbox",
+                        "complete_link() hardcoded 'sandbox' instead of reading PLAID_ENV "
+                        f"from environment (got '{constructed_env}', expected 'production')",
+                    )
+                    self.assertEqual(constructed_env, "production")
+                finally:
+                    _paths.DB_PATH = orig_db
+
+
 if __name__ == "__main__":
     unittest.main()

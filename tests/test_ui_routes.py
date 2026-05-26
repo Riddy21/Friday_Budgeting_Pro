@@ -252,3 +252,64 @@ class TestAuthenticatedRoutes:
         r = self.client.get("/static/style.css")
         assert r.status_code == 200
         assert "text/css" in r.headers.get("content-type", "")
+
+
+# ---------------------------------------------------------------------------
+# Bug #218-B3: POST /link/complete route must exist and return 302
+# ---------------------------------------------------------------------------
+
+
+class TestLinkComplete:
+    """The POST /link/complete endpoint must be registered and return a redirect.
+
+    Before this was tested, the route could silently become 404 or 405 if
+    the decorator was removed or the method list changed.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _authed(self, authed_client):
+        self.client = authed_client
+
+    def test_post_link_complete_not_405(self):
+        """POST /link/complete must NOT return 405 Method Not Allowed.
+
+        A 405 means the route exists but only accepts GET — the Plaid Link
+        success callback would silently fail.
+        """
+        from unittest.mock import patch
+
+        # Patch out complete_link and sync so no real Plaid call is made.
+        with (
+            patch("server.main.complete_link", return_value={"connection_id": "c1"}),
+            patch("server.main.sync", return_value={}),
+        ):
+            r = self.client.post("/link/complete", data={"public_token": "public-sandbox-tok"})
+
+        assert r.status_code != 405, (
+            "POST /link/complete returned 405 Method Not Allowed — "
+            "the route is missing or only accepts GET"
+        )
+
+    def test_post_link_complete_returns_302(self):
+        """POST /link/complete with a valid public_token must return a 302 redirect.
+
+        The Plaid Link JS calls this endpoint after a successful Link flow.
+        It must redirect (to /accounts or /accounts?linked=1) — not 200 or 5xx.
+        """
+        from unittest.mock import patch
+
+        with (
+            patch("server.main.complete_link", return_value={"connection_id": "c1"}),
+            patch("server.main.sync", return_value={}),
+        ):
+            r = self.client.post("/link/complete", data={"public_token": "public-sandbox-tok"})
+
+        assert r.status_code == 302, (
+            f"POST /link/complete expected 302 redirect, got {r.status_code}. "
+            "The route handler may be missing or not redirecting correctly."
+        )
+        # Should redirect to the accounts page (with or without query params).
+        location = r.headers.get("location", "")
+        assert (
+            "/accounts" in location
+        ), f"POST /link/complete redirected to unexpected location: '{location}'"
