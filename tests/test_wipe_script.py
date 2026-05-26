@@ -83,19 +83,20 @@ def _insert_connection(db_path, institution="Test Bank", access_token="at-test",
         (cid, item_id, "enc:" + access_token, institution, env),
     )
     conn.commit()
-    # Insert into revocation log separately so bank_connections is committed
-    # regardless, and so any schema issue with the log is surfaced clearly.
-    try:
-        conn.execute(
-            "INSERT INTO plaid_revocation_log "
-            "(id, plaid_item_id, access_token_encrypted, institution_name, plaid_env, revoked) "
-            "VALUES (?, ?, ?, ?, ?, 0)",
-            (str(uuid.uuid4()), item_id, "enc:" + access_token, institution, env),
-        )
-        conn.commit()
-    except Exception as exc:  # noqa: BLE001
-        raise RuntimeError(f"plaid_revocation_log insert failed: {exc}") from exc
     conn.close()
+    # Insert into plaid_revocation_log using a direct sqlite3 connection in
+    # autocommit mode so the row is immediately visible to all readers
+    # (avoids isolation issues between connections in CI / Python 3.11).
+    import sqlite3 as _sqlite3  # noqa: PLC0415
+
+    raw = _sqlite3.connect(str(db_path), isolation_level=None)
+    raw.execute(
+        "INSERT INTO plaid_revocation_log "
+        "(id, plaid_item_id, access_token_encrypted, institution_name, plaid_env, revoked) "
+        "VALUES (?, ?, ?, ?, ?, 0)",
+        (str(uuid.uuid4()), item_id, "enc:" + access_token, institution, env),
+    )
+    raw.close()
     return cid
 
 
