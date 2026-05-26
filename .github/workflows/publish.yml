@@ -1,0 +1,66 @@
+name: Publish to ClawHub
+
+on:
+  release:
+    types: [published]
+
+jobs:
+  # ── Gate: all tests must pass before publishing ──────────────────────────
+  test:
+    name: Test gate
+    uses: ./.github/workflows/test.yml
+
+  # ── Publish to ClawHub ────────────────────────────────────────────────────
+  publish:
+    name: Publish to ClawHub
+    runs-on: ubuntu-latest
+    needs: test
+    permissions:
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install ClawHub CLI
+        run: npm install -g clawhub
+
+      - name: Authenticate
+        run: clawhub login --token "${{ secrets.CLAWHUB_TOKEN }}" --no-browser
+
+      - name: Verify identity
+        run: clawhub whoami
+
+      - name: Extract version and changelog from release
+        id: release
+        run: |
+          # Version comes from the git tag (e.g. v1.2.3 → 1.2.3)
+          VERSION="${{ github.event.release.tag_name }}"
+          VERSION="${VERSION#v}"   # strip leading 'v' if present
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+
+          # Changelog is the release body written on GitHub
+          CHANGELOG="${{ github.event.release.body }}"
+          echo "changelog<<EOF" >> $GITHUB_OUTPUT
+          echo "$CHANGELOG" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+      - name: Sync version into package.json
+        run: |
+          node -e "
+            const fs = require('fs');
+            const pkg = JSON.parse(fs.readFileSync('package.json'));
+            pkg.version = '${{ steps.release.outputs.version }}';
+            fs.writeFileSync('package.json', JSON.stringify(pkg, null, 2) + '\n');
+          "
+          cat package.json | grep version
+
+      - name: Publish
+        run: |
+          clawhub publish . \
+            --slug "friday-budgeting-pro" \
+            --name "Friday Budgeting Pro" \
+            --version "${{ steps.release.outputs.version }}" \
+            --changelog "${{ steps.release.outputs.changelog }}"
+
+      - name: Confirm
+        run: clawhub list

@@ -4,6 +4,7 @@ on:
   push:
     branches: [main]
   pull_request:
+  workflow_call:  # allows publish.yml to gate on this
 
 jobs:
   unit:
@@ -60,6 +61,35 @@ jobs:
       - run: python3 -m pytest tests/integration/ -q
         env:
           FRIDAY_BP_DB_PATH: /tmp/test-integration.db
+
+  e2e:
+    runs-on: ubuntu-latest
+    needs: unit          # only run if unit tests pass
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install Python dependencies
+        run: pip install -r requirements.txt
+      - name: Install Playwright + chromium
+        run: |
+          pip install playwright pytest-playwright
+          playwright install chromium --with-deps
+      - name: Run Playwright E2E tests
+        run: python3 -m pytest tests/playwright/ tests/ui/ -q --tb=short
+        env:
+          PLAID_CLIENT_ID: ${{ secrets.PLAID_SANDBOX_CLIENT_ID }}
+          PLAID_SECRET: ${{ secrets.PLAID_SANDBOX_SECRET }}
+          PLAID_ENV: sandbox
+          FRIDAY_BP_APP_DIR: /tmp/friday-bp-e2e
+      - name: Upload screenshots on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-screenshots
+          path: tests/playwright/_screenshots/
+          if-no-files-found: ignore
 
   mcp-smoke:
     runs-on: ubuntu-latest
