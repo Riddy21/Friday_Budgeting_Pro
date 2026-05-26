@@ -191,6 +191,24 @@ def init_db(path: str | Path) -> None:
             """)
         conn.commit()
 
+        # Migration: plaid_revocation_log (#265 — durable revocation audit log).
+        # Mirrors every access token inserted via complete_link so that
+        # wipe.py and retry_pending_revocations() can revoke tokens even
+        # after the bank_connections row has been deleted.
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS plaid_revocation_log (
+                id                     TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
+                plaid_item_id          TEXT NOT NULL,
+                access_token_encrypted TEXT NOT NULL,
+                institution_name       TEXT,
+                plaid_env              TEXT NOT NULL DEFAULT 'production',
+                created_at             INTEGER NOT NULL DEFAULT (unixepoch()),
+                revoked_at             INTEGER,
+                revoked                INTEGER NOT NULL DEFAULT 0
+            )
+        """)
+        conn.commit()
+
         # Migration: create default user only when there is existing data to migrate
         # (i.e. rows exist that need a user_id) but no users have been created yet.
         # On truly fresh DBs, we leave users empty so the setup wizard can create

@@ -67,9 +67,13 @@ def _count(conn, table: str) -> int:
 
 
 def _load_connections(conn) -> list[dict]:
+    # Use plaid_revocation_log (not bank_connections) so that tokens are
+    # available for revocation even if the bank_connections rows were already
+    # deleted.  Only rows that haven't been successfully revoked yet are
+    # returned.  (#265)
     rows = conn.execute(
-        "SELECT id, institution_name, plaid_access_token_encrypted, plaid_env "
-        "FROM bank_connections"
+        "SELECT id, institution_name, access_token_encrypted AS plaid_access_token_encrypted, plaid_env "
+        "FROM plaid_revocation_log WHERE revoked=0"
     ).fetchall()
     return [dict(r) for r in rows]
 
@@ -92,10 +96,24 @@ def _revoke_on_plaid(connection: dict, dry_run: bool) -> dict:
         plaid_env = connection["plaid_env"] or os.environ.get("PLAID_ENV", "sandbox")
         provider = PlaidProvider(env=plaid_env)
         result = provider.remove_item(access_token)
+        revoked = result.get("revoked", False)
+        if revoked:
+            # Mark revoked in the log so retry_pending_revocations() skips it
+            try:
+                _db = get_db(server.paths.DB_PATH)
+                _db.execute(
+                    "UPDATE plaid_revocation_log "
+                    "SET revoked=1, revoked_at=unixepoch() WHERE id=?",
+                    (cid,),
+                )
+                _db.commit()
+                _db.close()
+            except Exception:  # noqa: BLE001
+                pass  # best-effort; don't abort wipe if log update fails
         return {
             "id": cid,
             "institution": inst,
-            "revoked": result.get("revoked", False),
+            "revoked": revoked,
             "error": None,
         }
     except Exception as exc:  # noqa: BLE001
