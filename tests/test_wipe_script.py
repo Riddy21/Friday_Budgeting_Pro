@@ -82,13 +82,19 @@ def _insert_connection(db_path, institution="Test Bank", access_token="at-test",
         "VALUES (?, ?, ?, ?, 'active', ?, 'user-1')",
         (cid, item_id, "enc:" + access_token, institution, env),
     )
-    conn.execute(
-        "INSERT INTO plaid_revocation_log "
-        "(id, plaid_item_id, access_token_encrypted, institution_name, plaid_env, revoked) "
-        "VALUES (?, ?, ?, ?, ?, 0)",
-        (str(uuid.uuid4()), item_id, "enc:" + access_token, institution, env),
-    )
     conn.commit()
+    # Insert into revocation log separately so bank_connections is committed
+    # regardless, and so any schema issue with the log is surfaced clearly.
+    try:
+        conn.execute(
+            "INSERT INTO plaid_revocation_log "
+            "(id, plaid_item_id, access_token_encrypted, institution_name, plaid_env, revoked) "
+            "VALUES (?, ?, ?, ?, ?, 0)",
+            (str(uuid.uuid4()), item_id, "enc:" + access_token, institution, env),
+        )
+        conn.commit()
+    except Exception as exc:  # noqa: BLE001
+        raise RuntimeError(f"plaid_revocation_log insert failed: {exc}") from exc
     conn.close()
     return cid
 
