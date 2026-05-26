@@ -120,8 +120,10 @@ def _revoke_on_plaid(connection: dict, dry_run: bool) -> dict:
         return {"id": cid, "institution": inst, "revoked": False, "error": str(exc)}
 
 
-def run(dry_run: bool, skip_prompt: bool) -> None:  # noqa: C901
-    db_path = server.paths.DB_PATH
+def run(dry_run: bool, skip_prompt: bool, db_path=None) -> None:  # noqa: C901
+    if db_path is None:
+        db_path = server.paths.DB_PATH
+    db_path = Path(db_path)
 
     if not db_path.exists():
         print(f"[wipe] Database not found at {db_path} — nothing to do.")

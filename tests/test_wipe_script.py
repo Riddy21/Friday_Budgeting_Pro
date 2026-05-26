@@ -141,7 +141,7 @@ def test_dry_run_prints_summary_and_makes_no_changes(db_path, capsys):
     _insert_transaction(db_path, cid)
 
     with patch("wipe.PlaidProvider") as mock_remove:
-        wipe.run(dry_run=True, skip_prompt=True)
+        wipe.run(dry_run=True, skip_prompt=True, db_path=db_path)
 
     # Plaid should never be called in dry-run
     mock_remove.assert_not_called()
@@ -178,7 +178,7 @@ def test_full_wipe_revokes_plaid_and_clears_tables(db_path, capsys):
 
     with patch("wipe.PlaidProvider") as mock_cls:
         mock_cls.return_value.remove_item.return_value = {"revoked": True, "request_id": "req-xyz"}
-        wipe.run(dry_run=False, skip_prompt=True)
+        wipe.run(dry_run=False, skip_prompt=True, db_path=db_path)
 
     mock_cls.assert_called()  # PlaidProvider was instantiated
 
@@ -199,7 +199,7 @@ def test_full_wipe_continues_on_plaid_error(db_path, capsys):
 
     with patch("wipe.PlaidProvider") as mock_cls:
         mock_cls.return_value.remove_item.side_effect = Exception("network timeout")
-        wipe.run(dry_run=False, skip_prompt=True)
+        wipe.run(dry_run=False, skip_prompt=True, db_path=db_path)
 
     conn = get_db(db_path)
     assert conn.execute("SELECT COUNT(*) FROM bank_connections").fetchone()[0] == 0
@@ -214,7 +214,7 @@ def test_full_wipe_continues_on_plaid_error(db_path, capsys):
 def test_full_wipe_empty_db_is_noop(db_path, capsys):
     """Wiping an already-empty database should not raise and should say so."""
     with patch("wipe.PlaidProvider") as mock_remove:
-        wipe.run(dry_run=False, skip_prompt=True)
+        wipe.run(dry_run=False, skip_prompt=True, db_path=db_path)
 
     mock_remove.assert_not_called()
     out = capsys.readouterr().out
@@ -236,7 +236,7 @@ def test_full_wipe_multiple_connections(db_path):
 
     with patch("wipe.PlaidProvider") as mock_cls:
         mock_cls.return_value.remove_item.side_effect = fake_remove
-        wipe.run(dry_run=False, skip_prompt=True)
+        wipe.run(dry_run=False, skip_prompt=True, db_path=db_path)
 
     assert len(revoke_calls) == 2  # both connections attempted
     conn = get_db(db_path)
@@ -249,11 +249,9 @@ def test_full_wipe_multiple_connections(db_path):
 # ---------------------------------------------------------------------------
 
 
-def test_missing_db_exits_cleanly(tmp_path, monkeypatch, capsys):
-    monkeypatch.setattr(server.paths, "DB_PATH", tmp_path / "nonexistent.db")
-
+def test_missing_db_exits_cleanly(tmp_path, capsys):
     with pytest.raises(SystemExit) as exc_info:
-        wipe.run(dry_run=False, skip_prompt=True)
+        wipe.run(dry_run=False, skip_prompt=True, db_path=tmp_path / "nonexistent.db")
 
     assert exc_info.value.code == 0
     out = capsys.readouterr().out
