@@ -667,8 +667,7 @@ def disconnect(id: str) -> dict:
     db = get_db(server.paths.DB_PATH)
     try:
         row = db.execute(
-            "SELECT plaid_access_token_encrypted, plaid_env "
-            "FROM bank_connections WHERE id = ?",
+            "SELECT plaid_access_token_encrypted, plaid_env " "FROM bank_connections WHERE id = ?",
             (id,),
         ).fetchone()
     finally:

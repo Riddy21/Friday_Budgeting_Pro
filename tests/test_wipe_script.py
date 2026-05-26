@@ -10,7 +10,7 @@ from __future__ import annotations
 import sys
 import uuid
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 
@@ -26,7 +26,6 @@ if str(_REPO_ROOT) not in sys.path:
 
 import server.paths  # noqa: E402
 from server.db import get_db, init_db  # noqa: E402
-
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -46,7 +45,7 @@ def db_path(tmp_path, monkeypatch):
 def patch_crypto(monkeypatch):
     """Transparent passthrough encrypt/decrypt + no-op init_crypto."""
     monkeypatch.setattr("server.crypto.encrypt", lambda p: "enc:" + p)
-    monkeypatch.setattr("server.crypto.decrypt", lambda c: c[len("enc:"):])
+    monkeypatch.setattr("server.crypto.decrypt", lambda c: c[len("enc:") :])
     monkeypatch.setattr("server.crypto.init_crypto", lambda: None)
 
 
