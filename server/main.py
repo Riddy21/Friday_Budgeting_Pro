@@ -1561,9 +1561,14 @@ def sync() -> dict:
             db_conn = get_db(server.paths.DB_PATH)
             try:
                 # Run health check first so stale/expired connections are
-                # updated before we attempt to sync them.
+                # updated before we attempt to sync them.  Pass
+                # plaid_provider=None so the monitor builds per-connection
+                # providers from DB credentials (same pattern as the sync
+                # loop below).  Passing the module-level _plaid singleton
+                # would use env-var credentials only, which breaks ClawHub
+                # installs where credentials are stored in plaid_config.
                 health_check_result = server.health_monitor.check_all_connections(
-                    db_conn, plaid_provider=_plaid
+                    db_conn, plaid_provider=None
                 )
 
                 active_conns = db_conn.execute(
