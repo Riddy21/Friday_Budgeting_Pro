@@ -330,7 +330,7 @@ def test_db_credentials_used_when_no_provider_passed(tmp_path, monkeypatch):
     plaid_config rows would fail with INVALID_API_KEYS on every health check.
     """
     import sqlite3
-    from unittest.mock import MagicMock, patch
+    from unittest.mock import patch
 
     db = tmp_path / "data.db"
     monkeypatch.setattr("server.paths.DB_PATH", db)
@@ -344,7 +344,9 @@ def test_db_credentials_used_when_no_provider_passed(tmp_path, monkeypatch):
     conn.row_factory = sqlite3.Row
     try:
         # Insert user
-        conn.execute("INSERT OR IGNORE INTO users (id, username) VALUES (?, ?)", (user_id, "testuser"))
+        conn.execute(
+            "INSERT OR IGNORE INTO users (id, username) VALUES (?, ?)", (user_id, "testuser")
+        )
         # Insert plaid_config with DB-only credentials
         conn.execute(
             "INSERT INTO plaid_config (user_id, client_id, secret, plaid_env) VALUES (?, ?, ?, ?)",
@@ -388,12 +390,12 @@ def test_db_credentials_used_when_no_provider_passed(tmp_path, monkeypatch):
 
     # A PlaidProvider should have been built with the DB credentials, not empty ones
     assert len(built_providers) == 1, "expected exactly one PlaidProvider to be built"
-    assert built_providers[0]["client_id"] == "db-client-id", (
-        "health monitor should use DB client_id, not env var / empty string"
-    )
-    assert built_providers[0]["secret"] == "db-secret", (
-        "health monitor should use DB secret, not env var / empty string"
-    )
+    assert (
+        built_providers[0]["client_id"] == "db-client-id"
+    ), "health monitor should use DB client_id, not env var / empty string"
+    assert (
+        built_providers[0]["secret"] == "db-secret"
+    ), "health monitor should use DB secret, not env var / empty string"
 
 
 def test_sync_passes_none_not_module_singleton_to_health_monitor(monkeypatch):
@@ -401,12 +403,13 @@ def test_sync_passes_none_not_module_singleton_to_health_monitor(monkeypatch):
     to check_all_connections so the health monitor uses DB credentials
     instead of the module-level _plaid singleton (which has no DB creds).
     """
-    from unittest.mock import call, patch
     import server.main as _sm
 
     captured_provider_arg = []
 
-    original_check = __import__("server.health_monitor", fromlist=["check_all_connections"]).check_all_connections
+    original_check = __import__(
+        "server.health_monitor", fromlist=["check_all_connections"]
+    ).check_all_connections
 
     def _spy_check(db_conn, plaid_provider=None):
         captured_provider_arg.append(plaid_provider)
@@ -416,7 +419,9 @@ def test_sync_passes_none_not_module_singleton_to_health_monitor(monkeypatch):
     # Prevent actual sync work — we only care about what sync() passes to
     # check_all_connections.
     monkeypatch.setattr("server.health_monitor.check_all_connections", _spy_check)
-    monkeypatch.setattr(_sm, "sync_lock", lambda timeout=0.0: __import__("contextlib").nullcontext())
+    monkeypatch.setattr(
+        _sm, "sync_lock", lambda timeout=0.0: __import__("contextlib").nullcontext()
+    )
 
     # Fake get_db so no real DB is needed
     class _FakeConn:
@@ -424,11 +429,15 @@ def test_sync_passes_none_not_module_singleton_to_health_monitor(monkeypatch):
             class _Result:
                 def fetchall(self):
                     return []
+
                 def fetchone(self):
                     return None
+
             return _Result()
+
         def close(self):
             pass
+
         def commit(self):
             pass
 
