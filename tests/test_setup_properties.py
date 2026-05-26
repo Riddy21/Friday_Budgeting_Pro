@@ -19,11 +19,8 @@ Covers:
 from __future__ import annotations
 
 import uuid
-from pathlib import Path
-from unittest.mock import patch
 
 import pytest
-from fastapi.testclient import TestClient
 
 import server.main
 import server.paths

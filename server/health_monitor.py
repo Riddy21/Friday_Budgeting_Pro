@@ -89,6 +89,7 @@ def check_all_connections(db_conn: "sqlite3.Connection", plaid_provider=None) ->
             conn_user_id = row["user_id"]
             conn_plaid_env = row["plaid_env"] or "sandbox"
             from server.plaid_credentials import get_plaid_credentials
+
             cred_client_id, cred_secret, _ = get_plaid_credentials(conn_user_id)
             conn_provider = PlaidProvider(
                 env=conn_plaid_env,

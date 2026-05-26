@@ -44,6 +44,7 @@ def get_plaid_credentials(
     """
     if db_path is None:
         import server.paths
+
         db_path = server.paths.DB_PATH
 
     if user_id:

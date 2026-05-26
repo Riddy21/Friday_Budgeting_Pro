@@ -474,6 +474,7 @@ def complete_link(public_token: str, plaid_env: str | None = None) -> dict:
         institution_name = provider.get_institution_name(access_token)
     except Exception as _inst_exc:  # noqa: BLE001
         import logging as _logging
+
         _logging.getLogger(__name__).warning(
             "complete_link: could not fetch institution name: %s", _inst_exc
         )
@@ -1413,48 +1414,17 @@ def classify_pending_transactions(user_id: str, limit: int | None = None) -> dic
                     # line_item_id is stale/invalid; clear it.
                     line_item_id = None
 
-            # Fallback: LLM best-guess using full ledger tree.
-            # When no rule matched (line_item_id is None), ask the LLM to pick
-            # the best line item from the full ledger tree rather than blindly
-            # grabbing the first item in the ledger.
-            if line_item_id is None:
-                try:
-                    from server.classifier import classify_with_llm
-
-                    llm_entry = classify_with_llm(
-                        conn,
-                        {
-                            "id": tx_id,
-                            "merchant": merchant,
-                            "amount": amount,
-                            "date": date,
-                            "account_name": account_name,
-                            "account_description": account_description,
-                            "plaid_category": plaid_category,
-                            "bank_account_id": bank_account_id,
-                        },
-                    )
-                    line_item_id = llm_entry.get("line_item_id")
-                    ledger_id = llm_entry.get("ledger_id")
-                    confidence = float(llm_entry.get("confidence", confidence))
-                    is_uncertain = confidence < 0.7
-                    # Derive classification_type from the line item's item_type
-                    # so income line items get entry_type='income', not 'spending'
-                    li_type_row = conn.execute(
-                        "SELECT item_type FROM line_items WHERE id = ?",
-                        (line_item_id,),
-                    ).fetchone()
-                    if li_type_row and li_type_row["item_type"] == "income":
-                        classification_type = "income"
-                    elif classification_type not in ("transfer", "savings", "skip"):
-                        classification_type = "spending"
-                except Exception as _llm_exc:
-                    _logger.warning(
-                        "classify_pending_transactions: LLM best-guess fallback "
-                        "failed for tx_id=%s: %s",
-                        tx_id,
-                        _llm_exc,
-                    )
+            # Derive classification_type from the resolved line item's
+            # item_type so income line items always get entry_type='income'.
+            if line_item_id:
+                li_type_row = conn.execute(
+                    "SELECT item_type FROM line_items WHERE id = ?",
+                    (line_item_id,),
+                ).fetchone()
+                if li_type_row and li_type_row["item_type"] == "income":
+                    classification_type = "income"
+                elif classification_type not in ("transfer", "savings", "skip"):
+                    classification_type = "spending"
 
             # Last resort: if still no line_item_id but account has a default
             # ledger, grab the first matching line item from that ledger.
