@@ -520,6 +520,13 @@ async def setup_post(request: Request, step: int):
                     _sm_cl.complete_link(public_token=public_token)
                 except Exception:
                     pass
+                # Trigger an initial sync to populate bank_accounts immediately.
+                try:
+                    import server.main as _sm_sync_setup
+
+                    _sm_sync_setup.sync()
+                except Exception:
+                    pass
         import server.main as _sm
 
         _sm.apply_initial_setup(
@@ -1264,8 +1271,12 @@ async def profile_post(request: Request):
 
             try:
                 _sm.disconnect(id=bank_id)
-                connections = _get_connections()  # refresh after delete
-                action_result = {"ok": True, "message": "Bank account disconnected."}
+                # Redirect to /accounts, or /setup if no connections remain
+                remaining = _get_connections(uid)
+                if remaining:
+                    return _redirect("/accounts")
+                else:
+                    return _redirect("/setup")
             except Exception as exc:
                 action_result = {"ok": False, "message": f"Disconnect failed: {exc}"}
 
@@ -1567,7 +1578,7 @@ def ledger_items_delete(request: Request, ledger_id: str, item_id: str):
 
 
 @app.get("/link/start")
-def link_start(request: Request):
+def link_start(request: Request, back: Optional[str] = None):
     """Generate a Plaid link token and redirect to /link?token=..."""
     if not _is_authenticated(request):
         return _redirect("/login")
@@ -1579,14 +1590,15 @@ def link_start(request: Request):
     if not url or "token=" not in url:
         return _redirect("/profile?error=link_token_failed")
     token = url.split("token=", 1)[1]
-    return _redirect(f"/link?token={token}")
+    back_param = f"&back={back}" if back else ""
+    return _redirect(f"/link?token={token}{back_param}")
 
 
 # ── /link ─────────────────────────────────────────────────────────────────────
 
 
 @app.get("/link", response_class=HTMLResponse)
-def link_get(request: Request, token: Optional[str] = None):
+def link_get(request: Request, token: Optional[str] = None, back: Optional[str] = None):
     """Plaid Link JS embed.
 
     Accepts ?token=<link_token> from whoever generates the link token
@@ -1597,8 +1609,49 @@ def link_get(request: Request, token: Optional[str] = None):
     """
     if not _is_authenticated(request):
         return _redirect("/login")
+    back_url = back or "/accounts"
     return templates.TemplateResponse(
         request,
         "link.html",
-        {"link_token": token},
+        {
+            "link_token": token,
+            "complete_url": "/link/complete",
+            "back_url": back_url,
+        },
     )
+
+
+@app.post("/link/complete")
+async def link_complete(request: Request):
+    """Receive the Plaid public_token after a successful Link flow and exchange it.
+
+    Called by the Plaid Link success callback via a hidden form POST.
+    Stores the bank connection, triggers an initial sync to populate
+    bank_accounts, then redirects to /accounts.
+    """
+    if not _is_authenticated(request):
+        return _redirect("/login")
+    form = await request.form()
+    public_token = (form.get("public_token") or "").strip()
+    if not public_token:
+        return _redirect("/accounts?error=missing_token")
+    try:
+        import server.main as _sm_cl
+
+        _sm_cl.complete_link(public_token=public_token)
+    except Exception as exc:  # noqa: BLE001
+        import logging
+
+        logging.getLogger(__name__).error("complete_link failed: %s", exc)
+        return _redirect("/accounts?error=link_failed")
+    # Trigger an initial sync so bank_accounts gets populated immediately.
+    # Errors here are non-fatal — the connection is already stored.
+    try:
+        import server.main as _sm_sync
+
+        _sm_sync.sync()
+    except Exception as exc:  # noqa: BLE001
+        import logging
+
+        logging.getLogger(__name__).warning("post-link sync failed: %s", exc)
+    return _redirect("/accounts?linked=1")

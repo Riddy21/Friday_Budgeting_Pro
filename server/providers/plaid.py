@@ -53,38 +53,56 @@ class PlaidProvider(BankProvider):
         Plaid environment to use: ``'sandbox'``, ``'development'``, or
         ``'production'``.  When *None* (the default), falls back to the
         ``PLAID_ENV`` environment variable (default: ``'sandbox'``).
+    client_id : str or None
+        Plaid client ID.  When *None*, falls back to the ``PLAID_CLIENT_ID``
+        environment variable.
+    secret : str or None
+        Plaid secret.  When *None*, falls back to the ``PLAID_SECRET``
+        environment variable.
     """
 
     name = "plaid"
 
-    def __init__(self, env: str | None = None) -> None:
+    def __init__(
+        self,
+        env: str | None = None,
+        client_id: str | None = None,
+        secret: str | None = None,
+    ) -> None:
         resolved = (env or os.environ.get("PLAID_ENV", "sandbox")).lower()
         if resolved not in _ENV_MAP:
             raise ValueError(
                 f"Invalid Plaid env '{resolved}'. Must be one of: " + ", ".join(_ENV_MAP)
             )
         self.env: str = resolved
+        self._client_id: str | None = client_id
+        self._secret: str | None = secret
 
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
 
     def _build_client(self) -> plaid_api.PlaidApi:
-        """Instantiate a PlaidApi client using ``self.env``."""
+        """Instantiate a PlaidApi client using ``self.env``.
+
+        Credentials are resolved in priority order:
+        1. Values passed directly to ``PlaidProvider.__init__`` (from DB)
+        2. ``PLAID_CLIENT_ID`` / ``PLAID_SECRET`` environment variables
+        """
         raw_env = self.env
 
-        client_id = os.environ.get("PLAID_CLIENT_ID")
+        client_id = self._client_id or os.environ.get("PLAID_CLIENT_ID")
         if not client_id:
             raise EnvironmentError(
-                "PLAID_CLIENT_ID environment variable is not set. "
-                "Set it to your Plaid client ID before starting the daemon."
+                "Plaid client_id is not configured. "
+                "Run configure_plaid() or set PLAID_CLIENT_ID in the environment."
             )
 
-        secret = os.environ.get("PLAID_SECRET")
+        secret = self._secret or os.environ.get("PLAID_SECRET")
         if not secret:
             raise EnvironmentError(
-                "PLAID_SECRET environment variable is not set. "
-                "Set it to the Plaid secret for your environment before starting the daemon."
+                "Plaid secret is not configured. "
+                "Run configure_plaid() or set PLAID_SECRET in the environment."
             )
 
         configuration = plaid.Configuration(

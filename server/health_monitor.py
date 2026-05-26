@@ -34,22 +34,31 @@ def check_all_connections(db_conn: "sqlite3.Connection", plaid_provider=None) ->
     db_conn:
         An open SQLite connection (caller owns open/close).
     plaid_provider:
-        A PlaidProvider instance.  Pass the singleton ``_plaid`` from
-        server/main.py.  If None, imports and instantiates one (test fallback).
+        A PlaidProvider instance.  When provided it is used directly for all
+        connections (e.g. passing the module-level singleton from server.main,
+        or a test mock).  When None, per-connection providers are created from
+        the ``plaid_config`` DB table (falling back to environment variables)
+        so that multi-user deployments use the correct credentials per user.
 
     Returns
     -------
     dict
         {"checked": N, "active": A, "needs_reauth": R, "pending_expiration": P}
     """
+    from server.providers.plaid import PlaidProvider
+
+    # Determine query columns: need user_id and plaid_env only when we must
+    # build per-connection providers (plaid_provider is None).
     if plaid_provider is None:
-        from server.providers.plaid import PlaidProvider
-
-        plaid_provider = PlaidProvider()
-
-    rows = db_conn.execute(
-        "SELECT id, plaid_access_token_encrypted FROM bank_connections WHERE status = 'active'"
-    ).fetchall()
+        rows = db_conn.execute(
+            "SELECT id, plaid_access_token_encrypted, user_id, plaid_env "
+            "FROM bank_connections WHERE status = 'active'"
+        ).fetchall()
+    else:
+        rows = db_conn.execute(
+            "SELECT id, plaid_access_token_encrypted "
+            "FROM bank_connections WHERE status = 'active'"
+        ).fetchall()
 
     checked = 0
     active_count = 0
@@ -71,8 +80,24 @@ def check_all_connections(db_conn: "sqlite3.Connection", plaid_provider=None) ->
             )
             continue
 
+        # Resolve the provider: use the passed instance when available (test
+        # mocks / module singleton), otherwise build one per-connection from
+        # per-user DB credentials.
+        if plaid_provider is not None:
+            conn_provider = plaid_provider
+        else:
+            conn_user_id = row["user_id"]
+            conn_plaid_env = row["plaid_env"] or "sandbox"
+            from server.plaid_credentials import get_plaid_credentials
+            cred_client_id, cred_secret, _ = get_plaid_credentials(conn_user_id)
+            conn_provider = PlaidProvider(
+                env=conn_plaid_env,
+                client_id=cred_client_id,
+                secret=cred_secret,
+            )
+
         try:
-            status_info = plaid_provider.get_item_status(access_token)
+            status_info = conn_provider.get_item_status(access_token)
         except Exception as exc:
             logger.warning(
                 "health_monitor: Plaid error for connection %s: %s",

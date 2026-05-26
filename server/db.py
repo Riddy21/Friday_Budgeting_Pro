@@ -159,6 +159,21 @@ def init_db(path: str | Path) -> None:
         _add_col_if_missing(conn, "transaction_entries", "corrected_at", "INTEGER")
         conn.commit()
 
+        # Migration: plaid_config table — per-user Plaid credentials stored in DB.
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS plaid_config (
+                id INTEGER PRIMARY KEY,
+                user_id TEXT NOT NULL REFERENCES users(id),
+                client_id TEXT NOT NULL,
+                secret TEXT NOT NULL,
+                plaid_env TEXT NOT NULL DEFAULT 'production',
+                created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+                updated_at INTEGER NOT NULL DEFAULT (unixepoch()),
+                UNIQUE(user_id)
+            )
+        """)
+        conn.commit()
+
         # Migration: setup_interview (#206 — guided onboarding answers).
         # Stores answers from the personalisation interview keyed by
         # (user_id, question_key).  Idempotent on (user_id, question_key)

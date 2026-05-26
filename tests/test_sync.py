@@ -125,7 +125,7 @@ def _plaid_factory(sync_fn):
     """
 
     class _MockPlaidProvider:
-        def __init__(self, env=None):
+        def __init__(self, env=None, client_id=None, secret=None):
             import os as _os
 
             self.env = (env or _os.environ.get("PLAID_ENV", "sandbox")).lower()

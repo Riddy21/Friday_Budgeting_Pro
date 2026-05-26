@@ -155,7 +155,10 @@ class TestProfilePostDisconnectBank:
                 "bank_id": active_id,
             },
         )
-        assert r.status_code == 200
+        # After successful disconnect the handler redirects to /accounts or /setup
+        # (Bug 1 fix: no longer re-renders profile.html)
+        assert r.status_code in (302, 303)
+        assert r.headers["location"] in ("/accounts", "/setup")
 
         # Verify the row is gone
         conn = get_db(db_path)
@@ -169,7 +172,7 @@ class TestProfilePostDisconnectBank:
         assert row is None, "bank_connection row should be deleted"
 
     def test_disconnect_shows_success(self, authed_client, seeded_db):
-        """POST /profile action=disconnect_bank shows a success message."""
+        """POST /profile action=disconnect_bank redirects to /accounts after success."""
         db_path, active_id, reauth_id = seeded_db
         r = authed_client.post(
             "/profile",
@@ -178,8 +181,9 @@ class TestProfilePostDisconnectBank:
                 "bank_id": active_id,
             },
         )
-        assert r.status_code == 200
-        assert "disconnect" in r.text.lower() or "success" in r.text.lower()
+        # Bug 1 fix: successful disconnect now redirects instead of re-rendering
+        assert r.status_code in (302, 303)
+        assert r.headers["location"] in ("/accounts", "/setup")
 
 
 class TestProfilePostReconnectBank:
