@@ -55,8 +55,11 @@ jobs:
           cat package.json | grep version
 
       - name: Publish
+        # Must publish from the *parent* directory with the folder name as path.
+        # Publishing from '.' (inside the repo) triggers ClawHub's plugin detector.
+        working-directory: ..
         run: |
-          clawhub publish . \
+          clawhub publish friday-budgeting-pro \
             --slug "friday-budgeting-pro" \
             --name "Friday Budgeting Pro" \
             --version "${{ steps.release.outputs.version }}" \
