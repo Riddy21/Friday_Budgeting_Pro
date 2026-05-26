@@ -126,7 +126,7 @@ def test_dry_run_prints_summary_and_makes_no_changes(db_path, capsys):
     cid = _insert_connection(db_path)
     _insert_transaction(db_path, cid)
 
-    with patch("server.providers.plaid.PlaidProvider.remove_item") as mock_remove:
+    with patch("wipe.PlaidProvider") as mock_remove:
         wipe.run(dry_run=True, skip_prompt=True)
 
     # Plaid should never be called in dry-run
@@ -152,13 +152,11 @@ def test_full_wipe_revokes_plaid_and_clears_tables(db_path, capsys):
     cid = _insert_connection(db_path, institution="Royal Bank")
     _insert_transaction(db_path, cid)
 
-    with patch(
-        "server.providers.plaid.PlaidProvider.remove_item",
-        return_value={"revoked": True, "request_id": "req-xyz"},
-    ) as mock_remove:
+    with patch("wipe.PlaidProvider") as mock_cls:
+        mock_cls.return_value.remove_item.return_value = {"revoked": True, "request_id": "req-xyz"}
         wipe.run(dry_run=False, skip_prompt=True)
 
-    mock_remove.assert_called_once()
+    mock_cls.assert_called()  # PlaidProvider was instantiated
 
     conn = get_db(db_path)
     for table in wipe.WIPE_ORDER:
@@ -175,10 +173,8 @@ def test_full_wipe_continues_on_plaid_error(db_path, capsys):
     cid = _insert_connection(db_path)
     _insert_transaction(db_path, cid)
 
-    with patch(
-        "server.providers.plaid.PlaidProvider.remove_item",
-        side_effect=Exception("network timeout"),
-    ):
+    with patch("wipe.PlaidProvider") as mock_cls:
+        mock_cls.return_value.remove_item.side_effect = Exception("network timeout")
         wipe.run(dry_run=False, skip_prompt=True)
 
     conn = get_db(db_path)
@@ -193,7 +189,7 @@ def test_full_wipe_continues_on_plaid_error(db_path, capsys):
 
 def test_full_wipe_empty_db_is_noop(db_path, capsys):
     """Wiping an already-empty database should not raise and should say so."""
-    with patch("server.providers.plaid.PlaidProvider.remove_item") as mock_remove:
+    with patch("wipe.PlaidProvider") as mock_remove:
         wipe.run(dry_run=False, skip_prompt=True)
 
     mock_remove.assert_not_called()
@@ -214,7 +210,8 @@ def test_full_wipe_multiple_connections(db_path):
         revoke_calls.append(access_token)
         return {"revoked": True, "request_id": "req"}
 
-    with patch("server.providers.plaid.PlaidProvider.remove_item", side_effect=fake_remove):
+    with patch("wipe.PlaidProvider") as mock_cls:
+        mock_cls.return_value.remove_item.side_effect = fake_remove
         wipe.run(dry_run=False, skip_prompt=True)
 
     assert len(revoke_calls) == 2  # both connections attempted

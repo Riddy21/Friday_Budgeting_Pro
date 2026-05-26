@@ -149,11 +149,11 @@ def test_disconnect_removes_connection_and_sync_cursor(db_path):
 
     from server.main import disconnect
 
-    with patch(
-        "server.providers.plaid.PlaidProvider.remove_item",
-        return_value={"revoked": True, "request_id": "req-abc"},
-    ) as mock_remove:
+    with patch("server.main.PlaidProvider") as mock_provider_cls:
+        mock_provider_instance = mock_provider_cls.return_value
+        mock_provider_instance.remove_item.return_value = {"revoked": True, "request_id": "req-abc"}
         disconnect_result = disconnect(connection_id)
+    mock_remove = mock_provider_instance.remove_item
 
     assert disconnect_result["ok"] is True
     assert disconnect_result["plaid_item_removed"] is True
