@@ -55,10 +55,12 @@ jobs:
           cat package.json | grep version
 
       - name: Publish
-        # Must publish from the *parent* directory with the folder name as path.
-        # Publishing from '.' (inside the repo) triggers ClawHub's plugin detector.
-        working-directory: ..
+        # clawhub publish requires the path to be a *named subfolder*, not '.'
+        # (publishing from '.' triggers the plugin detector).
+        # Copy the repo into a named subfolder then publish from its parent.
         run: |
+          cp -r . ../friday-budgeting-pro
+          cd ..
           clawhub publish friday-budgeting-pro \
             --slug "friday-budgeting-pro" \
             --name "Friday Budgeting Pro" \
