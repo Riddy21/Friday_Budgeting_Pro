@@ -13,13 +13,7 @@
     <span class="sep">›</span>
     <span class="step {% if step == 2 %}active{% elif step > 2 %}done{% endif %}">2 · Notifications</span>
     <span class="sep">›</span>
-    <span class="step {% if step == 3 %}active{% elif step > 3 %}done{% endif %}">3 · Connect Bank</span>
-    <span class="sep">›</span>
-    <span class="step {% if step == 4 %}active{% elif step > 4 %}done{% endif %}">4 · Properties</span>
-    <span class="sep">›</span>
-    <span class="step {% if step == 5 %}active{% elif step > 5 %}done{% endif %}">5 · Investments</span>
-    <span class="sep">›</span>
-    <span class="step {% if step == 6 %}active{% endif %}">6 · Done</span>
+    <span class="step {% if step == 3 %}active{% endif %}">3 · Connect Bank</span>
   </div>
 
   {% if error %}
@@ -66,7 +60,8 @@
   <!-- ── Step 3: Connect first bank ────────────────────────────────── -->
   {% elif step == 3 %}
   <h2>Connect your first bank</h2>
-  <p>Link a bank account via Plaid so Friday can import transactions automatically.</p>
+  <p>Link a bank account via Plaid so Friday can import transactions automatically.
+     You can also skip and connect later from your profile.</p>
 
   {% if error %}<div class="alert alert-error">{{ error }}</div>{% endif %}
 
@@ -98,99 +93,17 @@
 
   <form method="post" action="/setup/3" style="margin-top:12px">
     <input type="hidden" name="action" value="skip">
-    <button type="submit" class="btn-secondary">Skip for now</button>
+    <button type="submit" class="btn-secondary">Skip for now →</button>
   </form>
 
   {% else %}
-  <div class="alert alert-error">Could not load Plaid — check your credentials in .env</div>
+  <p style="color:#888;">Plaid is not configured yet. You can connect a bank later from your
+     profile once your Plaid credentials are set up.</p>
   <form method="post" action="/setup/3">
     <input type="hidden" name="action" value="skip">
-    <button type="submit" class="btn-secondary">Skip and continue</button>
-  </form>
-  {% endif %}
-
-  <!-- ── Step 4: Rental properties ─────────────────────────────────── -->
-  {% elif step == 4 %}
-  <form method="post" action="/setup/4" id="properties-form">
-    <h2>Rental properties</h2>
-    <p>Do you have any rental properties you'd like to track?</p>
-    <label style="display:flex;align-items:center;gap:8px;">
-      <input type="checkbox" id="has-properties" name="has_properties" value="yes"
-             onchange="toggleProperties(this)" />
-      Yes, I have rental properties
-    </label>
-
-    <div id="properties-section" style="display:none;margin-top:16px;">
-      <div id="property-list">
-        <div class="property-entry" style="border:1px solid #ddd;padding:12px;margin-bottom:8px;border-radius:6px;">
-          <label>Property name <span style="color:red">*</span></label>
-          <input type="text" name="property_name[]" placeholder="e.g. 123 Main St" />
-          <label>Description (optional)</label>
-          <input type="text" name="property_description[]" placeholder="e.g. 2-bed condo, downtown" />
-          <label>Linked bank account (optional)</label>
-          <select name="property_account_id[]">
-            <option value="">— none —</option>
-            {% for account in accounts %}
-            <option value="{{ account.id }}">{{ account.institution_name }} – {{ account.name }}{% if account.mask %} (…{{ account.mask }}){% endif %}</option>
-            {% endfor %}
-          </select>
-        </div>
-      </div>
-      <button type="button" class="btn-secondary" onclick="addProperty()">+ Add another property</button>
-    </div>
-
-    <div style="margin-top:20px;display:flex;gap:10px;">
-      <button type="submit" name="action" value="continue" class="btn-primary">Continue →</button>
-      <button type="submit" name="action" value="skip" class="btn-secondary">Skip</button>
-    </div>
-  </form>
-
-  <script>
-  function addProperty() {
-    var list = document.getElementById('property-list');
-    var first = list.querySelector('.property-entry');
-    var clone = first.cloneNode(true);
-    clone.querySelectorAll('input').forEach(function(i) { i.value = ''; });
-    clone.querySelectorAll('select').forEach(function(s) { s.selectedIndex = 0; });
-    list.appendChild(clone);
-  }
-  function toggleProperties(cb) {
-    document.getElementById('properties-section').style.display = cb.checked ? 'block' : 'none';
-  }
-  </script>
-
-  <!-- ── Step 5: Investment accounts ───────────────────────────────── -->
-  {% elif step == 5 %}
-  <form method="post" action="/setup/5">
-    <h2>Investment accounts</h2>
-    <p>Do you have investment accounts? (e.g. Wealthsimple, Questrade, TFSA, RRSP)</p>
-
-    {% if investment_accounts %}
-    <p>The following linked accounts look like investment accounts. Check any you'd like to track in an <strong>Investments</strong> ledger:</p>
-    {% for account in investment_accounts %}
-    <label style="display:flex;align-items:center;gap:8px;margin-bottom:6px;">
-      <input type="checkbox" name="investment_account_id" value="{{ account.id }}" checked />
-      {{ account.institution_name }} – {{ account.name }}{% if account.mask %} (…{{ account.mask }}){% endif %}
-    </label>
-    {% endfor %}
-    {% else %}
-    <p style="color:#888;">No investment accounts detected among your linked accounts. You can link them later from your profile.</p>
-    {% endif %}
-
-    <div style="margin-top:20px;display:flex;gap:10px;">
-      <button type="submit" name="action" value="continue" class="btn-primary">Continue →</button>
-      <button type="submit" name="action" value="skip" class="btn-secondary">Skip</button>
-    </div>
-  </form>
-
-  <!-- ── Step 6: All done ──────────────────────────────────────────── -->
-  {% elif step == 6 %}
-  <form method="post" action="/setup/6">
-    <h2>You're all set!</h2>
-    <p>Setup is complete. Head to your <strong>profile</strong> to manage linked banks,
-       notification settings, and more.</p>
     <button type="submit" class="btn-primary">Go to Dashboard →</button>
   </form>
+  {% endif %}
   {% endif %}
 </div>
 {% endblock %}

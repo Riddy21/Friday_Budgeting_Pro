@@ -52,7 +52,7 @@ metadata:
             },
           ],
         "onInstall":
-          "Friday Budgeting Pro is installed.  Walk the user through the guided onboarding flow:\n1. Call setup_status — if not 'complete', send the URL from get_ui_url() and instruct the user to set a password and connect their first bank.  Poll setup_status until it returns 'complete'.\n2. Once banks are connected and an initial sync has run, run the personalisation interview.  Use list_setup_interview_questions to get the canonical question list, then ask each one conversationally (skip ones the user already volunteered).  Call setup_interview(question_key, answer_text) to persist each answer.\n3. Call analyze_recurring_merchants to cross-reference the user's interview answers with recently-synced transactions.  Reconcile gaps (e.g. user mentioned Netflix but it's not in transactions yet, or there's a recurring charge they didn't mention).\n4. For each identified pattern, propose and create a classification rule via add_rule (use a description that starts with '[onboarding]' so the user can see what was auto-generated) and add classification hints via add_hint.  Examples: 'Deposits from TENSTORRENT are Salary & Income', 'Disney Plus charges are Entertainment & Subscriptions'.\n5. Call sync once more so the newly-installed rules classify any remaining transactions, then call get_needs_review_summary and, if count > 0, present the summary field to the user in one message.\n6. After setup the user can update rules at any time via natural language ('add a rule that Home Depot over $200 goes to Rental Maintenance', 'remove the Netflix rule') — wire those to add_rule / update_rule / delete_rule directly.  No UI needed for rule management.",
+          "Friday Budgeting Pro is installed.  Walk the user through the guided onboarding flow:\n1. Call setup_status — if not 'complete', send the URL from get_ui_url() and instruct the user to complete the 3-step browser wizard (set a password, pick a notification channel, and optionally connect their first bank).  Poll setup_status until it returns 'complete'.\n2. Once the wizard is done and an initial sync has run, run the personalisation interview.  Use list_setup_interview_questions to get the canonical question list, then ask each one conversationally (skip ones the user already volunteered).  Call setup_interview(question_key, answer_text) to persist each answer.\n3. Call analyze_recurring_merchants to cross-reference the user's interview answers with recently-synced transactions.  Reconcile gaps (e.g. user mentioned Netflix but it's not in transactions yet, or there's a recurring charge they didn't mention).\n4. For each identified pattern, propose and create a classification rule via add_rule (use a description that starts with '[onboarding]' so the user can see what was auto-generated) and add classification hints via add_hint.  Examples: 'Deposits from TENSTORRENT are Salary & Income', 'Disney Plus charges are Entertainment & Subscriptions'.\n5. Call sync once more so the newly-installed rules classify any remaining transactions, then call get_needs_review_summary and, if count > 0, present the summary field to the user in one message.\n6. After setup the user can add rental properties or investment ledgers at any time via natural language ('add a ledger for my 123 Main St rental', 'track my Wealthsimple account') — use create_property_ledger / create_investment_ledger as needed.  They can also update classification rules ('add a rule that Home Depot over $200 goes to Rental Maintenance') via add_rule / update_rule / delete_rule.  No UI needed for any of this.",
       },
   }
 ---
@@ -71,6 +71,38 @@ After install, open `http://127.0.0.1:6789` in your browser to:
 1. Set a password for the local dashboard
 2. Connect your first bank via Plaid
 3. Done — daily sync runs automatically via launchd
+
+## Sync Pipeline & LLM Classification
+
+Every `sync()` call runs the full pipeline automatically in one shot:
+
+```
+Plaid fetch → rule-based classification → LLM classification → review queue
+```
+
+1. **Plaid fetch** — pulls added/modified/removed transactions via cursor-based incremental sync
+2. **Rule classification** — auto-promoted `routing_rules` match instantly (no LLM cost)
+3. **LLM classification** — `classify_pending_transactions` runs on anything rules didn't catch;
+   each transaction gets one unified LLM call (`classify_transaction`) with rules + ledger
+   tree + hints + merchant history all in a single prompt
+4. **Review queue** — uncertain or unroutable transactions surface in `get_needs_review()`
+
+### LLM Backend — automatic two-tier fallback
+
+| Tier | What happens |
+|---|---|
+| **Primary** | POST to OpenClaw local gateway (`http://127.0.0.1:18789/v1/chat/completions`, model `openclaw/default`) |
+| **Fallback** | Anthropic SDK directly (`claude-3-5-haiku-20241022`) when gateway is unreachable |
+
+Both the gateway port/token and the Anthropic API key are **auto-discovered** from
+OpenClaw's own config files — no manual env-var setup needed on a standard install:
+
+- Gateway port + token → `~/.openclaw/openclaw.json` (`gateway.port` / `gateway.auth.token`)
+- Anthropic key → `~/.openclaw/agents/main/agent/auth-profiles.json` (`anthropic:default`)
+
+Env vars that override auto-discovery (all optional):
+`OPENCLAW_API_URL`, `OPENCLAW_GATEWAY_PORT`, `OPENCLAW_GATEWAY_TOKEN`,
+`OPENCLAW_LLM_MODEL`, `ANTHROPIC_API_KEY`
 
 ## When to Use This Skill
 

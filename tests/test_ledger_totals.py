@@ -220,10 +220,7 @@ def authed_ui_client(ui_db_path: Path):
     client = TestClient(app, follow_redirects=False)
     client.post("/setup/1", data={"password": "testpass123", "password_confirm": "testpass123"})
     client.post("/setup/2", data={"notification_pref": "openclaw"})
-    client.post("/setup/3", data={"ledger_name": "Personal"})
-    client.post("/setup/4", data={})
-    client.post("/setup/5", data={})
-    client.post("/setup/6", data={})
+    client.post("/setup/3", data={"action": "skip"})  # terminal step — redirects to /dashboard
     client.post("/login", data={"password": "testpass123"})
     return client, ui_db_path
 

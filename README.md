@@ -305,7 +305,7 @@ Cursor, mcporter on the CLI) work too - anywhere you can call MCP tools.
 
 - 🏠 **Local-only.** Nothing this app runs is reachable from the public
   internet. Everything binds to `127.0.0.1`.
-- 🔒 **Plaid tokens encrypted at rest** (Fernet, key in macOS Keychain)
+- 🔒 **Plaid bank tokens encrypted at rest** (Fernet, key in macOS Keychain)
 - 🔑 **Password hashed with argon2id**, never sent to the browser
 - 📁 **Your data lives in `~/.friday-bp/data.db`** (SQLite, yours)
 - 🚫 **No telemetry**, no cloud sync, no third parties except Plaid + your
@@ -313,8 +313,27 @@ Cursor, mcporter on the CLI) work too - anywhere you can call MCP tools.
 - ⏱️ **Sessions persist until you log out** - no idle timeout
 - 🔄 **Bank sync runs in the background regardless** of whether you're logged into the UI
 
+### How credentials and access tokens work
+
+Friday stores two distinct kinds of Plaid secret, treated differently:
+
+**Plaid API credentials** (`client_id` + `secret` from your Plaid dashboard)
+- Stored in the `plaid_config` table in the local SQLite DB, scoped per
+  profile. When you run `configure_plaid`, it's saved there first.
+- Also written to a `.env` file (mode `0600`) so the daemon can load them
+  on cold start, before any user logs in.
+- Stored in **plaintext** — this is intentional. API credentials are
+  developer-identifying, not account-level. They grant no bank access on
+  their own and rotate instantly from the Plaid dashboard if needed.
+- Resolution order at runtime: DB row for the active user → `.env` env vars.
+
+**Per-bank access tokens** (from Plaid Link after you connect a bank)
+- **Never stored in plaintext.** Encrypted with Fernet before hitting disk.
+- The Fernet key lives in macOS Keychain (`keyring` lib), never in any file.
+- A stolen `.db` without the Keychain entry cannot decrypt any access token.
+
 See [ARCHITECTURE.md § Security](./ARCHITECTURE.md#security) for the full
-threat model.
+threat model and design rationale.
 
 ---
 

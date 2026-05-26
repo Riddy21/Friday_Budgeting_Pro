@@ -217,6 +217,21 @@ CREATE TABLE IF NOT EXISTS notifications (
 );
 
 -- ---------------------------------------------------------------------------
+-- Plaid credentials (per-user, supersedes .env at runtime)
+-- ---------------------------------------------------------------------------
+
+CREATE TABLE IF NOT EXISTS plaid_config (
+  id INTEGER PRIMARY KEY,
+  user_id TEXT NOT NULL REFERENCES users(id),
+  client_id TEXT NOT NULL,
+  secret TEXT NOT NULL,
+  plaid_env TEXT NOT NULL DEFAULT 'production',
+  created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+  updated_at INTEGER NOT NULL DEFAULT (unixepoch()),
+  UNIQUE(user_id)
+);
+
+-- ---------------------------------------------------------------------------
 -- Audit logs
 -- ---------------------------------------------------------------------------
 

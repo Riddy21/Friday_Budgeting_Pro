@@ -7,7 +7,11 @@ Run via:
 Lifecycle (in order):
   1. Ensure ~/.friday-bp/ exists with correct permissions (server.paths)
   2. Initialise the SQLite database (server.db)
-  3. Attempt to initialise encryption via Keychain (server.crypto).
+  3. Load Plaid credentials from the ``plaid_config`` DB table into
+     ``os.environ`` so any module-level PlaidProvider() (and other env-reading
+     code) picks up the authoritative per-user credentials even if ``.env``
+     is absent, stale, or has been deleted.  Falls back gracefully.
+  4. Attempt to initialise encryption via Keychain (server.crypto).
      In headless/CI environments the Keychain may not be available.
      Rather than crash here, we log a clear WARNING and continue booting.
      Trade-off: the daemon boots, and the server is reachable for health
@@ -16,9 +20,9 @@ Lifecycle (in order):
      functions, not here).  This allows #38's refuse-to-start guard to stay
      at the correct boundary (encrypt/decrypt) while letting daemon startup
      succeed in test/CI environments without a real Keychain.
-  4. Start the FastAPI UI app on 127.0.0.1:6789 (overridable via FRIDAY_BP_UI_PORT)
+  5. Start the FastAPI UI app on 127.0.0.1:6789 (overridable via FRIDAY_BP_UI_PORT)
      using uvicorn.
-  5. Handle SIGTERM/SIGINT for clean shutdown.
+  6. Handle SIGTERM/SIGINT for clean shutdown.
 
 Scheduled syncs are managed by OpenClaw cron (registered via apply_initial_setup).
 See issue #105.
@@ -57,6 +61,54 @@ _DEFAULT_HOST = os.environ.get(
     "FRIDAY_BP_UI_HOST", "127.0.0.1"
 )  # localhost-only by default; override via FRIDAY_BP_UI_HOST
 _DEFAULT_PORT = 6789
+
+
+def _load_plaid_config_from_db() -> None:
+    """Load Plaid credentials from ``plaid_config`` into ``os.environ``.
+
+    Runs after DB init so the plaid_config table is guaranteed to exist.
+    DB values take precedence over whatever .env already loaded — the
+    per-user row written by configure_plaid() is always authoritative.
+
+    Gracefully no-ops if:
+    - The DB doesn't exist yet (first run before init_db).
+    - ``plaid_config`` has no rows (credentials not yet configured).
+    - Any unexpected exception (logged as WARNING; daemon continues).
+    """
+    try:
+        import sqlite3 as _sqlite3
+
+        if not _paths.DB_PATH.exists():
+            log.debug("_load_plaid_config_from_db: DB not found yet — skipping.")
+            return
+
+        conn = _sqlite3.connect(str(_paths.DB_PATH))
+        conn.row_factory = _sqlite3.Row
+        try:
+            row = conn.execute(
+                "SELECT client_id, secret, plaid_env "
+                "FROM plaid_config ORDER BY updated_at DESC LIMIT 1"
+            ).fetchone()
+        finally:
+            conn.close()
+
+        if row is None:
+            log.debug("_load_plaid_config_from_db: plaid_config is empty — skipping.")
+            return
+
+        os.environ["PLAID_CLIENT_ID"] = row["client_id"]
+        os.environ["PLAID_SECRET"] = row["secret"]
+        os.environ["PLAID_ENV"] = row["plaid_env"]
+        log.info(
+            "_load_plaid_config_from_db: Plaid credentials loaded from DB (env=%s).",
+            row["plaid_env"],
+        )
+    except Exception as exc:  # noqa: BLE001
+        log.warning(
+            "_load_plaid_config_from_db: could not load Plaid config from DB — "
+            "falling back to .env / environment variables.  Detail: %s",
+            exc,
+        )
 
 
 def _get_port() -> int:
@@ -116,7 +168,10 @@ async def _run() -> None:
 
 def main() -> None:
     """Entry point called by ``python3 -m server.daemon``."""
-    # 0. Load .env from project root (no-op if file doesn't exist)
+    # 0. Load .env from project root (no-op if file doesn't exist).
+    #    Imported inline so that test patches on dotenv.load_dotenv are
+    #    intercepted correctly (module-level import would bind the name before
+    #    the patch is applied).
     from dotenv import load_dotenv
 
     load_dotenv(Path(__file__).parent.parent / ".env")
@@ -128,7 +183,13 @@ def main() -> None:
     # 2. Database initialisation
     _db.init_db(_paths.DB_PATH)
 
-    # 3. Crypto initialisation (graceful fallback for headless/CI environments).
+    # 3. Load Plaid credentials from DB into os.environ.  Must run AFTER
+    #    init_db (plaid_config table must exist) and AFTER load_dotenv (.env
+    #    provides the baseline; DB values override it).  Ensures sync() works
+    #    immediately after a daemon restart without calling configure_plaid.
+    _load_plaid_config_from_db()
+
+    # 4. Crypto initialisation (graceful fallback for headless/CI environments).
     #    See module docstring for the trade-off rationale.
     try:
         _crypto.init_crypto()
@@ -146,7 +207,7 @@ def main() -> None:
             exc,
         )
 
-    # 4-5. Start uvicorn (asyncio loop)
+    # 5-6. Start uvicorn (asyncio loop)
     asyncio.run(_run())
 
 

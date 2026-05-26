@@ -62,13 +62,7 @@ def setup_user(db_path: Path, client: TestClient) -> dict:
     assert r.status_code == 200, f"Setup step 1 failed: {r.status_code}"
     r = client.post("/setup/2", data={"notification_pref": "openclaw"})
     assert r.status_code == 200
-    r = client.post("/setup/3", data={})
-    assert r.status_code == 200
-    r = client.post("/setup/4", data={"action": "skip"})
-    assert r.status_code == 200
-    r = client.post("/setup/5", data={"action": "skip"})
-    assert r.status_code == 200
-    r = client.post("/setup/6", data={})
+    r = client.post("/setup/3", data={"action": "skip"})
     assert r.status_code == 302
     return {"username": "testuser", "password": "hunter2abc"}
 

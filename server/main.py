@@ -46,6 +46,9 @@ _plaid = PlaidProvider()
 
 mcp = fastmcp.FastMCP("friday-budgeting-pro")
 
+
+from server.plaid_credentials import get_plaid_credentials as _get_plaid_credentials
+
 _logger = logging.getLogger(__name__)
 
 # Project root — tests monkeypatch this to a tmp dir so .env writes stay isolated.
@@ -415,7 +418,7 @@ def apply_initial_setup(
 
 
 @mcp.tool
-def start_link(plaid_env: str = "sandbox") -> dict:
+def start_link(plaid_env: str | None = None) -> dict:
     """Return a URL to open Plaid Link.
 
     Calls PlaidProvider.create_link_token() and returns a URL pointing at
@@ -423,17 +426,22 @@ def start_link(plaid_env: str = "sandbox") -> dict:
 
     Parameters
     ----------
-    plaid_env : str
+    plaid_env : str or None
         Plaid environment for this link session: ``'sandbox'``,
-        ``'development'``, or ``'production'``.  Defaults to ``'sandbox'``.
+        ``'development'``, or ``'production'``.  When *None* (the default)
+        the value is read from the ``PLAID_ENV`` environment variable
+        (falling back to ``'sandbox'`` if unset).
     """
-    provider = PlaidProvider(env=plaid_env)
+    uid = get_active_user_id(server.paths.DB_PATH)
+    db_client_id, db_secret, db_env = _get_plaid_credentials(uid)
+    resolved_env = plaid_env or db_env
+    provider = PlaidProvider(env=resolved_env, client_id=db_client_id, secret=db_secret)
     link_token = provider.create_link_token()
     return {"url": f"http://127.0.0.1:6789/link?token={link_token}", "plaid_env": provider.env}
 
 
 @mcp.tool
-def complete_link(public_token: str, plaid_env: str = "sandbox") -> dict:
+def complete_link(public_token: str, plaid_env: str | None = None) -> dict:
     """Exchange a Plaid public token and store the access token.
 
     Exchanges the public_token for a Plaid access_token + item_id, encrypts
@@ -445,34 +453,51 @@ def complete_link(public_token: str, plaid_env: str = "sandbox") -> dict:
 
     Parameters
     ----------
-    plaid_env : str
-        Plaid environment that was used for the Link session.  Stored on the
-        connection row so every subsequent sync uses the correct environment.
+    plaid_env : str or None
+        Plaid environment that was used for the Link session: ``'sandbox'``,
+        ``'development'``, or ``'production'``.  When *None* (the default),
+        the value is read from the ``PLAID_ENV`` environment variable
+        (falling back to ``'sandbox'`` if unset).  Stored on the connection
+        row so every subsequent sync uses the correct environment.
     """
-    provider = PlaidProvider(env=plaid_env)
+    uid = get_active_user_id(server.paths.DB_PATH)
+    db_client_id, db_secret, db_env = _get_plaid_credentials(uid)
+    resolved_env = plaid_env or db_env
+    provider = PlaidProvider(env=resolved_env, client_id=db_client_id, secret=db_secret)
     result = provider.exchange_public_token(public_token)
     access_token = result["access_token"]
     item_id = result["item_id"]
 
+    # Fetch institution name via /item/get + /institutions/get_by_id
+    institution_name: str | None = None
+    try:
+        institution_name = provider.get_institution_name(access_token)
+    except Exception as _inst_exc:  # noqa: BLE001
+        import logging as _logging
+
+        _logging.getLogger(__name__).warning(
+            "complete_link: could not fetch institution name: %s", _inst_exc
+        )
+
     encrypted_token = server.crypto.encrypt(access_token)
     connection_id = str(uuid.uuid4())
-    uid = get_active_user_id(server.paths.DB_PATH)
 
     conn = get_db(server.paths.DB_PATH)
     try:
         conn.execute(
             """
             INSERT INTO bank_connections
-                (id, plaid_item_id, plaid_access_token_encrypted, status, user_id, plaid_env)
-            VALUES (?, ?, ?, 'active', ?, ?)
+                (id, plaid_item_id, plaid_access_token_encrypted, institution_name,
+                 status, user_id, plaid_env)
+            VALUES (?, ?, ?, ?, 'active', ?, ?)
             """,
-            (connection_id, item_id, encrypted_token, uid, provider.env),
+            (connection_id, item_id, encrypted_token, institution_name, uid, provider.env),
         )
         conn.commit()
     finally:
         conn.close()
 
-    return {"connection_id": connection_id, "institution_name": None}
+    return {"connection_id": connection_id, "institution_name": institution_name}
 
 
 @mcp.tool
@@ -1389,48 +1414,17 @@ def classify_pending_transactions(user_id: str, limit: int | None = None) -> dic
                     # line_item_id is stale/invalid; clear it.
                     line_item_id = None
 
-            # Fallback: LLM best-guess using full ledger tree.
-            # When no rule matched (line_item_id is None), ask the LLM to pick
-            # the best line item from the full ledger tree rather than blindly
-            # grabbing the first item in the ledger.
-            if line_item_id is None:
-                try:
-                    from server.classifier import classify_with_llm
-
-                    llm_entry = classify_with_llm(
-                        conn,
-                        {
-                            "id": tx_id,
-                            "merchant": merchant,
-                            "amount": amount,
-                            "date": date,
-                            "account_name": account_name,
-                            "account_description": account_description,
-                            "plaid_category": plaid_category,
-                            "bank_account_id": bank_account_id,
-                        },
-                    )
-                    line_item_id = llm_entry.get("line_item_id")
-                    ledger_id = llm_entry.get("ledger_id")
-                    confidence = float(llm_entry.get("confidence", confidence))
-                    is_uncertain = confidence < 0.7
-                    # Derive classification_type from the line item's item_type
-                    # so income line items get entry_type='income', not 'spending'
-                    li_type_row = conn.execute(
-                        "SELECT item_type FROM line_items WHERE id = ?",
-                        (line_item_id,),
-                    ).fetchone()
-                    if li_type_row and li_type_row["item_type"] == "income":
-                        classification_type = "income"
-                    elif classification_type not in ("transfer", "savings", "skip"):
-                        classification_type = "spending"
-                except Exception as _llm_exc:
-                    _logger.warning(
-                        "classify_pending_transactions: LLM best-guess fallback "
-                        "failed for tx_id=%s: %s",
-                        tx_id,
-                        _llm_exc,
-                    )
+            # Derive classification_type from the resolved line item's
+            # item_type so income line items always get entry_type='income'.
+            if line_item_id:
+                li_type_row = conn.execute(
+                    "SELECT item_type FROM line_items WHERE id = ?",
+                    (line_item_id,),
+                ).fetchone()
+                if li_type_row and li_type_row["item_type"] == "income":
+                    classification_type = "income"
+                elif classification_type not in ("transfer", "savings", "skip"):
+                    classification_type = "spending"
 
             # Last resort: if still no line_item_id but account has a default
             # ledger, grab the first matching line item from that ledger.
@@ -1541,7 +1535,7 @@ def sync() -> dict:
                 )
 
                 active_conns = db_conn.execute(
-                    "SELECT id, plaid_access_token_encrypted, plaid_env "
+                    "SELECT id, plaid_access_token_encrypted, plaid_env, user_id "
                     "FROM bank_connections WHERE status = 'active'"
                 ).fetchall()
 
@@ -1550,9 +1544,17 @@ def sync() -> dict:
                     encrypted_token = bc["plaid_access_token_encrypted"]
                     access_token = server.crypto.decrypt(encrypted_token)
                     conn_plaid_env = bc["plaid_env"] or "sandbox"
+                    conn_user_id = bc["user_id"]
+
+                    # Load per-user credentials from DB (falls back to env vars).
+                    cred_client_id, cred_secret, _ = _get_plaid_credentials(conn_user_id)
 
                     # Per-connection provider locked to the stored env.
-                    conn_provider = PlaidProvider(env=conn_plaid_env)
+                    conn_provider = PlaidProvider(
+                        env=conn_plaid_env,
+                        client_id=cred_client_id,
+                        secret=cred_secret,
+                    )
                     if conn_provider.env != conn_plaid_env:
                         raise ValueError(
                             f"Environment mismatch: connection {connection_id!r} "
@@ -1612,10 +1614,20 @@ def sync() -> dict:
                     conn_removed = 0
                     conn_classified = 0
 
-                    # Always update account names, types, currencies, and balances
-                    # from the accounts list — even when no new transactions
+                    # Always upsert account rows and update names, types,
+                    # currencies, and balances from the accounts list — even
+                    # when no new transactions came back.  This ensures that
+                    # bank_accounts is populated on the very first sync for
+                    # accounts with no transaction history yet.
                     with db_txn(db_conn):
                         for plaid_acct_id, meta in account_meta.items():
+                            # INSERT the row if it doesn't exist yet (first sync
+                            # for an account that has no transactions).
+                            db_conn.execute(
+                                "INSERT OR IGNORE INTO bank_accounts "
+                                "(id, connection_id, plaid_account_id) VALUES (?, ?, ?)",
+                                (str(uuid.uuid4()), connection_id, plaid_acct_id),
+                            )
                             db_conn.execute(
                                 "UPDATE bank_accounts SET "
                                 "name = COALESCE(NULLIF(name, ''), ?), "
@@ -2650,6 +2662,45 @@ def configure_plaid(
     if env not in _VALID_ENVS:
         raise ValueError(f"env must be one of {sorted(_VALID_ENVS)!r}, got {env!r}")
 
+    import time as _time
+
+    # --- Save to DB for the active user (primary, per-user storage) ---
+    # Wrapped in a broad try/except so that callers in test environments
+    # (where the DB may be uninitialised or have no tables yet) fall through
+    # gracefully to the .env write below.  Production runs always have an
+    # initialised DB and an active user, so the DB write succeeds there.
+    try:
+        uid = get_active_user_id(server.paths.DB_PATH)
+        if uid:
+            db_conn = get_db(server.paths.DB_PATH)
+            try:
+                now = int(_time.time())
+                db_conn.execute(
+                    """
+                    INSERT INTO plaid_config (user_id, client_id, secret, plaid_env, created_at, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(user_id) DO UPDATE SET
+                        client_id  = excluded.client_id,
+                        secret     = excluded.secret,
+                        plaid_env  = excluded.plaid_env,
+                        updated_at = excluded.updated_at
+                    """,
+                    (uid, client_id, secret, env, now, now),
+                )
+                db_conn.commit()
+                _logger.info(
+                    "configure_plaid: saved credentials to DB for user %s (env=%s)", uid, env
+                )
+            finally:
+                db_conn.close()
+    except Exception as _db_exc:  # noqa: BLE001
+        _logger.warning(
+            "configure_plaid: could not save to DB (DB may be uninitialised) — "
+            "credentials will only be written to .env.  Detail: %s",
+            _db_exc,
+        )
+
+    # --- Also write .env as fallback for initial daemon startup ---
     env_path = project_root / ".env"
     content = f"PLAID_CLIENT_ID={client_id}\nPLAID_SECRET={secret}\nPLAID_ENV={env}\n"
 
@@ -2669,7 +2720,8 @@ def configure_plaid(
     os.replace(tmp_path_str, env_path)
     os.chmod(env_path, 0o600)
 
-    # Update the running process so the next sync() call picks up new creds.
+    # Update the running process so the next sync() call picks up new creds
+    # (env vars are a fallback; DB credentials take priority at runtime).
     os.environ["PLAID_CLIENT_ID"] = client_id
     os.environ["PLAID_SECRET"] = secret
     os.environ["PLAID_ENV"] = env

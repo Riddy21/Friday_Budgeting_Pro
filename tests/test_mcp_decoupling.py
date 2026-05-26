@@ -50,22 +50,16 @@ def client(db_path: Path) -> TestClient:
 
 
 def _complete_setup(client: TestClient, password: str = "testpassword123") -> None:
-    """Drive the 4-step setup wizard to completion (mirrors test_ui_routes.py)."""
+    """Drive the 3-step setup wizard to completion (mirrors test_ui_routes.py)."""
     r = client.post("/setup/1", data={"password": password, "password_confirm": password})
     assert r.status_code == 200, f"Setup step 1 failed: {r.status_code}"
 
     r = client.post("/setup/2", data={"notification_pref": "openclaw"})
     assert r.status_code == 200, f"Setup step 2 failed: {r.status_code}"
 
-    r = client.post("/setup/3", data={"ledger_name": "Personal"})
-    assert r.status_code == 200, f"Setup step 3 failed: {r.status_code}"
-
-    r = client.post("/setup/4", data={"action": "skip"})
-    assert r.status_code == 200
-    r = client.post("/setup/5", data={"action": "skip"})
-    assert r.status_code == 200
-    r = client.post("/setup/6", data={})
-    assert r.status_code == 302, f"Setup step 4 failed: {r.status_code}"
+    # Step 3: bank link (skip) — terminal step, redirects to /dashboard
+    r = client.post("/setup/3", data={"action": "skip"})
+    assert r.status_code == 302, f"Setup step 3 failed: {r.status_code}"
     assert r.headers["location"] == "/dashboard"
 
 
@@ -381,21 +375,11 @@ class TestSetupWizardCompletesWithoutMcp:
         r = cl.post("/setup/2", data={"notification_pref": "in_ui"})
         assert r.status_code == 200, f"Setup step 2 failed: {r.status_code}"
 
-        # Step 3: ledger name
-        r = cl.post("/setup/3", data={"ledger_name": "Budget"})
-        assert r.status_code == 200, f"Setup step 3 failed: {r.status_code}"
-
-        # Steps 4 (properties) and 5 (investments): skip both.
-        r = cl.post("/setup/4", data={"action": "skip"})
-        assert r.status_code == 200, f"Setup step 4 failed: {r.status_code}"
-        r = cl.post("/setup/5", data={"action": "skip"})
-        assert r.status_code == 200, f"Setup step 5 failed: {r.status_code}"
-
-        # Step 6: finalise — must redirect to /dashboard.
+        # Step 3: bank link (skip) — terminal step, must redirect to /dashboard.
         with patch("server.main.apply_initial_setup", return_value={"status": "ok"}) as mock_apply:
-            r = cl.post("/setup/6", data={})
+            r = cl.post("/setup/3", data={"action": "skip"})
 
-        assert r.status_code == 302, f"Setup step 6 failed: {r.status_code}"
+        assert r.status_code == 302, f"Setup step 3 failed: {r.status_code}"
         assert r.headers["location"] == "/dashboard"
 
         # Verify a user was created in the DB — the wizard persisted state.

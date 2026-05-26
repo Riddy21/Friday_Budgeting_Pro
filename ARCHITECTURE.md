@@ -332,6 +332,59 @@ That's the whole API. ~15 tools.
 
 ---
 
+## Sync Pipeline
+
+Every `sync()` call executes the full pipeline automatically — no separate
+trigger needed:
+
+```
+Plaid fetch
+   ↓
+Rule-based classification (fast, no LLM — auto-promoted routing_rules)
+   ↓
+LLM classification on anything rules didn't catch
+(classify_pending_transactions → classify_transaction per unclassified tx)
+   ↓
+Return summary: added / modified / removed / classified_by_rule /
+                auto_classified / auto_uncertain
+```
+
+Errors in the LLM step are caught and logged — a classification failure
+never blocks the sync response.  Unclassified transactions surface in
+`get_needs_review()`.
+
+### LLM Backend — two-tier with automatic fallback
+
+```
+classify_transaction()
+   ↓
+server/llm.py  chat()
+   ├── PRIMARY: OpenClaw local gateway
+   │     POST http://127.0.0.1:<port>/v1/chat/completions
+   │     model: openclaw/default
+   │     Bearer token: auto-discovered from ~/.openclaw/openclaw.json
+   │     Port:         auto-discovered from ~/.openclaw/openclaw.json
+   │
+   └── FALLBACK (on any network/parse error): Anthropic SDK directly
+         model: claude-3-5-haiku-20241022
+         API key resolution order:
+           1. ANTHROPIC_API_KEY env var
+           2. ~/.openclaw/agents/main/agent/auth-profiles.json
+              (anthropic:default — OpenClaw's own credential store)
+```
+
+Relevant env vars (all optional — auto-discovered when not set):
+
+| Variable | Default / Discovery source |
+|---|---|
+| `OPENCLAW_API_URL` | `http://127.0.0.1:<port>/v1/chat/completions` |
+| `OPENCLAW_GATEWAY_PORT` | `gateway.port` in `~/.openclaw/openclaw.json` |
+| `OPENCLAW_GATEWAY_TOKEN` | `gateway.auth.token` in `~/.openclaw/openclaw.json` |
+| `OPENCLAW_LLM_MODEL` | `openclaw/default` |
+| `ANTHROPIC_API_KEY` | `anthropic:default` in `auth-profiles.json` |
+
+---
+
 ## Classification Engine
 
 As of issue **#205** the classifier makes **one unified LLM call per
@@ -608,20 +661,17 @@ transaction review, classification rules editor, charts.
 
 ### What each page does
 
-**Setup wizard** (`/setup`) — one-time, six short steps
+**Setup wizard** (`/setup`) — one-time, three short steps
 1. Welcome + set password
 2. Pick notification preference (OpenClaw chat / macOS notifications / in-UI)
-3. Connect first bank via Plaid Link
-4. Rental properties — optional; enter name, description, and linked bank account
-   per property; creates a property ledger and links the account
-5. Investment accounts — optional; auto-detects Wealthsimple/Questrade/etc. accounts;
-   checking any creates a shared "Investments" ledger and links the accounts
-6. Done — redirects to `/dashboard`
+3. Connect first bank via Plaid Link (optional — can skip and connect later)
+   → calls `apply_initial_setup` and redirects to `/dashboard`
 
 Wizard state is held in `_wizard_state` (server-side dict keyed by a random
-cookie token). Steps 4 and 5 store `rental_properties` and
-`investment_account_ids` in wizard state; step 6 passes them to
-`apply_initial_setup`.
+cookie token). Step 3 always calls `apply_initial_setup` on completion
+(bank linked or skipped). Rental properties and investment ledgers are set
+up later via the MCP tools (`create_property_ledger`, `create_investment_ledger`)
+at the user’s request through chat.
 
 After completion, `/setup` returns 404. Re-running setup means resetting
 the DB (a future operation, not a v0.1 feature).
@@ -761,6 +811,66 @@ What we do *not* try to defend against (out of scope):
 - A compromised OpenClaw or HAL itself (those have legitimate access).
 - Plaid or the chosen LLM provider being malicious.
 
+### Plaid Credential Storage
+
+Two distinct kinds of Plaid secret live in the system — they have different
+lifetimes, different exposure risks, and are therefore stored differently.
+
+#### API credentials (`client_id` + `secret`)
+
+These are the user's Plaid developer credentials — reusable, long-lived,
+not per-bank.
+
+**Primary store — `plaid_config` DB table (per-user)**
+
+```sql
+CREATE TABLE IF NOT EXISTS plaid_config (
+  user_id  TEXT NOT NULL REFERENCES users(id),
+  client_id TEXT NOT NULL,
+  secret    TEXT NOT NULL,
+  plaid_env TEXT NOT NULL DEFAULT 'production',
+  …
+  UNIQUE(user_id)
+);
+```
+
+`configure_plaid()` upserts this row.  At runtime `get_plaid_credentials(uid)`
+always tries the DB first — this means credentials are scoped per local
+profile even when multiple profiles share the same machine.
+
+**Fallback — `.env` file (daemon-startup bootstrap)**
+
+`configure_plaid()` also writes `project_root/.env` atomically
+(temp-file + `os.replace`) with mode `0600`.  The `.env` is the
+only way the daemon can load credentials before any user has logged in
+(i.e. at OS boot before `plaid_config` can be queried).  After the first
+call the DB row is the authoritative source; `.env` is just a cold-start
+fallback.
+
+`os.environ` is updated immediately so the already-running daemon sees
+new credentials without a restart.
+
+**Resolution priority for every Plaid API call:**
+1. `plaid_config` table row for the active user — checked first
+2. `PLAID_CLIENT_ID` / `PLAID_SECRET` / `PLAID_ENV` env vars — fallback
+
+**Note:** API credentials are stored in plaintext in the DB and `.env`.
+This is intentional — they are not account-level secrets, they identify
+the developer; the risk of a Plaid `client_id`/`secret` leak is limited
+(Plaid keys can be rotated instantly from the Plaid dashboard, and they
+grant no access without also having a per-bank access token).
+
+#### Per-bank access tokens (`access_token` from Plaid Link)
+
+These are high-value: each one grants live read access to a linked bank
+account.
+
+- **Never stored in plaintext.** Encrypted with Fernet (`cryptography` lib)
+  before writing to `bank_connections.access_token_encrypted`.
+- The Fernet key is stored in macOS Keychain via the `keyring` library —
+  never on disk in any file, never in `.env`.
+- DB file alone (without the Keychain entry) is useless.
+
 ### Defenses (and why each is enough)
 
 | Surface | Defense |
@@ -769,6 +879,7 @@ What we do *not* try to defend against (out of scope):
 | Plaid Link UI | Bound to `127.0.0.1:0` (random port). Runs only during active link flow, **auto-shuts down** within 60s of completion. URL includes a single-use random token. |
 | Plaid webhooks | **Not used.** All connection health is polled from inside `sync()`. Removes the only would-be public surface. |
 | Plaid access tokens | Encrypted with Fernet before write. Key stored in macOS Keychain (`security add-generic-password` / `keyring` lib). DB file alone is useless. |
+| Plaid API credentials | Stored in `plaid_config` DB table (per-user) + `.env` fallback. Plaintext is acceptable — they identify the developer, grant no bank access alone, and rotate trivially from the Plaid dashboard. |
 | SQLite DB | Path `~/.friday-bp/data.db`, permissions `0600` (user only). Parent dir `0700`. |
 | Concurrent sync | Single-flight lock file in `~/.friday-bp/sync.lock`. Prevents double-inserts and cursor races. |
 | LLM data exposure | Only merchant name + amount + plaid_category + user's own hints are sent. No account numbers, no full transaction IDs. User picks the LLM provider. |
@@ -915,7 +1026,7 @@ friday-budgeting-pro/
     ├── auth.py              ← argon2 + session cookies + rate limit
     ├── templates/
     │   ├── base.html
-    │   ├── setup.html           ← first-run wizard (4 steps)
+    │   ├── setup.html           ← first-run wizard (3 steps)
     │   ├── login.html           ← password login + forgot link
     │   ├── profile.html         ← settings + sync/export + linked accounts
     │   ├── ledgers.html         ← minimal ledger / line-item editor

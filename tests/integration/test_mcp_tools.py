@@ -152,7 +152,7 @@ def test_sync_calls_plaid_with_mock(db_path, authed_user):
     }
 
     class _MockPlaid:
-        def __init__(self, env=None):
+        def __init__(self, env=None, client_id=None, secret=None):
             self.env = (env or "sandbox").lower()
 
         def sync_transactions(self, access_token, cursor=None):
