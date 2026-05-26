@@ -19,11 +19,11 @@ jobs:
       contents: read
 
     steps:
-      # Checkout into a named subfolder — clawhub publish requires a named
-      # directory path, not '.' (publishing from '.' triggers the plugin detector)
+      # Checkout into a generic subfolder.
+      # clawhub publish requires a named directory, not '.'
       - uses: actions/checkout@v4
         with:
-          path: friday-budgeting-pro
+          path: skill-src
 
       - name: Install ClawHub CLI
         run: npm install -g clawhub
@@ -36,7 +36,7 @@ jobs:
 
       - name: Extract version and changelog from release
         id: release
-        working-directory: friday-budgeting-pro
+        working-directory: skill-src
         run: |
           # Version comes from the git tag (e.g. v1.2.3 → 1.2.3)
           VERSION="${{ github.event.release.tag_name }}"
@@ -50,7 +50,7 @@ jobs:
           echo "EOF" >> $GITHUB_OUTPUT
 
       - name: Sync version into package.json
-        working-directory: friday-budgeting-pro
+        working-directory: skill-src
         run: |
           node -e "
             const fs = require('fs');
@@ -63,7 +63,7 @@ jobs:
       - name: Publish
         # Publish from the workspace root using the named checkout subdirectory.
         run: |
-          clawhub publish friday-budgeting-pro \
+          clawhub publish skill-src \
             --slug "friday-budgeting-pro" \
             --name "Friday Budgeting Pro" \
             --version "${{ steps.release.outputs.version }}" \
@@ -71,4 +71,3 @@ jobs:
 
       - name: Confirm
         run: clawhub list
-        working-directory: friday-budgeting-pro
