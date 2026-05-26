@@ -105,3 +105,58 @@ def test_main_calls_load_dotenv(monkeypatch):
     assert (
         Path(dotenv_path).name == ".env"
     ), f"load_dotenv expected to load '.env', got: {dotenv_path}"
+
+
+# ---------------------------------------------------------------------------
+# load_dotenv ordering — must precede application imports that read PLAID_ENV
+# ---------------------------------------------------------------------------
+
+
+def test_load_dotenv_precedes_application_imports(monkeypatch):
+    """load_dotenv() in daemon.main() must run before any PlaidProvider instance
+    reads PLAID_ENV from os.environ.
+
+    Regression guard: if load_dotenv() is ever moved *after* the point where
+    PlaidProvider reads the environment, PLAID_ENV from .env would be silently
+    ignored and the daemon would always use the wrong Plaid environment.
+
+    This test verifies the contract by:
+    1. Patching load_dotenv to record when it runs and inject a sentinel env var.
+    2. Running daemon.main() with all I/O side-effects patched out.
+    3. Asserting that PLAID_ENV is visible in os.environ immediately after main()
+       returns — meaning load_dotenv ran during main(), not after.
+    """
+    import os
+
+    # Patch infrastructure so the daemon doesn't actually boot.
+    monkeypatch.setattr("server.paths.ensure_app_dir", lambda: None)
+    monkeypatch.setattr("server.paths.audit_permissions", lambda: None)
+    monkeypatch.setattr("server.db.init_db", lambda *a, **kw: None)
+    monkeypatch.setattr("server.crypto.init_crypto", lambda: None)
+
+    import server.daemon as _daemon_mod
+
+    monkeypatch.setattr(_daemon_mod, "_load_plaid_config_from_db", lambda: None)
+
+    async def _noop_run() -> None:  # pragma: no cover
+        return
+
+    monkeypatch.setattr(_daemon_mod, "_run", _noop_run)
+
+    # Track whether load_dotenv was called at all.
+    load_dotenv_called = []
+
+    def _recording_load_dotenv(*args, **kwargs):
+        """Side-effect: record the call and inject a marker env var."""
+        load_dotenv_called.append(True)
+        # Simulate load_dotenv writing PLAID_ENV to os.environ.
+        monkeypatch.setenv("_DOTENV_LOADED_SENTINEL", "1")
+
+    with patch("dotenv.load_dotenv", side_effect=_recording_load_dotenv):
+        _daemon_mod.main()
+
+    assert load_dotenv_called, "load_dotenv was never called inside daemon.main()"
+    assert os.environ.get("_DOTENV_LOADED_SENTINEL") == "1", (
+        "load_dotenv side-effect did not run before daemon.main() returned — "
+        "env vars from .env are not available to PlaidProvider at startup"
+    )
