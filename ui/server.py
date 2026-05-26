@@ -329,7 +329,7 @@ def _update_wizard(response: Response, token: str, data: dict) -> None:
         "friday_bp_wizard",
         token,
         httponly=True,
-        samesite="strict",
+        samesite="lax",
         max_age=3600,
     )
 
@@ -484,7 +484,7 @@ async def setup_post(request: Request, step: int):
         # rest of the wizard and lands authenticated on /profile at the end.
         # (Matches the spec in tests/test_setup_wizard.py which asserts
         # friday_bp_session is set after POST /setup/1.)
-        resp.set_cookie(SESSION_COOKIE, stoken, httponly=True, samesite="strict")
+        resp.set_cookie(SESSION_COOKIE, stoken, httponly=True, samesite="lax")
         return resp
     elif step == 2:
         raw = form.get("notification_channel") or form.get("notification_pref") or "openclaw_chat"
@@ -540,7 +540,7 @@ async def setup_post(request: Request, step: int):
         st = state.get("session_token")
         if st:
             redir.set_cookie(
-                _SETUP_COMPLETE_COOKIE, st, httponly=True, samesite="strict", max_age=300
+                _SETUP_COMPLETE_COOKIE, st, httponly=True, samesite="lax", max_age=300
             )
         _clear_wizard(redir, tok)
         return redir
@@ -633,7 +633,7 @@ async def login_post(request: Request):
     token = create_session(_db_path(), user_agent=ua, user_id=user["id"])
 
     response = _redirect("/dashboard")
-    response.set_cookie(SESSION_COOKIE, token, httponly=True, samesite="strict")
+    response.set_cookie(SESSION_COOKIE, token, httponly=True, samesite="lax")
     response.delete_cookie(_SETUP_COMPLETE_COOKIE)
     return response
 
@@ -1213,7 +1213,7 @@ def profile_get(request: Request):
                 "action_result": None,
             },
         )
-        resp.set_cookie(SESSION_COOKIE, st, httponly=True, samesite="strict")
+        resp.set_cookie(SESSION_COOKIE, st, httponly=True, samesite="lax")
         resp.delete_cookie(_SETUP_COMPLETE_COOKIE)
         return resp
     resp2 = _redirect("/login")
