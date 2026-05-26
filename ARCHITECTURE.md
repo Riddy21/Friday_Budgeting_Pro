@@ -332,6 +332,59 @@ That's the whole API. ~15 tools.
 
 ---
 
+## Sync Pipeline
+
+Every `sync()` call executes the full pipeline automatically — no separate
+trigger needed:
+
+```
+Plaid fetch
+   ↓
+Rule-based classification (fast, no LLM — auto-promoted routing_rules)
+   ↓
+LLM classification on anything rules didn't catch
+(classify_pending_transactions → classify_transaction per unclassified tx)
+   ↓
+Return summary: added / modified / removed / classified_by_rule /
+                auto_classified / auto_uncertain
+```
+
+Errors in the LLM step are caught and logged — a classification failure
+never blocks the sync response.  Unclassified transactions surface in
+`get_needs_review()`.
+
+### LLM Backend — two-tier with automatic fallback
+
+```
+classify_transaction()
+   ↓
+server/llm.py  chat()
+   ├── PRIMARY: OpenClaw local gateway
+   │     POST http://127.0.0.1:<port>/v1/chat/completions
+   │     model: openclaw/default
+   │     Bearer token: auto-discovered from ~/.openclaw/openclaw.json
+   │     Port:         auto-discovered from ~/.openclaw/openclaw.json
+   │
+   └── FALLBACK (on any network/parse error): Anthropic SDK directly
+         model: claude-3-5-haiku-20241022
+         API key resolution order:
+           1. ANTHROPIC_API_KEY env var
+           2. ~/.openclaw/agents/main/agent/auth-profiles.json
+              (anthropic:default — OpenClaw's own credential store)
+```
+
+Relevant env vars (all optional — auto-discovered when not set):
+
+| Variable | Default / Discovery source |
+|---|---|
+| `OPENCLAW_API_URL` | `http://127.0.0.1:<port>/v1/chat/completions` |
+| `OPENCLAW_GATEWAY_PORT` | `gateway.port` in `~/.openclaw/openclaw.json` |
+| `OPENCLAW_GATEWAY_TOKEN` | `gateway.auth.token` in `~/.openclaw/openclaw.json` |
+| `OPENCLAW_LLM_MODEL` | `openclaw/default` |
+| `ANTHROPIC_API_KEY` | `anthropic:default` in `auth-profiles.json` |
+
+---
+
 ## Classification Engine
 
 As of issue **#205** the classifier makes **one unified LLM call per

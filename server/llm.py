@@ -6,21 +6,24 @@ Design
 Calls are routed **primarily** through OpenClaw's local completions API
 (an OpenAI-compatible HTTP endpoint running on localhost).  If that endpoint
 is unreachable (connection refused, timeout, HTTP error), the wrapper falls
-back to calling the Anthropic or OpenAI SDK directly — the same path that
-existed before this change.
+back to calling the Anthropic SDK directly — using an API key read
+automatically from OpenClaw's own config files (no manual setup needed).
 
 Primary path (OpenClaw local API)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-POST to OPENCLAW_API_URL (default "http://127.0.0.1:7531/v1/completions")
+POST to OPENCLAW_API_URL (or auto-discovered from ~/.openclaw/openclaw.json)
 with body::
 
     {
         "messages": [...],
         "temperature": 0.0,
-        "model": "<OPENCLAW_LLM_MODEL or claude-sonnet-4-6>"
+        "model": "<OPENCLAW_LLM_MODEL or openclaw/default>"
     }
 
-Uses stdlib ``urllib.request`` only (no extra dependencies, 3-second timeout).
+Gateway endpoint + Bearer token are auto-discovered from
+``~/.openclaw/openclaw.json`` when env vars are not set.
+
+Uses stdlib ``urllib.request`` only (no extra dependencies, 60-second timeout).
 
 Response parsing (tried in order):
     1. OpenAI-style:  {"choices": [{"message": {"content": "..."}}]}
@@ -31,11 +34,13 @@ Response parsing (tried in order):
 If none of those match, or the response body is not valid JSON, the wrapper
 logs a warning and falls back to the SDK path.
 
-Fallback path (SDK)
-~~~~~~~~~~~~~~~~~~~
-When OpenClaw is unreachable *or* the response is unparse-able, the wrapper
-tries Anthropic then OpenAI (same auto-detection logic as before).  A warning
-is logged so operators know the fallback was used.
+Fallback path (Anthropic SDK)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+When OpenClaw is unreachable *or* returns an unparseable response, the wrapper
+uses the Anthropic SDK directly.  The API key is resolved in this order:
+  1. ``ANTHROPIC_API_KEY`` environment variable (standard)
+  2. ``~/.openclaw/agents/main/agent/auth-profiles.json``
+     (OpenClaw's own credential store — no manual copy needed)
 
 Patchability
 ~~~~~~~~~~~~
@@ -46,10 +51,17 @@ The public ``chat()`` function is fully mockable in tests::
 
 Env vars
 ~~~~~~~~
-``OPENCLAW_API_URL``   — full URL of the local completions endpoint.
-``OPENCLAW_LLM_MODEL`` — model name forwarded to OpenClaw (default:
-                          "claude-sonnet-4-6").
+``OPENCLAW_API_URL``      — full URL of the local completions endpoint.
+                            Auto-discovered from openclaw.json when unset.
+``OPENCLAW_GATEWAY_PORT`` — gateway port (used when OPENCLAW_API_URL unset).
+                            Auto-discovered from openclaw.json when unset.
+``OPENCLAW_GATEWAY_TOKEN``— Bearer token for the gateway.
+                            Auto-discovered from openclaw.json when unset.
+``OPENCLAW_LLM_MODEL``    — model name forwarded to OpenClaw
+                            (default: "openclaw/default").
 ``OPENCLAW_LLM_PROVIDER`` — "anthropic" or "openai" (SDK fallback provider).
+``ANTHROPIC_API_KEY``     — Anthropic API key for SDK fallback.
+                            Auto-discovered from OpenClaw config when unset.
 """
 
 from __future__ import annotations
@@ -59,6 +71,7 @@ import logging
 import os
 import urllib.error
 import urllib.request
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -70,23 +83,83 @@ logger = logging.getLogger(__name__)
 # Constants / env helpers
 # ---------------------------------------------------------------------------
 
-_DEFAULT_OPENCLAW_URL = "http://127.0.0.1:7531/v1/chat/completions"
 _OPENCLAW_TIMEOUT = 60  # seconds — agent turns can take time
+
+# Paths to OpenClaw config files (resolved lazily)
+_OPENCLAW_CONFIG_PATH = Path.home() / ".openclaw" / "openclaw.json"
+_OPENCLAW_AUTH_PROFILES_PATH = (
+    Path.home() / ".openclaw" / "agents" / "main" / "agent" / "auth-profiles.json"
+)
+
+# Module-level cache so we only parse the JSON files once per process lifetime.
+_openclaw_config_cache: dict | None = None
+_openclaw_auth_cache: dict | None = None
+
+
+def _load_openclaw_config() -> dict:
+    """Return the parsed ~/.openclaw/openclaw.json (cached)."""
+    global _openclaw_config_cache
+    if _openclaw_config_cache is None:
+        try:
+            _openclaw_config_cache = json.loads(_OPENCLAW_CONFIG_PATH.read_text())
+        except Exception:
+            _openclaw_config_cache = {}
+    return _openclaw_config_cache
+
+
+def _load_openclaw_auth() -> dict:
+    """Return the parsed auth-profiles.json (cached)."""
+    global _openclaw_auth_cache
+    if _openclaw_auth_cache is None:
+        try:
+            _openclaw_auth_cache = json.loads(_OPENCLAW_AUTH_PROFILES_PATH.read_text())
+        except Exception:
+            _openclaw_auth_cache = {}
+    return _openclaw_auth_cache
+
+
+def _openclaw_gateway_port() -> str:
+    """Return the OpenClaw gateway port, auto-discovered from openclaw.json."""
+    port = os.environ.get("OPENCLAW_GATEWAY_PORT")
+    if port:
+        return port
+    cfg = _load_openclaw_config()
+    discovered = cfg.get("gateway", {}).get("port")
+    if discovered:
+        return str(discovered)
+    return "7531"  # legacy default
+
+
+def _openclaw_gateway_token() -> str:
+    """Return the OpenClaw gateway Bearer token, auto-discovered from openclaw.json."""
+    token = os.environ.get("OPENCLAW_GATEWAY_TOKEN", "")
+    if token:
+        return token
+    cfg = _load_openclaw_config()
+    return cfg.get("gateway", {}).get("auth", {}).get("token", "")
+
+
+def _anthropic_api_key_from_openclaw() -> str:
+    """Return the Anthropic API key stored in OpenClaw's own credential store.
+
+    Looks up ``anthropic:default`` in
+    ``~/.openclaw/agents/main/agent/auth-profiles.json``.  Returns an empty
+    string when the file is absent or the profile is not found.
+    """
+    auth = _load_openclaw_auth()
+    return auth.get("profiles", {}).get("anthropic:default", {}).get("key", "")
 
 
 def _openclaw_url() -> str:
     explicit = os.environ.get("OPENCLAW_API_URL")
     if explicit:
         return explicit
-    # Fall back to OPENCLAW_GATEWAY_PORT env var (set by OpenClaw in the
-    # MCP server process environment) so the MCP server can find the gateway
-    # without needing OPENCLAW_API_URL explicitly configured.
-    port = os.environ.get("OPENCLAW_GATEWAY_PORT", "7531")
+    port = _openclaw_gateway_port()
     return f"http://127.0.0.1:{port}/v1/chat/completions"
 
 
 def _openclaw_model() -> str:
-    return os.environ.get("OPENCLAW_LLM_MODEL", "claude-sonnet-4-6")
+    return os.environ.get("OPENCLAW_LLM_MODEL", "openclaw/default")
 
 
 # ---------------------------------------------------------------------------
@@ -129,7 +202,7 @@ def chat(messages: list[dict], temperature: float = 0.0) -> str:
             exc,
         )
 
-    # --- Fallback path: direct SDK ---
+    # --- Fallback path: Anthropic SDK ---
     return _chat_sdk_fallback(messages, temperature)
 
 
@@ -154,7 +227,7 @@ def _chat_openclaw(messages: list[dict], temperature: float) -> str:
     ).encode()
 
     headers = {"Content-Type": "application/json"}
-    _token = os.environ.get("OPENCLAW_GATEWAY_TOKEN", "")
+    _token = _openclaw_gateway_token()
     if _token:
         headers["Authorization"] = f"Bearer {_token}"
 
@@ -226,7 +299,17 @@ def _extract_content(data: dict) -> str | None:
 
 
 def _chat_sdk_fallback(messages: list[dict], temperature: float) -> str:
-    """Call the Anthropic or OpenAI SDK directly."""
+    """Call the Anthropic or OpenAI SDK directly.
+
+    Resolution order for the provider:
+      1. ``OPENCLAW_LLM_PROVIDER`` env var
+      2. Try importing ``anthropic`` (preferred)
+      3. Try importing ``openai``
+
+    Anthropic key resolution order (inside ``_chat_anthropic``):
+      1. ``ANTHROPIC_API_KEY`` env var
+      2. OpenClaw auth-profiles.json (``anthropic:default``)
+    """
     provider = os.environ.get("OPENCLAW_LLM_PROVIDER", "").lower()
     model = os.environ.get("OPENCLAW_LLM_MODEL", "")
 
@@ -266,13 +349,25 @@ def _chat_sdk_fallback(messages: list[dict], temperature: float) -> str:
 def _chat_anthropic(messages: list[dict], temperature: float, model: str) -> str:
     import anthropic  # type: ignore[import]
 
-    if not model:
+    # Strip "openclaw/" prefix if the model name came from the OpenClaw path
+    # and fell through to the SDK (e.g. "openclaw/default" is not a real
+    # Anthropic model name).
+    if not model or model.startswith("openclaw"):
         model = "claude-3-5-haiku-20241022"
+
+    # Resolve API key: env var first, then OpenClaw's own credential store.
+    api_key = os.environ.get("ANTHROPIC_API_KEY", "") or _anthropic_api_key_from_openclaw()
+    if not api_key:
+        raise RuntimeError(
+            "No Anthropic API key found.  Set ANTHROPIC_API_KEY or ensure "
+            "~/.openclaw/agents/main/agent/auth-profiles.json contains "
+            "an 'anthropic:default' profile."
+        )
 
     system_parts = [m["content"] for m in messages if m["role"] == "system"]
     human_messages = [m for m in messages if m["role"] != "system"]
 
-    client = anthropic.Anthropic()
+    client = anthropic.Anthropic(api_key=api_key)
     kwargs: dict = dict(
         model=model,
         max_tokens=1024,
@@ -282,6 +377,7 @@ def _chat_anthropic(messages: list[dict], temperature: float, model: str) -> str
     if system_parts:
         kwargs["system"] = "\n\n".join(system_parts)
 
+    logger.info("LLM fallback: using Anthropic SDK directly (model=%s).", model)
     response = client.messages.create(**kwargs)
     return response.content[0].text
 

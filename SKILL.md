@@ -72,6 +72,38 @@ After install, open `http://127.0.0.1:6789` in your browser to:
 2. Connect your first bank via Plaid
 3. Done — daily sync runs automatically via launchd
 
+## Sync Pipeline & LLM Classification
+
+Every `sync()` call runs the full pipeline automatically in one shot:
+
+```
+Plaid fetch → rule-based classification → LLM classification → review queue
+```
+
+1. **Plaid fetch** — pulls added/modified/removed transactions via cursor-based incremental sync
+2. **Rule classification** — auto-promoted `routing_rules` match instantly (no LLM cost)
+3. **LLM classification** — `classify_pending_transactions` runs on anything rules didn't catch;
+   each transaction gets one unified LLM call (`classify_transaction`) with rules + ledger
+   tree + hints + merchant history all in a single prompt
+4. **Review queue** — uncertain or unroutable transactions surface in `get_needs_review()`
+
+### LLM Backend — automatic two-tier fallback
+
+| Tier | What happens |
+|---|---|
+| **Primary** | POST to OpenClaw local gateway (`http://127.0.0.1:18789/v1/chat/completions`, model `openclaw/default`) |
+| **Fallback** | Anthropic SDK directly (`claude-3-5-haiku-20241022`) when gateway is unreachable |
+
+Both the gateway port/token and the Anthropic API key are **auto-discovered** from
+OpenClaw's own config files — no manual env-var setup needed on a standard install:
+
+- Gateway port + token → `~/.openclaw/openclaw.json` (`gateway.port` / `gateway.auth.token`)
+- Anthropic key → `~/.openclaw/agents/main/agent/auth-profiles.json` (`anthropic:default`)
+
+Env vars that override auto-discovery (all optional):
+`OPENCLAW_API_URL`, `OPENCLAW_GATEWAY_PORT`, `OPENCLAW_GATEWAY_TOKEN`,
+`OPENCLAW_LLM_MODEL`, `ANTHROPIC_API_KEY`
+
 ## When to Use This Skill
 
 Invoke for any personal finance request:
