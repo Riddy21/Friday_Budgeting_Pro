@@ -493,6 +493,17 @@ def complete_link(public_token: str, plaid_env: str | None = None) -> dict:
             """,
             (connection_id, item_id, encrypted_token, institution_name, uid, provider.env),
         )
+        # Mirror the token into the revocation log so wipe.py and
+        # retry_pending_revocations() can revoke it even after the
+        # bank_connections row is gone.  (#265)
+        conn.execute(
+            """
+            INSERT INTO plaid_revocation_log
+                (plaid_item_id, access_token_encrypted, institution_name, plaid_env)
+            VALUES (?, ?, ?, ?)
+            """,
+            (item_id, encrypted_token, institution_name, provider.env),
+        )
         conn.commit()
     finally:
         conn.close()
@@ -673,6 +684,7 @@ def disconnect(id: str) -> dict:
     finally:
         db.close()
 
+    plaid_item_id: str | None = None
     if row is not None:
         try:
             access_token = server.crypto.decrypt(row["plaid_access_token_encrypted"])
@@ -684,11 +696,31 @@ def disconnect(id: str) -> dict:
             # Best-effort: log and continue so the local row is always removed.
             plaid_error = str(exc)
 
+    # Fetch plaid_item_id (needed to update the revocation log)
+    _db2 = get_db(server.paths.DB_PATH)
+    try:
+        _item_row = _db2.execute(
+            "SELECT plaid_item_id FROM bank_connections WHERE id = ?", (id,)
+        ).fetchone()
+        plaid_item_id = _item_row["plaid_item_id"] if _item_row else None
+    finally:
+        _db2.close()
+
     # ------------------------------------------------------------------ #
-    # Step 2: remove local DB rows regardless of Plaid outcome             #
+    # Step 2: update revocation log, then remove local DB rows             #
     # ------------------------------------------------------------------ #
     conn = get_db(server.paths.DB_PATH)
     try:
+        if plaid_item_id is not None:
+            if plaid_revoked:
+                # Mark as successfully revoked
+                conn.execute(
+                    "UPDATE plaid_revocation_log "
+                    "SET revoked=1, revoked_at=unixepoch() "
+                    "WHERE plaid_item_id=? AND revoked=0",
+                    (plaid_item_id,),
+                )
+            # On failure leave revoked=0 so retry_pending_revocations() can retry
         conn.execute(
             "DELETE FROM sync_cursors WHERE connection_id = ?",
             (id,),
@@ -705,6 +737,62 @@ def disconnect(id: str) -> dict:
     if plaid_error is not None:
         result_dict["plaid_error"] = plaid_error
     return result_dict
+
+
+@mcp.tool
+def retry_pending_revocations() -> dict:
+    """Retry Plaid /item/remove for any connections not yet revoked.
+
+    Sweeps all rows in ``plaid_revocation_log WHERE revoked=0``, attempts
+    revocation for each via Plaid's ``/item/remove`` endpoint, and updates
+    the log accordingly.  Useful after network failures or when wipe.py
+    couldn't complete revocation.
+
+    Returns
+    -------
+    dict
+        ``{"attempted": N, "succeeded": N, "failed": N}``
+    """
+    conn = get_db(server.paths.DB_PATH)
+    try:
+        rows = conn.execute(
+            "SELECT id, plaid_item_id, access_token_encrypted, plaid_env "
+            "FROM plaid_revocation_log WHERE revoked=0"
+        ).fetchall()
+        pending = [dict(r) for r in rows]
+    finally:
+        conn.close()
+
+    attempted = len(pending)
+    succeeded = 0
+    failed = 0
+
+    for item in pending:
+        try:
+            access_token = server.crypto.decrypt(item["access_token_encrypted"])
+            plaid_env = item["plaid_env"] or os.environ.get("PLAID_ENV", "sandbox")
+            provider = PlaidProvider(env=plaid_env)
+            result = provider.remove_item(access_token)
+            revoked = result.get("revoked", False)
+        except Exception:  # noqa: BLE001
+            revoked = False
+
+        if revoked:
+            succeeded += 1
+            upd = get_db(server.paths.DB_PATH)
+            try:
+                upd.execute(
+                    "UPDATE plaid_revocation_log "
+                    "SET revoked=1, revoked_at=unixepoch() WHERE id=?",
+                    (item["id"],),
+                )
+                upd.commit()
+            finally:
+                upd.close()
+        else:
+            failed += 1
+
+    return {"attempted": attempted, "succeeded": succeeded, "failed": failed}
 
 
 # ---------------------------------------------------------------------------

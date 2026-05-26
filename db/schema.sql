@@ -243,3 +243,19 @@ CREATE TABLE IF NOT EXISTS auto_promoted_rules_log (
   source_transaction_ids TEXT NOT NULL,        -- JSON array
   created_at INTEGER NOT NULL
 );
+
+-- ---------------------------------------------------------------------------
+-- Plaid revocation log (#265)
+-- Persists every access token so disconnect/wipe can always revoke from Plaid
+-- ---------------------------------------------------------------------------
+
+CREATE TABLE IF NOT EXISTS plaid_revocation_log (
+  id                     TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
+  plaid_item_id          TEXT NOT NULL,
+  access_token_encrypted TEXT NOT NULL,
+  institution_name       TEXT,
+  plaid_env              TEXT NOT NULL DEFAULT 'production',
+  created_at             INTEGER NOT NULL DEFAULT (unixepoch()),
+  revoked_at             INTEGER,
+  revoked                INTEGER NOT NULL DEFAULT 0
+);

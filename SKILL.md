@@ -134,7 +134,8 @@ Invoke for any personal finance request:
 - `list_connections` — list connected banks and their status (`active | needs_reauth`)
 - `get_connections_needing_attention` — list connections that need user action (reauth or expiring soon)
 - `refresh_connection(id)` — re-authenticate a broken connection (Update Mode)
-- `disconnect(id)` — remove a bank connection and its data
+- `disconnect(id)` — remove a bank connection and its data (also revokes the Plaid Item)
+- `retry_pending_revocations()` — retry Plaid /item/remove for any connections not yet revoked (run after credential changes)
 - `set_account_description(account_id, description)` — set classifier context for an account (e.g. "Primary spending account")
 
 ### Ledgers
