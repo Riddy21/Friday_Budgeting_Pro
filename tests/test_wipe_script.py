@@ -166,6 +166,16 @@ def test_full_wipe_revokes_plaid_and_clears_tables(db_path, capsys):
     cid = _insert_connection(db_path, institution="Royal Bank")
     _insert_transaction(db_path, cid)
 
+    # Verify revocation log row was inserted before running wipe
+    conn = get_db(db_path)
+    log_count = conn.execute(
+        "SELECT COUNT(*) FROM plaid_revocation_log WHERE revoked=0"
+    ).fetchone()[0]
+    conn.close()
+    assert log_count > 0, (
+        f"Expected >=1 revocation log row before wipe, got {log_count}. " f"DB path: {db_path}"
+    )
+
     with patch("wipe.PlaidProvider") as mock_cls:
         mock_cls.return_value.remove_item.return_value = {"revoked": True, "request_id": "req-xyz"}
         wipe.run(dry_run=False, skip_prompt=True)
