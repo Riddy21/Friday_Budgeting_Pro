@@ -70,16 +70,23 @@ def _ensure_user(db_path):
 
 
 def _insert_connection(db_path, institution="Test Bank", access_token="at-test", env="sandbox"):
-    """Helper: insert a bank_connection row and return its id."""
+    """Helper: insert a bank_connection row + revocation log row and return its id."""
     _ensure_user(db_path)
     cid = str(uuid.uuid4())
+    item_id = f"item-{cid[:8]}"
     conn = get_db(db_path)
     conn.execute(
         "INSERT INTO bank_connections "
         "(id, plaid_item_id, plaid_access_token_encrypted, institution_name, "
         " status, plaid_env, user_id) "
         "VALUES (?, ?, ?, ?, 'active', ?, 'user-1')",
-        (cid, f"item-{cid[:8]}", "enc:" + access_token, institution, env),
+        (cid, item_id, "enc:" + access_token, institution, env),
+    )
+    conn.execute(
+        "INSERT INTO plaid_revocation_log "
+        "(id, plaid_item_id, access_token_encrypted, institution_name, plaid_env, revoked) "
+        "VALUES (?, ?, ?, ?, ?, 0)",
+        (str(uuid.uuid4()), item_id, "enc:" + access_token, institution, env),
     )
     conn.commit()
     conn.close()
