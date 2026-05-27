@@ -1672,14 +1672,19 @@ async def link_complete(request: Request):
 
         logging.getLogger(__name__).error("complete_link failed: %s", exc)
         return _redirect("/accounts?error=link_failed")
-    # Trigger an initial sync so bank_accounts gets populated immediately.
-    # Errors here are non-fatal — the connection is already stored.
-    try:
-        import server.main as _sm_sync
+    # Trigger an initial sync in the background so bank_accounts gets populated.
+    # Run in a thread so the redirect happens immediately (sync can be slow).
+    import threading
 
-        _sm_sync.sync()
-    except Exception as exc:  # noqa: BLE001
-        import logging
+    def _bg_sync():
+        try:
+            import server.main as _sm_sync
 
-        logging.getLogger(__name__).warning("post-link sync failed: %s", exc)
+            _sm_sync.sync()
+        except Exception as exc:  # noqa: BLE001
+            import logging
+
+            logging.getLogger(__name__).warning("post-link sync failed: %s", exc)
+
+    threading.Thread(target=_bg_sync, daemon=True).start()
     return _redirect("/accounts?linked=1")
