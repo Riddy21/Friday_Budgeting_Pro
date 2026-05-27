@@ -1615,6 +1615,116 @@ def classify_pending_transactions(user_id: str, limit: int | None = None) -> dic
     return {"classified": classified, "skipped": skipped, "uncertain": uncertain}
 
 
+def _deduplicate_accounts(conn: "sqlite3.Connection", user_id: str) -> None:
+    """Mark duplicate bank_accounts for a user (issue #269).
+
+    Two accounts are considered the same shared/joint account when:
+
+    * **Pass 1 — mask-based (strict):** same (mask, name, type, subtype) and
+      mask is non-NULL / non-empty.  Works across any connections.
+
+    * **Pass 2 — cross-connection name match (mask-less):** same
+      (name, type, subtype) and mask is NULL/empty, but the rows belong to
+      *different* connections.  This handles banks (e.g. RBC) that never
+      return a mask from Plaid yet appear twice because the same institution
+      was linked through two Plaid items.  Accounts sharing a connection are
+      *never* collapsed in this pass (too risky — they may genuinely be
+      distinct sub-accounts).
+
+    Within each duplicate group the row with the lexicographically smallest
+    ``id`` is kept as the primary; all others get ``is_duplicate=1`` and
+    ``primary_account_id`` pointing at the primary.
+    """
+    if not user_id:
+        return
+
+    def _apply_groups(groups: "dict[tuple, list[str]]") -> None:
+        """Mark duplicates within each group; single-entry groups → not-duplicate."""
+        for ids in groups.values():
+            if len(ids) > 1:
+                primary_id = min(ids)
+                for acct_id in ids:
+                    if acct_id == primary_id:
+                        conn.execute(
+                            "UPDATE bank_accounts SET is_duplicate=0, primary_account_id=NULL WHERE id=?",
+                            (acct_id,),
+                        )
+                    else:
+                        conn.execute(
+                            "UPDATE bank_accounts SET is_duplicate=1, primary_account_id=? WHERE id=?",
+                            (primary_id, acct_id),
+                        )
+            else:
+                conn.execute(
+                    "UPDATE bank_accounts SET is_duplicate=0, primary_account_id=NULL WHERE id=?",
+                    (ids[0],),
+                )
+
+    # ------------------------------------------------------------------
+    # Pass 1: mask-based dedup (accounts with a non-empty mask)
+    # ------------------------------------------------------------------
+    rows_with_mask = conn.execute(
+        """
+        SELECT ba.id, ba.mask, ba.name, ba.type, ba.subtype
+          FROM bank_accounts ba
+          JOIN bank_connections bc ON bc.id = ba.connection_id
+         WHERE bc.user_id = ?
+           AND ba.mask IS NOT NULL
+           AND ba.mask != ''
+         ORDER BY ba.id
+        """,
+        (user_id,),
+    ).fetchall()
+
+    groups1: dict[tuple, list[str]] = {}
+    for r in rows_with_mask:
+        key = (r["mask"], r["name"], r["type"], r["subtype"])
+        if key not in groups1:
+            groups1[key] = []
+        groups1[key].append(r["id"])
+    _apply_groups(groups1)
+
+    # ------------------------------------------------------------------
+    # Pass 2: cross-connection name dedup (mask is NULL/empty)
+    # ------------------------------------------------------------------
+    rows_no_mask = conn.execute(
+        """
+        SELECT ba.id, ba.name, ba.type, ba.subtype, ba.connection_id
+          FROM bank_accounts ba
+          JOIN bank_connections bc ON bc.id = ba.connection_id
+         WHERE bc.user_id = ?
+           AND (ba.mask IS NULL OR ba.mask = '')
+         ORDER BY ba.id
+        """,
+        (user_id,),
+    ).fetchall()
+
+    # Group by (name, type, subtype) — but track connection_id per entry so
+    # we can verify the group spans more than one connection before flagging.
+    from collections import defaultdict as _dd
+    pre_groups: dict[tuple, list[dict]] = {}
+    for r in rows_no_mask:
+        key = (r["name"], r["type"], r["subtype"])
+        if key not in pre_groups:
+            pre_groups[key] = []
+        pre_groups[key].append({"id": r["id"], "connection_id": r["connection_id"]})
+
+    groups2: dict[tuple, list[str]] = {}
+    for key, entries in pre_groups.items():
+        conn_ids = {e["connection_id"] for e in entries}
+        if len(conn_ids) > 1:
+            # Spans multiple connections → genuine cross-connection duplicate
+            groups2[key] = [e["id"] for e in entries]
+        else:
+            # All in same connection → reset each to non-duplicate
+            for e in entries:
+                conn.execute(
+                    "UPDATE bank_accounts SET is_duplicate=0, primary_account_id=NULL WHERE id=?",
+                    (e["id"],),
+                )
+    _apply_groups(groups2)
+
+
 @mcp.tool
 def sync() -> dict:
     """Pull new transactions from Plaid, classify them, and return a summary."""
@@ -1771,10 +1881,42 @@ def sync() -> dict:
                                 ),
                             )
 
+                    # Deduplicate shared/joint accounts after each connection's
+                    # accounts are upserted (issue #269).  This is idempotent.
+                    if conn_user_id:
+                        with db_txn(db_conn):
+                            _deduplicate_accounts(db_conn, conn_user_id)
+
+                    # Build a user-scoped set of plaid_account_ids that are
+                    # marked as duplicates so we can skip their transactions.
+                    # Scoped to user (not connection) so that accounts owned
+                    # by other connections of the same user are also excluded.
+                    _dup_plaid_ids: set[str] = set()
+                    if conn_user_id:
+                        _dup_plaid_ids = set(
+                            r[0]
+                            for r in db_conn.execute(
+                                """
+                                SELECT ba.plaid_account_id
+                                  FROM bank_accounts ba
+                                  JOIN bank_connections bc ON bc.id = ba.connection_id
+                                 WHERE ba.is_duplicate = 1
+                                   AND bc.user_id = ?
+                                """,
+                                (conn_user_id,),
+                            ).fetchall()
+                        )
+
                     with db_txn(db_conn):
                         # --- Added transactions ---
                         for txn in added_txns:
                             plaid_account_id = _get(txn, "account_id")
+
+                            # Skip transactions for accounts that are
+                            # duplicates of another account (issue #269).
+                            if plaid_account_id in _dup_plaid_ids:
+                                continue
+
                             plaid_txn_id = _get(txn, "transaction_id")
                             date = _get(txn, "date")
                             # authorized_datetime is an ISO-8601 string with time (e.g.
