@@ -822,19 +822,39 @@ def _get_last_synced_at() -> Optional[str]:
 
 @app.post("/api/sync")
 def api_sync(request: Request):
-    """AJAX sync — returns JSON, no redirect."""
+    """AJAX sync — returns JSON immediately; sync runs in a background thread."""
     if not _is_authenticated(request):
         return JSONResponse({"error": "Unauthorized"}, status_code=401)
-    import server.main as _sm
 
-    try:
-        result = _sm.sync()
-        return JSONResponse(result)
-    except Exception as exc:
-        import logging
+    import threading
 
-        logging.getLogger(__name__).error("api_sync: %s", exc)
-        return JSONResponse({"status": "error", "detail": str(exc)}, status_code=500)
+    from server.sync_lock import acquire_sync_lock
+
+    # Check if already running without blocking
+    lock = acquire_sync_lock(timeout=0)
+    if lock is None:
+        return JSONResponse({"status": "already_running"})
+    lock.close()  # Release — sync() will re-acquire internally
+
+    def _run():
+        try:
+            import server.main as _sm
+
+            _sm.sync()
+        except Exception as exc:
+            import logging
+
+            logging.getLogger(__name__).error("api_sync background: %s", exc)
+
+    threading.Thread(target=_run, daemon=True).start()
+    return JSONResponse(
+        {
+            "status": "ok",
+            "added": 0,
+            "connections_synced": 0,
+            "message": "Sync started in background",
+        }
+    )
 
 
 @app.get("/dashboard", response_class=HTMLResponse)

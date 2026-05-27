@@ -34,8 +34,7 @@
         const d = await r.json();
         const el = document.getElementById('sync-result');
         if (d.status === 'ok') {
-          el.innerHTML = '<div class="alert alert-success">✅ Synced — ' + (d.added || 0) + ' new transactions across ' + (d.connections_synced || 0) + ' accounts.</div>';
-          // Update last synced timestamp
+          el.innerHTML = '<div class="alert alert-success">✅ Sync started — transactions will appear shortly.</div>';
           const ts = document.getElementById('last-synced');
           if (ts) ts.textContent = 'Just now';
         } else if (d.status === 'already_running') {
