@@ -191,6 +191,11 @@ def init_db(path: str | Path) -> None:
             """)
         conn.commit()
 
+        # Migration: bank_accounts deduplication (#269 — joint/shared account dedup)
+        _add_col_if_missing(conn, "bank_accounts", "is_duplicate", "INTEGER NOT NULL DEFAULT 0")
+        _add_col_if_missing(conn, "bank_accounts", "primary_account_id", "TEXT")
+        conn.commit()
+
         # Migration: plaid_revocation_log (#265 — durable revocation audit log).
         # Mirrors every access token inserted via complete_link so that
         # wipe.py and retry_pending_revocations() can revoke tokens even

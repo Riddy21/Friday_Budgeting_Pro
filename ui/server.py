@@ -860,7 +860,9 @@ def dashboard_get(request: Request):
 def _get_accounts_grouped(user_id: Optional[str] = None) -> dict:
     """Return bank accounts grouped by institution, with balances.
 
-    Returns a dict of {institution_name: {connection_id: str, accounts: [...]}}.
+    Returns a dict of {institution_name: {connection_id: str, accounts: [...],
+    hidden_count: int}}.  Accounts marked ``is_duplicate=1`` are excluded from
+    ``accounts`` and tallied in ``hidden_count`` so the UI can show a note.
     """
     conn = get_db(_db_path())
     try:
@@ -869,6 +871,7 @@ def _get_accounts_grouped(user_id: Optional[str] = None) -> dict:
                 "SELECT ba.id, ba.name, ba.mask, ba.type, ba.subtype,"
                 "       ba.balance_current, ba.balance_available, ba.description,"
                 "       COALESCE(ba.currency, 'CAD') AS currency,"
+                "       COALESCE(ba.is_duplicate, 0) AS is_duplicate,"
                 "       bc.id AS connection_id, bc.institution_name"
                 "  FROM bank_accounts ba"
                 "  JOIN bank_connections bc ON bc.id = ba.connection_id"
@@ -881,6 +884,7 @@ def _get_accounts_grouped(user_id: Optional[str] = None) -> dict:
                 "SELECT ba.id, ba.name, ba.mask, ba.type, ba.subtype,"
                 "       ba.balance_current, ba.balance_available, ba.description,"
                 "       COALESCE(ba.currency, 'CAD') AS currency,"
+                "       COALESCE(ba.is_duplicate, 0) AS is_duplicate,"
                 "       bc.id AS connection_id, bc.institution_name"
                 "  FROM bank_accounts ba"
                 "  JOIN bank_connections bc ON bc.id = ba.connection_id"
@@ -890,8 +894,15 @@ def _get_accounts_grouped(user_id: Optional[str] = None) -> dict:
         for r in rows:
             inst = r["institution_name"] or "Unknown Institution"
             if inst not in grouped:
-                grouped[inst] = {"connection_id": r["connection_id"], "accounts": []}
-            grouped[inst]["accounts"].append(dict(r))
+                grouped[inst] = {
+                    "connection_id": r["connection_id"],
+                    "accounts": [],
+                    "hidden_count": 0,
+                }
+            if r["is_duplicate"]:
+                grouped[inst]["hidden_count"] += 1
+            else:
+                grouped[inst]["accounts"].append(dict(r))
         return grouped
     except Exception:
         return {}

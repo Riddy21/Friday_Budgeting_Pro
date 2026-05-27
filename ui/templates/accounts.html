@@ -82,6 +82,11 @@
         {% endfor %}
       </tbody>
     </table>
+    {% if data.hidden_count %}
+    <p style="color:#94a3b8;font-size:0.8rem;margin:0.35rem 0.6rem 0">
+      {{ data.hidden_count }} shared account{{ 's' if data.hidden_count != 1 else '' }} hidden (duplicate of another connected bank).
+    </p>
+    {% endif %}
   </section>
   {% endfor %}
   {% endif %}
