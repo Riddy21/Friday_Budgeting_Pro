@@ -822,19 +822,65 @@ def _get_last_synced_at() -> Optional[str]:
 
 @app.post("/api/sync")
 def api_sync(request: Request):
-    """AJAX sync — returns JSON, no redirect."""
+    """AJAX sync — returns JSON immediately; sync runs in a background thread."""
     if not _is_authenticated(request):
         return JSONResponse({"error": "Unauthorized"}, status_code=401)
-    import server.main as _sm
 
+    import threading
+
+    from server.sync_lock import acquire_sync_lock
+
+    # Check if already running without blocking
+    lock = acquire_sync_lock(timeout=0)
+    if lock is None:
+        return JSONResponse({"status": "already_running"})
+    lock.close()  # Release — sync() will re-acquire internally
+
+    def _run():
+        try:
+            import server.main as _sm
+
+            _sm.sync()
+        except Exception as exc:
+            import logging
+
+            logging.getLogger(__name__).error("api_sync background: %s", exc)
+
+    threading.Thread(target=_run, daemon=True).start()
+    return JSONResponse(
+        {
+            "status": "ok",
+            "added": 0,
+            "connections_synced": 0,
+            "message": "Sync started in background",
+        }
+    )
+
+
+@app.get("/api/sync/result")
+def api_sync_result(request: Request):
+    """Return the result of the last completed sync."""
+    if not _is_authenticated(request):
+        return JSONResponse({"error": "Unauthorized"}, status_code=401)
+    import json as _json
+
+    from server.sync_lock import acquire_sync_lock
+
+    conn = get_db(_db_path())
     try:
-        result = _sm.sync()
+        row = conn.execute(
+            "SELECT value FROM app_config WHERE key = ?", ("last_sync_result",)
+        ).fetchone()
+        # Check if sync is still running
+        lock = acquire_sync_lock(timeout=0)
+        running = lock is None
+        if lock:
+            lock.close()
+        result = _json.loads(row["value"]) if row else {}
+        result["running"] = running
         return JSONResponse(result)
-    except Exception as exc:
-        import logging
-
-        logging.getLogger(__name__).error("api_sync: %s", exc)
-        return JSONResponse({"status": "error", "detail": str(exc)}, status_code=500)
+    finally:
+        conn.close()
 
 
 @app.get("/dashboard", response_class=HTMLResponse)
@@ -860,12 +906,37 @@ def dashboard_get(request: Request):
 def _get_accounts_grouped(user_id: Optional[str] = None) -> dict:
     """Return bank accounts grouped by institution, with balances.
 
-    Returns a dict of {institution_name: {connection_id: str, accounts: [...],
-    hidden_count: int}}.  Accounts marked ``is_duplicate=1`` are excluded from
-    ``accounts`` and tallied in ``hidden_count`` so the UI can show a note.
+    Returns a dict of {institution_name: {connection_id, accounts, hidden_count,
+    syncing}}.  Connections with no bank_accounts yet are included with
+    syncing=True so the UI can show a placeholder immediately after linking.
     """
     conn = get_db(_db_path())
     try:
+        # --- Connections (always present after link) ---
+        if user_id:
+            bc_rows = conn.execute(
+                "SELECT id, institution_name, last_synced_at"
+                "  FROM bank_connections WHERE user_id = ?"
+                " ORDER BY institution_name",
+                (user_id,),
+            ).fetchall()
+        else:
+            bc_rows = conn.execute(
+                "SELECT id, institution_name, last_synced_at"
+                "  FROM bank_connections ORDER BY institution_name"
+            ).fetchall()
+
+        # Seed grouped with every connection so newly-linked banks appear immediately
+        grouped: dict = {}
+        for bc in bc_rows:
+            grouped[bc["institution_name"] or "Unknown Institution"] = {
+                "connection_id": bc["id"],
+                "accounts": [],
+                "hidden_count": 0,
+                "syncing": bc["last_synced_at"] is None,
+            }
+
+        # --- Accounts (populated after first sync) ---
         if user_id:
             rows = conn.execute(
                 "SELECT ba.id, ba.name, ba.mask, ba.type, ba.subtype,"
@@ -890,7 +961,7 @@ def _get_accounts_grouped(user_id: Optional[str] = None) -> dict:
                 "  JOIN bank_connections bc ON bc.id = ba.connection_id"
                 " ORDER BY bc.institution_name, ba.name"
             ).fetchall()
-        grouped: dict = {}
+
         for r in rows:
             inst = r["institution_name"] or "Unknown Institution"
             if inst not in grouped:
@@ -898,7 +969,9 @@ def _get_accounts_grouped(user_id: Optional[str] = None) -> dict:
                     "connection_id": r["connection_id"],
                     "accounts": [],
                     "hidden_count": 0,
+                    "syncing": False,
                 }
+            grouped[inst]["syncing"] = False  # has accounts → not syncing
             if r["is_duplicate"]:
                 grouped[inst]["hidden_count"] += 1
             else:
