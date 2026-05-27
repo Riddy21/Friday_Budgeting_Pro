@@ -38,6 +38,8 @@
           // Update last synced timestamp
           const ts = document.getElementById('last-synced');
           if (ts) ts.textContent = 'Just now';
+        } else if (d.status === 'already_running') {
+          el.innerHTML = '<div class="alert alert-info">⏳ Sync already in progress…</div>';
         } else {
           el.innerHTML = '<div class="alert alert-error">❌ ' + (d.detail || d.message || 'Sync failed') + '</div>';
         }
