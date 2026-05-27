@@ -15,7 +15,7 @@
   {% for institution, data in grouped_accounts.items() %}
   <section class="institution-group" style="margin-bottom:2rem">
     <div class="institution-header" style="display:flex;justify-content:space-between;align-items:center;border-bottom:2px solid #e2e8f0;padding-bottom:0.5rem;margin-bottom:0.75rem">
-      <h2 style="margin:0;font-size:1.1rem;font-weight:600">── {{ institution }}</h2>
+      <h2 style="margin:0;font-size:1.1rem;font-weight:600">── {{ institution }}{% if data.syncing %} <span style="font-size:0.8rem;font-weight:400;color:#94a3b8">⏳ syncing…</span>{% endif %}</h2>
       <div style="display:flex;gap:0.4rem;align-items:center">
         <button type="button" class="btn btn-sm btn-secondary copy-token-btn"
           data-connection-id="{{ data.connection_id }}">
@@ -31,6 +31,9 @@
         </form>
       </div>
     </div>
+    {% if data.syncing and not data.accounts %}
+    <p style="color:#64748b;font-style:italic;padding:0.5rem 0">⏳ Accounts will appear here once the initial sync completes…</p>
+    {% else %}
     <table style="width:100%;border-collapse:collapse">
       <thead>
         <tr style="text-align:left;color:#64748b;font-size:0.8rem;text-transform:uppercase;letter-spacing:0.04em">
@@ -82,6 +85,7 @@
         {% endfor %}
       </tbody>
     </table>
+    {% endif %}
     {% if data.hidden_count %}
     <p style="color:#94a3b8;font-size:0.8rem;margin:0.35rem 0.6rem 0">
       {{ data.hidden_count }} shared account{{ 's' if data.hidden_count != 1 else '' }} hidden (duplicate of another connected bank).

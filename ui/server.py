@@ -880,12 +880,37 @@ def dashboard_get(request: Request):
 def _get_accounts_grouped(user_id: Optional[str] = None) -> dict:
     """Return bank accounts grouped by institution, with balances.
 
-    Returns a dict of {institution_name: {connection_id: str, accounts: [...],
-    hidden_count: int}}.  Accounts marked ``is_duplicate=1`` are excluded from
-    ``accounts`` and tallied in ``hidden_count`` so the UI can show a note.
+    Returns a dict of {institution_name: {connection_id, accounts, hidden_count,
+    syncing}}.  Connections with no bank_accounts yet are included with
+    syncing=True so the UI can show a placeholder immediately after linking.
     """
     conn = get_db(_db_path())
     try:
+        # --- Connections (always present after link) ---
+        if user_id:
+            bc_rows = conn.execute(
+                "SELECT id, institution_name, last_synced_at"
+                "  FROM bank_connections WHERE user_id = ?"
+                " ORDER BY institution_name",
+                (user_id,),
+            ).fetchall()
+        else:
+            bc_rows = conn.execute(
+                "SELECT id, institution_name, last_synced_at"
+                "  FROM bank_connections ORDER BY institution_name"
+            ).fetchall()
+
+        # Seed grouped with every connection so newly-linked banks appear immediately
+        grouped: dict = {}
+        for bc in bc_rows:
+            grouped[bc["institution_name"] or "Unknown Institution"] = {
+                "connection_id": bc["id"],
+                "accounts": [],
+                "hidden_count": 0,
+                "syncing": bc["last_synced_at"] is None,
+            }
+
+        # --- Accounts (populated after first sync) ---
         if user_id:
             rows = conn.execute(
                 "SELECT ba.id, ba.name, ba.mask, ba.type, ba.subtype,"
@@ -910,7 +935,7 @@ def _get_accounts_grouped(user_id: Optional[str] = None) -> dict:
                 "  JOIN bank_connections bc ON bc.id = ba.connection_id"
                 " ORDER BY bc.institution_name, ba.name"
             ).fetchall()
-        grouped: dict = {}
+
         for r in rows:
             inst = r["institution_name"] or "Unknown Institution"
             if inst not in grouped:
@@ -918,7 +943,9 @@ def _get_accounts_grouped(user_id: Optional[str] = None) -> dict:
                     "connection_id": r["connection_id"],
                     "accounts": [],
                     "hidden_count": 0,
+                    "syncing": False,
                 }
+            grouped[inst]["syncing"] = False  # has accounts → not syncing
             if r["is_duplicate"]:
                 grouped[inst]["hidden_count"] += 1
             else:
