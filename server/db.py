@@ -196,6 +196,19 @@ def init_db(path: str | Path) -> None:
         _add_col_if_missing(conn, "bank_accounts", "primary_account_id", "TEXT")
         conn.commit()
 
+        # Migration: suspicious_transactions (#273 — fraud/anomaly detection).
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS suspicious_transactions (
+                id             TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
+                transaction_id TEXT NOT NULL REFERENCES transactions(id) ON DELETE CASCADE,
+                reason         TEXT NOT NULL,
+                risk_level     TEXT NOT NULL DEFAULT 'medium',
+                flagged_at     INTEGER NOT NULL DEFAULT (unixepoch()),
+                dismissed      INTEGER NOT NULL DEFAULT 0
+            )
+        """)
+        conn.commit()
+
         # Migration: plaid_revocation_log (#265 — durable revocation audit log).
         # Mirrors every access token inserted via complete_link so that
         # wipe.py and retry_pending_revocations() can revoke tokens even

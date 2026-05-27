@@ -961,7 +961,8 @@ def _build_ledger_drilldown(
             "FROM transaction_entries te "
             "JOIN transactions t ON te.transaction_id = t.id "
             "LEFT JOIN bank_accounts b ON t.bank_account_id = b.id "
-            "WHERE te.line_item_id = ?" + date_filter_sql + " ORDER BY t.date DESC"
+            "WHERE te.line_item_id = ? AND COALESCE(b.is_duplicate, 0) = 0"
+            + date_filter_sql + " ORDER BY t.date DESC"
         )
         txn_rows = conn.execute(txn_sql, [item["id"]] + date_params).fetchall()
 
@@ -1424,6 +1425,9 @@ def classify_pending_transactions(user_id: str, limit: int | None = None) -> dic
         hints_list = _fetch_hints(conn)
 
         # Fetch all unclassified, non-pending transactions for this user.
+        # Exclude transactions from accounts marked as duplicates (is_duplicate=1)
+        # — those are joint/shared accounts that appear in multiple Plaid connections
+        # and their transactions are already covered by the primary account (issue #269).
         unclassified = conn.execute(
             """
             SELECT t.id, t.merchant, t.amount, t.date,
@@ -1433,6 +1437,7 @@ def classify_pending_transactions(user_id: str, limit: int | None = None) -> dic
             JOIN bank_connections bc ON bc.id = ba.connection_id
             WHERE bc.user_id = ?
               AND t.pending = 0
+              AND ba.is_duplicate = 0
               AND NOT EXISTS (
                 SELECT 1 FROM transaction_entries te
                 WHERE te.transaction_id = t.id
@@ -1722,6 +1727,285 @@ def _deduplicate_accounts(conn, user_id: str) -> None:  # conn: sqlite3.Connecti
                     (e["id"],),
                 )
     _apply_groups(groups2)
+
+
+# ---------------------------------------------------------------------------
+# Suspicious transaction detection (#273)
+# ---------------------------------------------------------------------------
+
+# Merchants that should never be flagged (payroll, rent, mortgage, etc.)
+_SUSPICIOUS_WHITELIST: set[str] = {
+    # Payroll processors
+    "adp", "adp totalsource", "adp payroll", "adp workforce",
+    "paychex", "gusto", "rippling", "ceridian", "workday payroll",
+    "paylocity", "bamboohr payroll",
+    # Banks / e-transfers (payroll credits)
+    "direct deposit", "payroll", "salary", "wages",
+    # Mortgage / rent
+    "mortgage", "rent", "rental payment", "property management",
+    # Utilities (large regular bills)
+    "hydro", "ontario hydro", "toronto hydro", "enbridge", "bell", "rogers",
+    "telus", "shaw",
+    # Common insurance
+    "intact", "td insurance", "sun life", "manulife",
+}
+
+
+def _is_whitelisted(merchant: str) -> bool:
+    """Return True when *merchant* matches an entry in the whitelist."""
+    m = merchant.lower().strip()
+    return any(w in m for w in _SUSPICIOUS_WHITELIST)
+
+
+# Rule types that should never trigger suspicious-transaction logic.
+_SKIP_RULE_TYPES = {"transfer", "savings", "income", "skip"}
+
+
+def _detect_suspicious_transactions(conn, user_id: str) -> list[dict]:
+    """Scan recent transactions and flag anomalies into suspicious_transactions.
+
+    Runs four detection passes:
+      1. Duplicate charge — same merchant + amount + account within 24 h.
+      2. Unusually large — amount > 3× average for that merchant.
+      3. New merchant, large amount — first-ever merchant AND amount > $200.
+      4. Card testing — 3+ micro-charges (< $5) from same merchant in 1 h.
+
+    Only positive-amount transactions (expenses) are evaluated.
+    Already-flagged, whitelisted, and transfer/savings/income/skip
+    transactions are skipped.
+
+    Returns a list of newly-inserted suspicious-transaction dicts.
+    """
+    import math as _math
+
+    new_flags: list[dict] = []
+
+    if not user_id:
+        return new_flags
+
+    # Set of transaction IDs already in suspicious_transactions (any risk level)
+    already_flagged: set[str] = {
+        r[0]
+        for r in conn.execute(
+            "SELECT transaction_id FROM suspicious_transactions"
+        ).fetchall()
+    }
+
+    # Set of transaction IDs classified as transfer/savings/income/skip
+    skip_tx_ids: set[str] = {
+        r[0]
+        for r in conn.execute(
+            """
+            SELECT DISTINCT te.transaction_id
+              FROM transaction_entries te
+              JOIN line_items li ON li.id = te.line_item_id
+              JOIN classification_rules cr ON cr.rule_type IN ('transfer','savings','income','skip')
+             WHERE li.item_type IN ('income')
+            """
+        ).fetchall()
+    }
+    # Also grab entries where source='rule' and the matched rule is a skip/transfer rule
+    skip_tx_ids |= {
+        r[0]
+        for r in conn.execute(
+            """
+            SELECT DISTINCT te.transaction_id
+              FROM transaction_entries te
+             WHERE te.source = 'rule'
+               AND EXISTS (
+                   SELECT 1 FROM classification_rules cr
+                    WHERE cr.rule_type IN ('transfer','savings','income','skip')
+               )
+            """
+        ).fetchall()
+    }
+
+    # Fetch all non-pending expense transactions for this user
+    txns = conn.execute(
+        """
+        SELECT t.id, t.merchant, t.amount, t.date, t.authorized_datetime,
+               t.bank_account_id, ba.name AS account_name
+          FROM transactions t
+          JOIN bank_accounts ba ON ba.id = t.bank_account_id
+          JOIN bank_connections bc ON bc.id = ba.connection_id
+         WHERE bc.user_id = ?
+           AND t.pending = 0
+           AND t.amount > 0
+           AND ba.is_duplicate = 0
+         ORDER BY t.date DESC, t.authorized_datetime DESC
+        """,
+        (user_id,),
+    ).fetchall()
+
+    # Build a quick tx_id -> row lookup for enrichment
+    tx_lookup: dict[str, object] = {r["id"]: r for r in txns}
+
+    def _flag(transaction_id: str, reason: str, risk_level: str) -> dict | None:
+        if transaction_id in already_flagged:
+            return None
+        row_id = __import__('uuid').uuid4().hex
+        import time as _t
+        conn.execute(
+            "INSERT INTO suspicious_transactions (id, transaction_id, reason, risk_level, flagged_at, dismissed) "
+            "VALUES (?, ?, ?, ?, ?, 0)",
+            (row_id, transaction_id, reason, risk_level, int(_t.time())),
+        )
+        already_flagged.add(transaction_id)
+        tx_row = tx_lookup.get(transaction_id)
+        return {
+            "id": row_id,
+            "transaction_id": transaction_id,
+            "merchant": tx_row["merchant"] if tx_row else None,
+            "amount": tx_row["amount"] if tx_row else None,
+            "reason": reason,
+            "risk_level": risk_level,
+        }
+
+    # Build quick lookup structures
+    # merchant -> list of (date_str, amount, tx_id, bank_account_id, authorized_datetime)
+    by_merchant: dict[str, list] = {}
+    for row in txns:
+        m = (row["merchant"] or "").strip()
+        if not m:
+            continue
+        by_merchant.setdefault(m, []).append(row)
+
+    # -----------------------------------------------------------------------
+    # Pass 1 (highest priority): Card testing — 3+ charges < $5 from same
+    # merchant in 1 h → risk: high  (run before duplicate pass so that
+    # card-test micro-charges are tagged with the more informative reason)
+    # -----------------------------------------------------------------------
+    from datetime import datetime as _dt, timezone as _tz  # shared import for all passes
+
+    def _parse_epoch(row) -> float:
+        """Return a Unix timestamp for a transaction row."""
+        try:
+            ds = row["authorized_datetime"] or row["date"]
+            if ds and "T" in str(ds):
+                return _dt.fromisoformat(str(ds).replace("Z", "+00:00")).timestamp()
+            return _dt.strptime(str(ds), "%Y-%m-%d").timestamp() if ds else 0.0
+        except Exception:
+            return 0.0
+
+    for merchant, rows in by_merchant.items():
+        if _is_whitelisted(merchant):
+            continue
+        micro = [
+            r for r in rows
+            if r["amount"] < 5 and r["id"] not in skip_tx_ids
+        ]
+        if len(micro) < 3:
+            continue
+        timed: list[tuple[float, object]] = [(ep, r) for r in micro if (ep := _parse_epoch(r)) is not None]
+        timed.sort(key=lambda x: x[0])
+        i = 0
+        while i < len(timed):
+            window = [timed[i]]
+            j = i + 1
+            while j < len(timed) and timed[j][0] - timed[i][0] <= 3600:
+                window.append(timed[j])
+                j += 1
+            if len(window) >= 3:
+                for _, r in window:
+                    if r["id"] in already_flagged or r["id"] in skip_tx_ids:
+                        continue
+                    flag = _flag(
+                        r["id"],
+                        f"Possible card-testing: {len(window)} micro-charges "
+                        f"under $5 at {merchant!r} within 1 hour",
+                        "high",
+                    )
+                    if flag:
+                        new_flags.append(flag)
+                break  # found one window, move on
+            i += 1
+
+    # -----------------------------------------------------------------------
+    # Pass 2: Duplicate charge
+    # same merchant + same amount + same account within 24 h → risk: high
+    # (after card-testing pass so micro-charges get the more specific label)
+    # -----------------------------------------------------------------------
+    for tx in txns:
+        tx_id = tx["id"]
+        if tx_id in already_flagged or tx_id in skip_tx_ids:
+            continue
+        merchant = (tx["merchant"] or "").strip()
+        if not merchant or _is_whitelisted(merchant):
+            continue
+
+        tx_epoch = _parse_epoch(tx)
+
+        for other in by_merchant.get(merchant, []):
+            if other["id"] == tx_id:
+                continue
+            if other["id"] in skip_tx_ids:
+                continue
+            if other["bank_account_id"] != tx["bank_account_id"]:
+                continue
+            if abs(other["amount"] - tx["amount"]) > 0.01:
+                continue
+            other_epoch = _parse_epoch(other)
+            if abs(tx_epoch - other_epoch) <= 86400:  # 24 h
+                flag = _flag(
+                    tx_id,
+                    f"Possible duplicate charge: ${tx['amount']:.2f} at {merchant!r} within 24 h",
+                    "high",
+                )
+                if flag:
+                    new_flags.append(flag)
+                break  # only flag once per transaction
+
+    # -----------------------------------------------------------------------
+    # Pass 3: Unusually large (> 3× merchant average, min 3 prior txns)
+    # -----------------------------------------------------------------------
+    for merchant, rows in by_merchant.items():
+        if _is_whitelisted(merchant):
+            continue
+        # Need at least 4 transactions (3 prior + 1 new)
+        valid_rows = [r for r in rows if r["id"] not in skip_tx_ids]
+        if len(valid_rows) < 4:
+            continue
+        amounts = [r["amount"] for r in valid_rows]
+        avg = sum(amounts[1:]) / len(amounts[1:])  # exclude most recent
+        if avg <= 0:
+            continue
+        newest = valid_rows[0]
+        if newest["id"] in already_flagged:
+            continue
+        if newest["amount"] > 3 * avg:
+            flag = _flag(
+                newest["id"],
+                f"Unusually large charge: ${newest['amount']:.2f} at {merchant!r} "
+                f"(avg is ${avg:.2f})",
+                "medium",
+            )
+            if flag:
+                new_flags.append(flag)
+
+    # -----------------------------------------------------------------------
+    # Pass 4: New merchant + large amount (> $200)
+    # -----------------------------------------------------------------------
+    for tx in txns:
+        tx_id = tx["id"]
+        if tx_id in already_flagged or tx_id in skip_tx_ids:
+            continue
+        merchant = (tx["merchant"] or "").strip()
+        if not merchant or _is_whitelisted(merchant):
+            continue
+        if tx["amount"] <= 200:
+            continue
+        prior_count = len([r for r in by_merchant.get(merchant, []) if r["id"] != tx_id])
+        if prior_count == 0:
+            flag = _flag(
+                tx_id,
+                f"First-ever charge from new merchant {merchant!r}: ${tx['amount']:.2f}",
+                "low",
+            )
+            if flag:
+                new_flags.append(flag)
+
+    conn.commit()
+    return new_flags
 
 
 @mcp.tool
@@ -2097,10 +2381,18 @@ def sync() -> dict:
                 # any newly inserted (unclassified) transactions.  Errors are
                 # caught so a classification failure never blocks sync.
                 auto_classify_result = {"classified": 0, "skipped": 0, "uncertain": 0}
+                suspicious_flags: list[dict] = []
                 try:
                     uid = get_active_user_id(server.paths.DB_PATH)
                     if uid:
                         auto_classify_result = classify_pending_transactions(uid)
+                        # Run suspicious transaction detection after classification
+                        try:
+                            suspicious_flags = _detect_suspicious_transactions(db_conn, uid)
+                        except Exception as _sus_exc:
+                            _logger.warning(
+                                "Suspicious transaction detection failed: %s", _sus_exc
+                            )
                 except Exception as _exc:
                     _logger.warning("Auto-classification after sync failed: %s", _exc)
 
@@ -2109,6 +2401,19 @@ def sync() -> dict:
 
     except LockBusy:
         return {"status": "already_running"}
+
+    # Top-5 suspicious for the summary (sorted high -> medium -> low)
+    _risk_order = {"high": 0, "medium": 1, "low": 2}
+    sorted_flags = sorted(suspicious_flags, key=lambda f: _risk_order.get(f.get("risk_level", "low"), 3))
+    top_suspicious = [
+        {
+            "merchant": f.get("merchant"),
+            "amount": f.get("amount"),
+            "reason": f["reason"],
+            "risk_level": f["risk_level"],
+        }
+        for f in sorted_flags[:5]
+    ]
 
     return {
         "status": "ok",
@@ -2121,7 +2426,89 @@ def sync() -> dict:
         "auto_skipped": auto_classify_result.get("skipped", 0),
         "auto_uncertain": auto_classify_result.get("uncertain", 0),
         "health_check": health_check_result,
+        "suspicious_count": len(suspicious_flags),
+        "suspicious": top_suspicious,
     }
+
+
+@mcp.tool
+def get_suspicious_transactions(include_dismissed: bool = False) -> dict:
+    """Return transactions flagged as suspicious. Call after sync to check for issues."""
+    uid = get_active_user_id(server.paths.DB_PATH)
+    if not uid:
+        return {"error": "No active user", "transactions": []}
+
+    conn = get_db(server.paths.DB_PATH)
+    try:
+        where = "" if include_dismissed else "AND st.dismissed = 0"
+        rows = conn.execute(
+            f"""
+            SELECT st.id, st.transaction_id, st.reason, st.risk_level,
+                   st.flagged_at, st.dismissed,
+                   t.merchant, t.amount, t.date,
+                   ba.name AS account_name
+              FROM suspicious_transactions st
+              JOIN transactions t ON t.id = st.transaction_id
+              JOIN bank_accounts ba ON ba.id = t.bank_account_id
+              JOIN bank_connections bc ON bc.id = ba.connection_id
+             WHERE bc.user_id = ? AND ba.is_duplicate = 0 {where}
+             ORDER BY st.risk_level, st.flagged_at DESC
+            """,
+            (uid,),
+        ).fetchall()
+        return {
+            "transactions": [
+                {
+                    "id": r["id"],
+                    "transaction_id": r["transaction_id"],
+                    "merchant": r["merchant"],
+                    "amount": r["amount"],
+                    "date": r["date"],
+                    "account_name": r["account_name"],
+                    "reason": r["reason"],
+                    "risk_level": r["risk_level"],
+                    "flagged_at": r["flagged_at"],
+                    "dismissed": bool(r["dismissed"]),
+                }
+                for r in rows
+            ]
+        }
+    finally:
+        conn.close()
+
+
+@mcp.tool
+def dismiss_suspicious(transaction_id: str) -> dict:
+    """Mark a flagged suspicious transaction as dismissed (user confirmed it's fine)."""
+    uid = get_active_user_id(server.paths.DB_PATH)
+    if not uid:
+        return {"error": "No active user"}
+
+    conn = get_db(server.paths.DB_PATH)
+    try:
+        # Verify the transaction belongs to this user
+        row = conn.execute(
+            """
+            SELECT st.id
+              FROM suspicious_transactions st
+              JOIN transactions t ON t.id = st.transaction_id
+              JOIN bank_accounts ba ON ba.id = t.bank_account_id
+              JOIN bank_connections bc ON bc.id = ba.connection_id
+             WHERE st.transaction_id = ? AND bc.user_id = ?
+            """,
+            (transaction_id, uid),
+        ).fetchone()
+        if not row:
+            return {"status": "error", "message": f"No suspicious flag found for transaction {transaction_id!r}"}
+
+        conn.execute(
+            "UPDATE suspicious_transactions SET dismissed = 1 WHERE transaction_id = ?",
+            (transaction_id,),
+        )
+        conn.commit()
+        return {"status": "ok", "transaction_id": transaction_id}
+    finally:
+        conn.close()
 
 
 @mcp.tool
@@ -2137,7 +2524,9 @@ def list(filters: Optional[dict] = None) -> dict:
       source       (str: "rule" | "llm" | "manual")
     """
     filters = filters or {}
-    conditions: list[str] = []
+    # INVARIANT: never include transactions from duplicate accounts (#269)
+    # Use COALESCE so transactions with NULL bank_account_id (e.g. test fixtures) still appear
+    conditions: list[str] = ["COALESCE(ba.is_duplicate, 0) = 0"]
     params: list = []
 
     if "date_from" in filters:
@@ -2177,6 +2566,7 @@ def list(filters: Optional[dict] = None) -> dict:
             t.currency
         FROM transaction_entries te
         JOIN transactions t ON t.id = te.transaction_id
+        LEFT JOIN bank_accounts ba ON ba.id = t.bank_account_id
         {where_clause}
         ORDER BY t.date DESC, te.id
     """
@@ -2222,6 +2612,7 @@ def get_needs_review() -> dict:
             JOIN bank_connections bc ON bc.id = ba.connection_id
             WHERE bc.user_id = ?
               AND te.reviewed = 0
+              AND ba.is_duplicate = 0
               AND (
                 te.uncertain = 1
                 OR te.line_item_id IS NULL
@@ -2589,10 +2980,12 @@ def analyze_recurring_merchants(min_occurrences: int = 2, lookback_days: int = 9
     conn = get_db(server.paths.DB_PATH)
     try:
         if uid:
+            # INVARIANT: never surface recurring merchants from duplicate accounts (#269)
             base_filter = (
                 "  JOIN bank_accounts ba ON ba.id = t.bank_account_id\n"
                 "  JOIN bank_connections bc ON bc.id = ba.connection_id\n"
                 " WHERE bc.user_id = ?\n"
+                "   AND ba.is_duplicate = 0\n"
                 "   AND t.merchant IS NOT NULL\n"
                 "   AND TRIM(t.merchant) != ''\n"
                 "   AND t.date >= ?\n"
@@ -2600,7 +2993,11 @@ def analyze_recurring_merchants(min_occurrences: int = 2, lookback_days: int = 9
             params = (uid, cutoff)
         else:
             base_filter = (
-                " WHERE t.merchant IS NOT NULL\n   AND TRIM(t.merchant) != ''\n   AND t.date >= ?\n"
+                "  JOIN bank_accounts ba ON ba.id = t.bank_account_id\n"
+                " WHERE ba.is_duplicate = 0\n"
+                "   AND t.merchant IS NOT NULL\n"
+                "   AND TRIM(t.merchant) != ''\n"
+                "   AND t.date >= ?\n"
             )
             params = (cutoff,)
 
@@ -2733,7 +3130,9 @@ def summary(period: str) -> dict:
         JOIN transactions   t  ON t.id  = te.transaction_id
         JOIN line_items     li ON li.id = te.line_item_id
         JOIN ledgers        l  ON l.id  = li.ledger_id
+        LEFT JOIN bank_accounts  ba ON ba.id = t.bank_account_id
         WHERE {date_filter}
+          AND COALESCE(ba.is_duplicate, 0) = 0
         GROUP BY te.line_item_id
         ORDER BY total DESC
     """
@@ -3514,6 +3913,7 @@ def find_transactions(
     conditions: list[str] = [
         "bc.user_id = ?",
         "t.pending = 0",
+        "ba.is_duplicate = 0",  # exclude duplicate-account transactions (issue #269)
     ]
     params: list = [uid]
 

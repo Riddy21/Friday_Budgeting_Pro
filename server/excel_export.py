@@ -89,14 +89,17 @@ def _fetch_monthly_totals(
 
     month is 1-indexed (1=Jan … 12=Dec).
     """
+    # INVARIANT: never include transactions from duplicate accounts (#269)
     rows = conn.execute(
         """
         SELECT CAST(strftime('%m', t.date) AS INTEGER) AS month,
                SUM(te.amount) AS total
         FROM transaction_entries te
         JOIN transactions t ON t.id = te.transaction_id
+        LEFT JOIN bank_accounts ba ON ba.id = t.bank_account_id
         WHERE te.line_item_id = ?
           AND strftime('%Y', t.date) = ?
+          AND COALESCE(ba.is_duplicate, 0) = 0
         GROUP BY month
         """,
         (line_item_id, str(year)),
@@ -109,6 +112,7 @@ def _fetch_raw_transactions(
     years: list[int] | None,
 ) -> list[dict]:
     """Return every classified transaction entry with full context."""
+    # INVARIANT: never include transactions from duplicate accounts (#269)
     if years:
         placeholders = ",".join("?" * len(years))
         year_strs = [str(y) for y in years]
@@ -120,7 +124,9 @@ def _fetch_raw_transactions(
             JOIN transactions t ON t.id = te.transaction_id
             JOIN line_items li ON li.id = te.line_item_id
             JOIN ledgers l ON l.id = te.ledger_id
+            LEFT JOIN bank_accounts ba ON ba.id = t.bank_account_id
             WHERE strftime('%Y', t.date) IN ({placeholders})
+              AND COALESCE(ba.is_duplicate, 0) = 0
             ORDER BY t.date, t.merchant
             """,
             year_strs,
@@ -133,6 +139,8 @@ def _fetch_raw_transactions(
             JOIN transactions t ON t.id = te.transaction_id
             JOIN line_items li ON li.id = te.line_item_id
             JOIN ledgers l ON l.id = te.ledger_id
+            LEFT JOIN bank_accounts ba ON ba.id = t.bank_account_id
+            WHERE COALESCE(ba.is_duplicate, 0) = 0
             ORDER BY t.date, t.merchant
             """).fetchall()
     return [dict(r) for r in rows]

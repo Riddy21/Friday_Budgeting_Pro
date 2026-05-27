@@ -2,6 +2,43 @@
 
 ---
 
+### Bug: BMO e-Transfer miscategorized as Rent (+ duplicate-account transaction leakage)
+
+**Symptom:** An Interac e-Transfer sent from RBC Day to Day Banking to Ridvan's own BMO Primary Chequing Account (merchant: `e-Transfer sent Ridvan BMO 5BMPRX`, $2,000, 2026-04-23) was classified by the LLM as "Rent" (spending) instead of being skipped as an internal transfer.
+
+**Root cause (multi-part):**
+
+1. **LLM misclassification:** The "Personal — Rent (Samirah Kalali)" rule (priority 100) has a vague description — any $2,000-ish e-transfer could match. The LLM saw the $2,000 amount and guessed rent, ignoring the "BMO" substring in the merchant name that indicates the e-Transfer destination is Ridvan's own BMO account.
+
+2. **Transfer detector miss:** `detect_internal_transfers` uses a 7-day lookback by default. When the two RBC connections sync in sequence with overlap, the corresponding BMO inflow (`[CW]INTERAC ETRNSFR AD RECVD TINGYI SONG...`, -$2,000 on same date into BMO Primary Chequing) should pair with the RBC outflow — but the merchant names differ on each side, so the LLM-based matching may not have surfaced the transfer hint.
+
+3. **Duplicate account race condition:** Ridvan has two RBC connections (`002f1312` and `4113091f`) that cover the same physical accounts. The deduplication logic (`_deduplicate_accounts`) runs after each sync. When connection `002f1312` synced first, account `d7a3b56b` was not yet marked `is_duplicate=1`. The LLM classified transaction `edba5558` from that account as Rent. Later, after connection `4113091f` synced, deduplication marked `d7a3b56b` as duplicate — but the bad entry already existed and was counted in Rent totals.
+
+4. **`find_transactions` includes duplicate-account transactions:** The tool's SQL did not filter `ba.is_duplicate = 0`, causing it to return `edba5558` (from the duplicate account) alongside `0c8ab4b1` (from the primary account).
+
+5. **`get_needs_review` includes duplicate-account entries:** The needs-review query also lacked the `is_duplicate = 0` filter.
+
+**Fix:**
+
+- **Bad entry already cleaned up:** The Rent entry for `edba5558` was deleted (manually corrected). The `0c8ab4b1` (primary account) version is correctly classified as skip (manual, reviewed=1). The BMO inflow `4bfb4bde` is also correctly skip.
+
+- **New classification rule (priority 9):** Added "Internal — e-Transfer to BMO account (own account)": any Interac e-Transfer where the merchant name contains "BMO" is always an internal transfer to Ridvan's own BMO account — skip. This runs at priority 9 (before the generic "Internal transfer" at 10), preventing future misclassification even if the transfer detector misses the pairing.
+
+- **`find_transactions` fix:** Added `ba.is_duplicate = 0` to the WHERE clause so the tool only returns transactions from primary (non-duplicate) accounts.
+
+- **`get_needs_review` fix:** Added `ba.is_duplicate = 0` to the WHERE clause for the same reason.
+
+**Files changed:**
+- `server/main.py` — `find_transactions` query + `get_needs_review` query
+
+**Rule added:** `99e8410b-5f76-429c-a427-b56bb83cd339` — "Internal — e-Transfer to BMO account (own account)", priority 9, rule_type=skip
+
+---
+
+
+
+---
+
 ### Bug: Disconnect redirects to wrong page (Bug 1)
 
 **Symptom:** Clicking "Disconnect" on the `/accounts` page (which POSTs to `POST /profile` with `action=disconnect_bank`) left the user on the profile page instead of returning them to accounts.
