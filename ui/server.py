@@ -857,6 +857,32 @@ def api_sync(request: Request):
     )
 
 
+@app.get("/api/sync/result")
+def api_sync_result(request: Request):
+    """Return the result of the last completed sync."""
+    if not _is_authenticated(request):
+        return JSONResponse({"error": "Unauthorized"}, status_code=401)
+    import json as _json
+
+    from server.sync_lock import acquire_sync_lock
+
+    conn = get_db(_db_path())
+    try:
+        row = conn.execute(
+            "SELECT value FROM app_config WHERE key = ?", ("last_sync_result",)
+        ).fetchone()
+        # Check if sync is still running
+        lock = acquire_sync_lock(timeout=0)
+        running = lock is None
+        if lock:
+            lock.close()
+        result = _json.loads(row["value"]) if row else {}
+        result["running"] = running
+        return JSONResponse(result)
+    finally:
+        conn.close()
+
+
 @app.get("/dashboard", response_class=HTMLResponse)
 def dashboard_get(request: Request):
     """Main dashboard page.  Requires authentication."""

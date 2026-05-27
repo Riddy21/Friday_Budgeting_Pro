@@ -34,9 +34,27 @@
         const d = await r.json();
         const el = document.getElementById('sync-result');
         if (d.status === 'ok') {
-          el.innerHTML = '<div class="alert alert-success">✅ Sync started — transactions will appear shortly.</div>';
+          el.innerHTML = '<div class="alert alert-info">⏳ Syncing…</div>';
           const ts = document.getElementById('last-synced');
           if (ts) ts.textContent = 'Just now';
+          // Poll for the result every 3s
+          let polls = 0;
+          const poll = setInterval(async () => {
+            polls++;
+            try {
+              const r2 = await fetch('/api/sync/result');
+              const d2 = await r2.json();
+              if (!d2.running || polls > 20) {
+                clearInterval(poll);
+                const added = d2.added || 0;
+                const conns = d2.connections_synced || 0;
+                el.innerHTML = '<div class="alert alert-success">✅ Synced — ' + added + ' new transaction' + (added !== 1 ? 's' : '') + ' across ' + conns + ' connection' + (conns !== 1 ? 's' : '') + '.</div>';
+                btn.disabled = false;
+                btn.textContent = 'Sync Now';
+              }
+            } catch(e) { clearInterval(poll); }
+          }, 3000);
+          return; // keep button disabled while polling
         } else if (d.status === 'already_running') {
           el.innerHTML = '<div class="alert alert-info">⏳ Sync already in progress…</div>';
         } else {
