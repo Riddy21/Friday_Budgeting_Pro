@@ -24,6 +24,36 @@
       <a href="/export/excel" class="btn-secondary">Export to Excel</a>
     </div>
     <div id="sync-result" style="margin-top:0.75rem"></div>
+    <div style="margin-top:0.75rem;display:flex;gap:0.5rem;align-items:center">
+      <label style="font-size:0.85rem;color:#64748b">Classify old transactions:</label>
+      <input type="number" id="backfill-limit" value="50" min="1" max="500"
+        style="width:70px;padding:0.25rem 0.5rem;border:1px solid #e2e8f0;border-radius:4px">
+      <button onclick="runBackfill()" class="btn btn-secondary" style="font-size:0.85rem" id="backfill-btn">
+        Run
+      </button>
+      <span id="backfill-result" style="font-size:0.85rem"></span>
+    </div>
+    <script>
+    async function runBackfill() {
+      const limit = document.getElementById('backfill-limit').value;
+      const btn = document.getElementById('backfill-btn');
+      const el = document.getElementById('backfill-result');
+      btn.disabled = true;
+      el.textContent = '⏳ Classifying…';
+      try {
+        const r = await fetch('/api/classify/backfill', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({limit: parseInt(limit)})
+        });
+        const d = await r.json();
+        el.textContent = '✅ ' + (d.classified || 0) + ' classified, ' + (d.uncertain || 0) + ' uncertain';
+      } catch(e) {
+        el.textContent = '❌ Failed';
+      }
+      btn.disabled = false;
+    }
+    </script>
     <script>
     async function doSync(btn) {
       btn.disabled = true;

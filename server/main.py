@@ -1373,7 +1373,9 @@ def create_investment_ledger(name: str) -> dict:
 # ---------------------------------------------------------------------------
 
 
-def classify_pending_transactions(user_id: str, limit: int | None = None) -> dict:
+def classify_pending_transactions(
+    user_id: str, limit: int | None = None, tx_ids: list[str] | None = None
+) -> dict:
     """Classify all unclassified transactions for *user_id* and write entries.
 
     Finds transactions owned by *user_id* that have no row in
@@ -1400,6 +1402,10 @@ def classify_pending_transactions(user_id: str, limit: int | None = None) -> dic
 
     Args:
         user_id: The user whose transactions to classify.
+        limit: Optional cap on number of transactions to process.
+        tx_ids: When provided, only classify transactions whose IDs are in
+            this list.  When *None* (the default) all unclassified
+            transactions for the user are considered.
 
     Returns:
         ``{"classified": N, "skipped": M, "uncertain": K}``
@@ -1410,6 +1416,10 @@ def classify_pending_transactions(user_id: str, limit: int | None = None) -> dic
 
     if not user_id:
         return {"classified": classified, "skipped": skipped, "uncertain": uncertain}
+
+    # If tx_ids list is provided but empty, nothing to classify.
+    if tx_ids is not None and len(tx_ids) == 0:
+        return {"classified": 0, "skipped": 0, "uncertain": 0}
 
     conn = get_db(server.paths.DB_PATH)
     try:
@@ -1424,23 +1434,45 @@ def classify_pending_transactions(user_id: str, limit: int | None = None) -> dic
         hints_list = _fetch_hints(conn)
 
         # Fetch all unclassified, non-pending transactions for this user.
-        unclassified = conn.execute(
-            """
-            SELECT t.id, t.merchant, t.amount, t.date,
-                   t.plaid_category, t.bank_account_id
-            FROM transactions t
-            JOIN bank_accounts ba ON ba.id = t.bank_account_id
-            JOIN bank_connections bc ON bc.id = ba.connection_id
-            WHERE bc.user_id = ?
-              AND t.pending = 0
-              AND NOT EXISTS (
-                SELECT 1 FROM transaction_entries te
-                WHERE te.transaction_id = t.id
-              )
-            ORDER BY t.date DESC
-            """,
-            (user_id,),
-        ).fetchall()
+        # When tx_ids is provided, restrict to those specific transaction IDs.
+        if tx_ids is not None:
+            placeholders = ",".join("?" * len(tx_ids))
+            unclassified = conn.execute(
+                f"""
+                SELECT t.id, t.merchant, t.amount, t.date,
+                       t.plaid_category, t.bank_account_id
+                FROM transactions t
+                JOIN bank_accounts ba ON ba.id = t.bank_account_id
+                JOIN bank_connections bc ON bc.id = ba.connection_id
+                WHERE bc.user_id = ?
+                  AND t.pending = 0
+                  AND t.id IN ({placeholders})
+                  AND NOT EXISTS (
+                    SELECT 1 FROM transaction_entries te
+                    WHERE te.transaction_id = t.id
+                  )
+                ORDER BY t.date DESC
+                """,
+                (user_id, *tx_ids),
+            ).fetchall()
+        else:
+            unclassified = conn.execute(
+                """
+                SELECT t.id, t.merchant, t.amount, t.date,
+                       t.plaid_category, t.bank_account_id
+                FROM transactions t
+                JOIN bank_accounts ba ON ba.id = t.bank_account_id
+                JOIN bank_connections bc ON bc.id = ba.connection_id
+                WHERE bc.user_id = ?
+                  AND t.pending = 0
+                  AND NOT EXISTS (
+                    SELECT 1 FROM transaction_entries te
+                    WHERE te.transaction_id = t.id
+                  )
+                ORDER BY t.date DESC
+                """,
+                (user_id,),
+            ).fetchall()
         if limit:
             unclassified = unclassified[: int(limit)]
 
@@ -1750,6 +1782,8 @@ def sync() -> dict:
     total_modified = 0
     total_removed = 0
     total_classified = 0
+    # Track newly inserted tx IDs per user so auto-classify only touches them.
+    newly_added_tx_ids: dict[str, list[str]] = {}
 
     health_check_result: dict = {}
 
@@ -1996,7 +2030,10 @@ def sync() -> dict:
                             )
 
                             if cur.rowcount > 0:
-                                # Newly inserted — count and attempt Tier-1 classification
+                                # Newly inserted — track for selective auto-classify.
+                                if conn_user_id:
+                                    newly_added_tx_ids.setdefault(conn_user_id, []).append(txn_id)
+                                # Count and attempt Tier-1 classification
                                 conn_added += 1
                                 txn_dict = {
                                     "id": txn_id,
@@ -2094,13 +2131,16 @@ def sync() -> dict:
                     total_classified += conn_classified
 
                 # After all connections are synced, run auto-classification on
-                # any newly inserted (unclassified) transactions.  Errors are
-                # caught so a classification failure never blocks sync.
+                # only the newly inserted transactions from this sync.  Errors
+                # are caught so a classification failure never blocks sync.
                 auto_classify_result = {"classified": 0, "skipped": 0, "uncertain": 0}
                 try:
                     uid = get_active_user_id(server.paths.DB_PATH)
                     if uid:
-                        auto_classify_result = classify_pending_transactions(uid)
+                        newly_added_tx_ids_for_user = newly_added_tx_ids.get(uid, [])
+                        auto_classify_result = classify_pending_transactions(
+                            uid, tx_ids=newly_added_tx_ids_for_user
+                        )
                 except Exception as _exc:
                     _logger.warning("Auto-classification after sync failed: %s", _exc)
 
@@ -2122,6 +2162,28 @@ def sync() -> dict:
         "auto_uncertain": auto_classify_result.get("uncertain", 0),
         "health_check": health_check_result,
     }
+
+
+@mcp.tool
+def classify_backfill(limit: int = 50) -> dict:
+    """Classify up to *limit* previously unclassified transactions using the LLM.
+
+    Use this to process old transactions that weren't classified yet.
+    New transactions from sync are always classified automatically.
+    Returns {classified, skipped, uncertain, limit_used}.
+    """
+    uid = get_active_user_id(server.paths.DB_PATH)
+    if not uid:
+        return {
+            "error": "No active user",
+            "classified": 0,
+            "skipped": 0,
+            "uncertain": 0,
+            "limit_used": limit,
+        }
+    result = classify_pending_transactions(uid, limit=limit)
+    result["limit_used"] = limit
+    return result
 
 
 @mcp.tool

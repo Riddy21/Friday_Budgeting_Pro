@@ -154,6 +154,7 @@ Invoke for any personal finance request:
 - `get_needs_review` — transactions that need manual review: uncertain classifications (confidence < 0.7) or unrouted transactions with no line item assigned
 - `get_needs_review_summary` — **call this immediately after every `sync`**; returns a pre-formatted batch message (`count`, `summary`, `transactions`) ready to present to the user in one message. Use `summary` as-is for the user-facing message. Includes merchant, amount, date, account, and classifier reasoning for each transaction.
 - `route(transaction_id, allocations)` — manually assign a transaction to a ledger/line item
+- `classify_backfill(limit?)` — classify up to *limit* (default 50) previously unclassified transactions using the LLM. New transactions from sync are classified automatically; use this to process old backlog transactions. Returns `{classified, skipped, uncertain, limit_used}`.
 - `add_hint(text)` — add a natural-language classification hint for the LLM
 - `list_hints` — list all classification hints
 - `remove_hint(id)` — remove a classification hint

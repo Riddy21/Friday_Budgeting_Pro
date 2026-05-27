@@ -883,6 +883,24 @@ def api_sync_result(request: Request):
         conn.close()
 
 
+@app.post("/api/classify/backfill")
+async def api_classify_backfill(request: Request):
+    """Run LLM backfill classification on old unclassified transactions."""
+    if not _is_authenticated(request):
+        return JSONResponse({"error": "Unauthorized"}, status_code=401)
+
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    limit = int(body.get("limit", 50))
+
+    import server.main as _sm
+
+    result = _sm.classify_backfill(limit=limit)
+    return JSONResponse(result)
+
+
 @app.get("/dashboard", response_class=HTMLResponse)
 def dashboard_get(request: Request):
     """Main dashboard page.  Requires authentication."""
