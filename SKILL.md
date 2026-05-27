@@ -153,6 +153,8 @@ Invoke for any personal finance request:
 - `list(filters?)` — query transactions (supports date, ledger, category, account filters)
 - `get_needs_review` — transactions that need manual review: uncertain classifications (confidence < 0.7) or unrouted transactions with no line item assigned
 - `get_needs_review_summary` — **call this immediately after every `sync`**; returns a pre-formatted batch message (`count`, `summary`, `transactions`) ready to present to the user in one message. Use `summary` as-is for the user-facing message. Includes merchant, amount, date, account, and classifier reasoning for each transaction.
+- `get_suspicious_transactions(include_dismissed?)` — return transactions flagged as suspicious (duplicate charges, unusually large, new merchants, card-testing patterns). Call after `sync` when `suspicious_count > 0`. Returns list with merchant, amount, date, reason, and risk_level.
+- `dismiss_suspicious(transaction_id)` — mark a flagged suspicious transaction as dismissed after the user confirms it is a false positive.
 - `route(transaction_id, allocations)` — manually assign a transaction to a ledger/line item
 - `add_hint(text)` — add a natural-language classification hint for the LLM
 - `list_hints` — list all classification hints
@@ -201,6 +203,7 @@ Invoke for any personal finance request:
 - Always use the MCP tools — never guess from general knowledge
 - Call `sync` before answering spending questions if data may be stale
 - **After every `sync`, call `get_needs_review_summary` and, if `count > 0`, present the `summary` field to the user in a single message** — do not send one message per transaction
+- **After every `sync`, if `suspicious_count > 0` in the sync result, immediately call `get_suspicious_transactions` and present the flagged items to the user** — include merchant, amount, reason, and risk level for each; suggest `dismiss_suspicious(transaction_id)` if the user confirms a flag is a false positive
 - Use `list_rules` to show what classification rules are active before adding new ones
 - Open `start_link` when the user wants to connect or reconnect a bank
 - Use `create_property_ledger` for rental properties — it seeds the right line items automatically
