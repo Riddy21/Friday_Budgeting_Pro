@@ -1615,7 +1615,7 @@ def classify_pending_transactions(user_id: str, limit: int | None = None) -> dic
     return {"classified": classified, "skipped": skipped, "uncertain": uncertain}
 
 
-def _deduplicate_accounts(conn: "sqlite3.Connection", user_id: str) -> None:
+def _deduplicate_accounts(conn, user_id: str) -> None:  # conn: sqlite3.Connection
     """Mark duplicate bank_accounts for a user (issue #269).
 
     Two accounts are considered the same shared/joint account when:
@@ -1701,7 +1701,6 @@ def _deduplicate_accounts(conn: "sqlite3.Connection", user_id: str) -> None:
 
     # Group by (name, type, subtype) — but track connection_id per entry so
     # we can verify the group spans more than one connection before flagging.
-    from collections import defaultdict as _dd
     pre_groups: dict[tuple, list[dict]] = {}
     for r in rows_no_mask:
         key = (r["name"], r["type"], r["subtype"])

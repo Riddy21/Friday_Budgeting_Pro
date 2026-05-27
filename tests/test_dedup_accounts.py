@@ -17,16 +17,17 @@ import uuid
 import pytest
 
 from server.db import get_db, init_db
-from server.main import _deduplicate_accounts
-
+from server.main import _deduplicate_accounts  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _mk_user(conn, user_id=None):
     uid = user_id or str(uuid.uuid4())
     import time
+
     conn.execute(
         "INSERT OR IGNORE INTO users (id, username, password_hash, created_at) VALUES (?, ?, ?, ?)",
         (uid, uid[:8], "x", int(time.time())),
@@ -45,8 +46,16 @@ def _mk_connection(conn, user_id, conn_id=None):
     return cid
 
 
-def _mk_account(conn, connection_id, *, acct_id=None, name="Chequing",
-                 mask="1234", acct_type="depository", subtype="checking"):
+def _mk_account(
+    conn,
+    connection_id,
+    *,
+    acct_id=None,
+    name="Chequing",
+    mask="1234",
+    acct_type="depository",
+    subtype="checking",
+):
     aid = acct_id or str(uuid.uuid4())
     conn.execute(
         "INSERT INTO bank_accounts "
@@ -71,6 +80,7 @@ def db(tmp_path, monkeypatch):
 # _deduplicate_accounts unit tests
 # ---------------------------------------------------------------------------
 
+
 class TestDeduplicateAccounts:
     def test_two_identical_accounts_one_marked_duplicate(self, db):
         """Two connections for the same user with the same account → one duplicate."""
@@ -79,15 +89,36 @@ class TestDeduplicateAccounts:
         cid_b = _mk_connection(db, uid)
         # Use fixed UUIDs so we know which is lexicographically smaller
         aid_small = "00000000-0000-0000-0000-000000000001"
-        aid_large  = "ffffffff-ffff-ffff-ffff-ffffffffffff"
-        _mk_account(db, cid_a, acct_id=aid_small, mask="9999", name="Savings", acct_type="depository", subtype="savings")
-        _mk_account(db, cid_b, acct_id=aid_large, mask="9999", name="Savings", acct_type="depository", subtype="savings")
+        aid_large = "ffffffff-ffff-ffff-ffff-ffffffffffff"
+        _mk_account(
+            db,
+            cid_a,
+            acct_id=aid_small,
+            mask="9999",
+            name="Savings",
+            acct_type="depository",
+            subtype="savings",
+        )
+        _mk_account(
+            db,
+            cid_b,
+            acct_id=aid_large,
+            mask="9999",
+            name="Savings",
+            acct_type="depository",
+            subtype="savings",
+        )
         db.commit()
 
         _deduplicate_accounts(db, uid)
         db.commit()
 
-        rows = {r["id"]: r for r in db.execute("SELECT id, is_duplicate, primary_account_id FROM bank_accounts").fetchall()}
+        rows = {
+            r["id"]: r
+            for r in db.execute(
+                "SELECT id, is_duplicate, primary_account_id FROM bank_accounts"
+            ).fetchall()
+        }
         assert rows[aid_small]["is_duplicate"] == 0
         assert rows[aid_small]["primary_account_id"] is None
         assert rows[aid_large]["is_duplicate"] == 1
@@ -105,7 +136,9 @@ class TestDeduplicateAccounts:
         _deduplicate_accounts(db, uid)
         db.commit()
 
-        rows = {r["id"]: r for r in db.execute("SELECT id, is_duplicate FROM bank_accounts").fetchall()}
+        rows = {
+            r["id"]: r for r in db.execute("SELECT id, is_duplicate FROM bank_accounts").fetchall()
+        }
         assert rows[aid_a]["is_duplicate"] == 0
         assert rows[aid_b]["is_duplicate"] == 0
 
@@ -116,7 +149,7 @@ class TestDeduplicateAccounts:
         name but have no mask could be genuinely different — we leave them alone.
         """
         uid = _mk_user(db)
-        cid = _mk_connection(db, uid)   # same connection
+        cid = _mk_connection(db, uid)  # same connection
         aid_a = _mk_account(db, cid, mask=None, name="Mystery Account")  # type: ignore[arg-type]
         aid_b = _mk_account(db, cid, mask=None, name="Mystery Account")  # type: ignore[arg-type]
         db.execute("UPDATE bank_accounts SET mask = NULL")
@@ -125,7 +158,9 @@ class TestDeduplicateAccounts:
         _deduplicate_accounts(db, uid)
         db.commit()
 
-        rows = {r["id"]: r for r in db.execute("SELECT id, is_duplicate FROM bank_accounts").fetchall()}
+        rows = {
+            r["id"]: r for r in db.execute("SELECT id, is_duplicate FROM bank_accounts").fetchall()
+        }
         assert rows[aid_a]["is_duplicate"] == 0
         assert rows[aid_b]["is_duplicate"] == 0
 
@@ -138,18 +173,37 @@ class TestDeduplicateAccounts:
         cid_a = _mk_connection(db, uid)
         cid_b = _mk_connection(db, uid)
         aid_small = "10000000-0000-0000-0000-000000000010"
-        aid_large  = "20000000-0000-0000-0000-000000000020"
-        _mk_account(db, cid_a, acct_id=aid_small, mask=None, name="Day to Day",  # type: ignore[arg-type]
-                    acct_type="depository", subtype="checking")
-        _mk_account(db, cid_b, acct_id=aid_large, mask=None, name="Day to Day",  # type: ignore[arg-type]
-                    acct_type="depository", subtype="checking")
+        aid_large = "20000000-0000-0000-0000-000000000020"
+        _mk_account(
+            db,
+            cid_a,
+            acct_id=aid_small,
+            mask=None,
+            name="Day to Day",  # type: ignore[arg-type]
+            acct_type="depository",
+            subtype="checking",
+        )
+        _mk_account(
+            db,
+            cid_b,
+            acct_id=aid_large,
+            mask=None,
+            name="Day to Day",  # type: ignore[arg-type]
+            acct_type="depository",
+            subtype="checking",
+        )
         db.execute("UPDATE bank_accounts SET mask = NULL")
         db.commit()
 
         _deduplicate_accounts(db, uid)
         db.commit()
 
-        rows = {r["id"]: r for r in db.execute("SELECT id, is_duplicate, primary_account_id FROM bank_accounts").fetchall()}
+        rows = {
+            r["id"]: r
+            for r in db.execute(
+                "SELECT id, is_duplicate, primary_account_id FROM bank_accounts"
+            ).fetchall()
+        }
         assert rows[aid_small]["is_duplicate"] == 0
         assert rows[aid_large]["is_duplicate"] == 1
         assert rows[aid_large]["primary_account_id"] == aid_small
@@ -168,7 +222,9 @@ class TestDeduplicateAccounts:
         _deduplicate_accounts(db, uid_a)
         db.commit()
 
-        rows = {r["id"]: r for r in db.execute("SELECT id, is_duplicate FROM bank_accounts").fetchall()}
+        rows = {
+            r["id"]: r for r in db.execute("SELECT id, is_duplicate FROM bank_accounts").fetchall()
+        }
         # user A has only one account → not a duplicate
         assert rows[aid_a]["is_duplicate"] == 0
         # user B's account was not touched
@@ -180,7 +236,7 @@ class TestDeduplicateAccounts:
         cid_a = _mk_connection(db, uid)
         cid_b = _mk_connection(db, uid)
         aid_small = "10000000-0000-0000-0000-000000000000"
-        aid_large  = "20000000-0000-0000-0000-000000000000"
+        aid_large = "20000000-0000-0000-0000-000000000000"
         _mk_account(db, cid_a, acct_id=aid_small, mask="5555", name="Card")
         _mk_account(db, cid_b, acct_id=aid_large, mask="5555", name="Card")
         db.commit()
@@ -190,7 +246,9 @@ class TestDeduplicateAccounts:
         _deduplicate_accounts(db, uid)
         db.commit()
 
-        rows = {r["id"]: r for r in db.execute("SELECT id, is_duplicate FROM bank_accounts").fetchall()}
+        rows = {
+            r["id"]: r for r in db.execute("SELECT id, is_duplicate FROM bank_accounts").fetchall()
+        }
         assert rows[aid_small]["is_duplicate"] == 0
         assert rows[aid_large]["is_duplicate"] == 1
 
@@ -202,14 +260,27 @@ class TestDeduplicateAccounts:
         aid_2 = "20000000-0000-0000-0000-000000000002"
         aid_3 = "30000000-0000-0000-0000-000000000003"
         for aid, cid in zip([aid_1, aid_2, aid_3], cids):
-            _mk_account(db, cid, acct_id=aid, mask="3333", name="Joint", acct_type="depository", subtype="checking")
+            _mk_account(
+                db,
+                cid,
+                acct_id=aid,
+                mask="3333",
+                name="Joint",
+                acct_type="depository",
+                subtype="checking",
+            )
         db.commit()
 
         _deduplicate_accounts(db, uid)
         db.commit()
 
-        rows = {r["id"]: r for r in db.execute("SELECT id, is_duplicate, primary_account_id FROM bank_accounts").fetchall()}
-        assert rows[aid_1]["is_duplicate"] == 0       # smallest → primary
+        rows = {
+            r["id"]: r
+            for r in db.execute(
+                "SELECT id, is_duplicate, primary_account_id FROM bank_accounts"
+            ).fetchall()
+        }
+        assert rows[aid_1]["is_duplicate"] == 0  # smallest → primary
         assert rows[aid_2]["is_duplicate"] == 1
         assert rows[aid_2]["primary_account_id"] == aid_1
         assert rows[aid_3]["is_duplicate"] == 1
@@ -226,10 +297,8 @@ class TestDeduplicateAccounts:
 # sync() integration test — duplicate account transactions are skipped
 # ---------------------------------------------------------------------------
 
-import json
-from server.main import sync
 from server.db import init_db as _init_db
-
+from server.main import sync
 
 _HEALTH_NOOP = {"checked": 0, "active": 0, "needs_reauth": 0, "pending_expiration": 0}
 
@@ -238,6 +307,7 @@ def _plaid_factory(sync_fn):
     class _Mock:
         def __init__(self, env=None, client_id=None, secret=None):
             import os
+
             self.env = (env or os.environ.get("PLAID_ENV", "sandbox")).lower()
 
         def sync_transactions(self, access_token, cursor=None):
@@ -258,6 +328,7 @@ class TestSyncSkipsDuplicates:
         _init_db(db_path)
 
         import time
+
         conn = get_db(db_path)
         uid = str(uuid.uuid4())
         conn.execute(
@@ -280,9 +351,9 @@ class TestSyncSkipsDuplicates:
         # Pre-create bank_account rows with the same mask/name/type/subtype so
         # _deduplicate_accounts will flag the one from cid_dup as a duplicate.
         aid_primary = "10000000-0000-0000-0000-aaaaaaaaaaaa"
-        aid_dup     = "20000000-0000-0000-0000-bbbbbbbbbbbb"
+        aid_dup = "20000000-0000-0000-0000-bbbbbbbbbbbb"
         PLAID_ACCT_PRIMARY = "plaid-acct-primary"
-        PLAID_ACCT_DUP     = "plaid-acct-dup"
+        PLAID_ACCT_DUP = "plaid-acct-dup"
         conn.execute(
             "INSERT INTO bank_accounts (id, connection_id, plaid_account_id, name, mask, type, subtype) "
             "VALUES (?, ?, ?, 'Savings', '8888', 'depository', 'savings')",
@@ -310,7 +381,7 @@ class TestSyncSkipsDuplicates:
     def test_duplicate_account_transactions_not_inserted(self, env, monkeypatch):
         """Transactions from the duplicate account must not appear in the DB."""
         plaid_acct_primary = env["plaid_acct_primary"]
-        plaid_acct_dup     = env["plaid_acct_dup"]
+        plaid_acct_dup = env["plaid_acct_dup"]
 
         def _mock_sync(access_token, cursor=None):
             return {
@@ -345,14 +416,22 @@ class TestSyncSkipsDuplicates:
                         "name": "Savings",
                         "official_name": None,
                         "type": "depository",
-                        "balances": {"iso_currency_code": "CAD", "current": 100.0, "available": 90.0},
+                        "balances": {
+                            "iso_currency_code": "CAD",
+                            "current": 100.0,
+                            "available": 90.0,
+                        },
                     },
                     {
                         "account_id": plaid_acct_dup,
                         "name": "Savings",
                         "official_name": None,
                         "type": "depository",
-                        "balances": {"iso_currency_code": "CAD", "current": 100.0, "available": 90.0},
+                        "balances": {
+                            "iso_currency_code": "CAD",
+                            "current": 100.0,
+                            "available": 90.0,
+                        },
                     },
                 ],
             }
@@ -382,9 +461,6 @@ class TestSyncSkipsDuplicates:
 # _get_accounts_grouped UI helper test
 # ---------------------------------------------------------------------------
 
-import sys
-import importlib
-
 
 class TestGetAccountsGrouped:
     """_get_accounts_grouped filters duplicates and reports hidden_count."""
@@ -396,6 +472,7 @@ class TestGetAccountsGrouped:
         _init_db(db_path)
         conn = get_db(db_path)
         import time
+
         uid = str(uuid.uuid4())
         conn.execute(
             "INSERT INTO users (id, username, password_hash, created_at) VALUES (?, 'u', 'x', ?)",
