@@ -962,7 +962,8 @@ def _build_ledger_drilldown(
             "JOIN transactions t ON te.transaction_id = t.id "
             "LEFT JOIN bank_accounts b ON t.bank_account_id = b.id "
             "WHERE te.line_item_id = ? AND COALESCE(b.is_duplicate, 0) = 0"
-            + date_filter_sql + " ORDER BY t.date DESC"
+            + date_filter_sql
+            + " ORDER BY t.date DESC"
         )
         txn_rows = conn.execute(txn_sql, [item["id"]] + date_params).fetchall()
 
@@ -1736,18 +1737,41 @@ def _deduplicate_accounts(conn, user_id: str) -> None:  # conn: sqlite3.Connecti
 # Merchants that should never be flagged (payroll, rent, mortgage, etc.)
 _SUSPICIOUS_WHITELIST: set[str] = {
     # Payroll processors
-    "adp", "adp totalsource", "adp payroll", "adp workforce",
-    "paychex", "gusto", "rippling", "ceridian", "workday payroll",
-    "paylocity", "bamboohr payroll",
+    "adp",
+    "adp totalsource",
+    "adp payroll",
+    "adp workforce",
+    "paychex",
+    "gusto",
+    "rippling",
+    "ceridian",
+    "workday payroll",
+    "paylocity",
+    "bamboohr payroll",
     # Banks / e-transfers (payroll credits)
-    "direct deposit", "payroll", "salary", "wages",
+    "direct deposit",
+    "payroll",
+    "salary",
+    "wages",
     # Mortgage / rent
-    "mortgage", "rent", "rental payment", "property management",
+    "mortgage",
+    "rent",
+    "rental payment",
+    "property management",
     # Utilities (large regular bills)
-    "hydro", "ontario hydro", "toronto hydro", "enbridge", "bell", "rogers",
-    "telus", "shaw",
+    "hydro",
+    "ontario hydro",
+    "toronto hydro",
+    "enbridge",
+    "bell",
+    "rogers",
+    "telus",
+    "shaw",
     # Common insurance
-    "intact", "td insurance", "sun life", "manulife",
+    "intact",
+    "td insurance",
+    "sun life",
+    "manulife",
 }
 
 
@@ -1776,7 +1800,6 @@ def _detect_suspicious_transactions(conn, user_id: str) -> list[dict]:
 
     Returns a list of newly-inserted suspicious-transaction dicts.
     """
-    import math as _math
 
     new_flags: list[dict] = []
 
@@ -1785,30 +1808,19 @@ def _detect_suspicious_transactions(conn, user_id: str) -> list[dict]:
 
     # Set of transaction IDs already in suspicious_transactions (any risk level)
     already_flagged: set[str] = {
-        r[0]
-        for r in conn.execute(
-            "SELECT transaction_id FROM suspicious_transactions"
-        ).fetchall()
+        r[0] for r in conn.execute("SELECT transaction_id FROM suspicious_transactions").fetchall()
     }
 
     # Set of transaction IDs classified as transfer/savings/income/skip
-    skip_tx_ids: set[str] = {
-        r[0]
-        for r in conn.execute(
-            """
+    skip_tx_ids: set[str] = {r[0] for r in conn.execute("""
             SELECT DISTINCT te.transaction_id
               FROM transaction_entries te
               JOIN line_items li ON li.id = te.line_item_id
               JOIN classification_rules cr ON cr.rule_type IN ('transfer','savings','income','skip')
              WHERE li.item_type IN ('income')
-            """
-        ).fetchall()
-    }
+            """).fetchall()}
     # Also grab entries where source='rule' and the matched rule is a skip/transfer rule
-    skip_tx_ids |= {
-        r[0]
-        for r in conn.execute(
-            """
+    skip_tx_ids |= {r[0] for r in conn.execute("""
             SELECT DISTINCT te.transaction_id
               FROM transaction_entries te
              WHERE te.source = 'rule'
@@ -1816,9 +1828,7 @@ def _detect_suspicious_transactions(conn, user_id: str) -> list[dict]:
                    SELECT 1 FROM classification_rules cr
                     WHERE cr.rule_type IN ('transfer','savings','income','skip')
                )
-            """
-        ).fetchall()
-    }
+            """).fetchall()}
 
     # Fetch all non-pending expense transactions for this user
     txns = conn.execute(
@@ -1843,8 +1853,9 @@ def _detect_suspicious_transactions(conn, user_id: str) -> list[dict]:
     def _flag(transaction_id: str, reason: str, risk_level: str) -> dict | None:
         if transaction_id in already_flagged:
             return None
-        row_id = __import__('uuid').uuid4().hex
+        row_id = __import__("uuid").uuid4().hex
         import time as _t
+
         conn.execute(
             "INSERT INTO suspicious_transactions (id, transaction_id, reason, risk_level, flagged_at, dismissed) "
             "VALUES (?, ?, ?, ?, ?, 0)",
@@ -1875,7 +1886,7 @@ def _detect_suspicious_transactions(conn, user_id: str) -> list[dict]:
     # merchant in 1 h → risk: high  (run before duplicate pass so that
     # card-test micro-charges are tagged with the more informative reason)
     # -----------------------------------------------------------------------
-    from datetime import datetime as _dt, timezone as _tz  # shared import for all passes
+    from datetime import datetime as _dt  # shared import for all passes
 
     def _parse_epoch(row) -> float:
         """Return a Unix timestamp for a transaction row."""
@@ -1890,13 +1901,12 @@ def _detect_suspicious_transactions(conn, user_id: str) -> list[dict]:
     for merchant, rows in by_merchant.items():
         if _is_whitelisted(merchant):
             continue
-        micro = [
-            r for r in rows
-            if r["amount"] < 5 and r["id"] not in skip_tx_ids
-        ]
+        micro = [r for r in rows if r["amount"] < 5 and r["id"] not in skip_tx_ids]
         if len(micro) < 3:
             continue
-        timed: list[tuple[float, object]] = [(ep, r) for r in micro if (ep := _parse_epoch(r)) is not None]
+        timed: list[tuple[float, object]] = [
+            (ep, r) for r in micro if (ep := _parse_epoch(r)) is not None
+        ]
         timed.sort(key=lambda x: x[0])
         i = 0
         while i < len(timed):
@@ -2009,8 +2019,14 @@ def _detect_suspicious_transactions(conn, user_id: str) -> list[dict]:
 
 
 @mcp.tool
-def sync() -> dict:
-    """Pull new transactions from Plaid, classify them, and return a summary."""
+def sync(classify: bool = True) -> dict:
+    """Pull new transactions from Plaid and return a summary.
+
+    Args:
+        classify: If True (default), run LLM auto-classification on newly synced
+            transactions before returning.  Pass ``False`` when the caller wants
+            to run classification separately (e.g. the UI background flow).
+    """
 
     def _get(obj, key, default=None):
         """Get a field from a dict or an SDK object."""
@@ -2377,24 +2393,26 @@ def sync() -> dict:
                     total_removed += conn_removed
                     total_classified += conn_classified
 
-                # After all connections are synced, run auto-classification on
-                # any newly inserted (unclassified) transactions.  Errors are
-                # caught so a classification failure never blocks sync.
+                # After all connections are synced, optionally run
+                # auto-classification on any newly inserted (unclassified)
+                # transactions.  Errors are caught so a classification failure
+                # never blocks sync.
                 auto_classify_result = {"classified": 0, "skipped": 0, "uncertain": 0}
                 suspicious_flags: list[dict] = []
-                try:
-                    uid = get_active_user_id(server.paths.DB_PATH)
-                    if uid:
-                        auto_classify_result = classify_pending_transactions(uid)
-                        # Run suspicious transaction detection after classification
-                        try:
-                            suspicious_flags = _detect_suspicious_transactions(db_conn, uid)
-                        except Exception as _sus_exc:
-                            _logger.warning(
-                                "Suspicious transaction detection failed: %s", _sus_exc
-                            )
-                except Exception as _exc:
-                    _logger.warning("Auto-classification after sync failed: %s", _exc)
+                if classify:
+                    try:
+                        uid = get_active_user_id(server.paths.DB_PATH)
+                        if uid:
+                            auto_classify_result = classify_pending_transactions(uid)
+                            # Run suspicious transaction detection after classification
+                            try:
+                                suspicious_flags = _detect_suspicious_transactions(db_conn, uid)
+                            except Exception as _sus_exc:
+                                _logger.warning(
+                                    "Suspicious transaction detection failed: %s", _sus_exc
+                                )
+                    except Exception as _exc:
+                        _logger.warning("Auto-classification after sync failed: %s", _exc)
 
             finally:
                 db_conn.close()
@@ -2404,7 +2422,9 @@ def sync() -> dict:
 
     # Top-5 suspicious for the summary (sorted high -> medium -> low)
     _risk_order = {"high": 0, "medium": 1, "low": 2}
-    sorted_flags = sorted(suspicious_flags, key=lambda f: _risk_order.get(f.get("risk_level", "low"), 3))
+    sorted_flags = sorted(
+        suspicious_flags, key=lambda f: _risk_order.get(f.get("risk_level", "low"), 3)
+    )
     top_suspicious = [
         {
             "merchant": f.get("merchant"),
@@ -2499,7 +2519,10 @@ def dismiss_suspicious(transaction_id: str) -> dict:
             (transaction_id, uid),
         ).fetchone()
         if not row:
-            return {"status": "error", "message": f"No suspicious flag found for transaction {transaction_id!r}"}
+            return {
+                "status": "error",
+                "message": f"No suspicious flag found for transaction {transaction_id!r}",
+            }
 
         conn.execute(
             "UPDATE suspicious_transactions SET dismissed = 1 WHERE transaction_id = ?",

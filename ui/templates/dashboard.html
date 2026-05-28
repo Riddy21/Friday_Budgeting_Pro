@@ -25,19 +25,49 @@
     </div>
     <div id="sync-result" style="margin-top:0.75rem"></div>
     <script>
+    async function pollClassification(el) {
+      // Poll /api/classify/status until classification is done, then update el.
+      let polls = 0;
+      const poll = setInterval(async () => {
+        polls++;
+        try {
+          const r = await fetch('/api/classify/status');
+          const d = await r.json();
+          if (!d.running || polls > 40) {
+            clearInterval(poll);
+            if (d.result && d.result.status === 'ok') {
+              const n = d.result.classified || 0;
+              const u = d.result.uncertain || 0;
+              let msg = '&#x1F9E0; Classified ' + n + ' transaction' + (n !== 1 ? 's' : '');
+              if (u > 0) msg += ' (' + u + ' uncertain)';
+              el.innerHTML += '<div class="alert alert-success">' + msg + '</div>';
+            } else if (d.result && d.result.status === 'error') {
+              el.innerHTML += '<div class="alert alert-error">&#x26A0;&#xFE0F; Classification error: ' + (d.result.error || 'unknown') + '</div>';
+            } else if (polls > 40) {
+              el.innerHTML += '<div class="alert alert-info">&#x1F9E0; Classification timed out (still running in background)</div>';
+            }
+          } else {
+            // Still running — update spinner text
+            const spinner = document.getElementById('classify-spinner');
+            if (spinner) spinner.textContent = '&#x1F9E0; Classifying transactions' + '.'.repeat((polls % 3) + 1);
+          }
+        } catch(e) { clearInterval(poll); }
+      }, 2000);
+    }
+
     async function doSync(btn) {
       btn.disabled = true;
-      btn.textContent = 'Syncing…';
+      btn.textContent = 'Syncing\u2026';
       document.getElementById('sync-result').innerHTML = '';
       try {
         const r = await fetch('/api/sync', {method: 'POST'});
         const d = await r.json();
         const el = document.getElementById('sync-result');
         if (d.status === 'ok') {
-          el.innerHTML = '<div class="alert alert-info">⏳ Syncing…</div>';
+          el.innerHTML = '<div class="alert alert-info">\u29d3 Syncing\u2026</div>';
           const ts = document.getElementById('last-synced');
           if (ts) ts.textContent = 'Just now';
-          // Poll for the result every 3s
+          // Poll for sync result every 3s
           let polls = 0;
           const poll = setInterval(async () => {
             polls++;
@@ -48,20 +78,26 @@
                 clearInterval(poll);
                 const added = d2.added || 0;
                 const conns = d2.connections_synced || 0;
-                el.innerHTML = '<div class="alert alert-success">✅ Synced — ' + added + ' new transaction' + (added !== 1 ? 's' : '') + ' across ' + conns + ' connection' + (conns !== 1 ? 's' : '') + '.</div>';
+                el.innerHTML =
+                  '<div class="alert alert-success">\u2705 Synced \u2014 ' + added +
+                  ' new transaction' + (added !== 1 ? 's' : '') +
+                  ' across ' + conns + ' connection' + (conns !== 1 ? 's' : '') + '.</div>' +
+                  '<div class="alert alert-info" id="classify-spinner">\u1F9E0 Classifying transactions\u2026</div>';
                 btn.disabled = false;
                 btn.textContent = 'Sync Now';
+                // Start polling classification status
+                pollClassification(el);
               }
             } catch(e) { clearInterval(poll); }
           }, 3000);
-          return; // keep button disabled while polling
+          return; // keep button disabled while polling sync
         } else if (d.status === 'already_running') {
-          el.innerHTML = '<div class="alert alert-info">⏳ Sync already in progress…</div>';
+          el.innerHTML = '<div class="alert alert-info">\u29d3 Sync already in progress\u2026</div>';
         } else {
-          el.innerHTML = '<div class="alert alert-error">❌ ' + (d.detail || d.message || 'Sync failed') + '</div>';
+          el.innerHTML = '<div class="alert alert-error">\u274c ' + (d.detail || d.message || 'Sync failed') + '</div>';
         }
       } catch(e) {
-        document.getElementById('sync-result').innerHTML = '<div class="alert alert-error">❌ Network error</div>';
+        document.getElementById('sync-result').innerHTML = '<div class="alert alert-error">\u274c Network error</div>';
       }
       btn.disabled = false;
       btn.textContent = 'Sync Now';

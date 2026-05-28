@@ -1,4 +1,5 @@
 """Tests for suspicious transaction detection (#273)."""
+
 from __future__ import annotations
 
 import sqlite3
@@ -7,15 +8,13 @@ import time
 import uuid
 from pathlib import Path
 
-import pytest
-
-from server.db import init_db, get_db
+from server.db import get_db, init_db
 from server.main import _detect_suspicious_transactions
-
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _make_db() -> tuple[Path, sqlite3.Connection]:
     tmp = tempfile.mktemp(suffix=".db")
@@ -28,6 +27,7 @@ def _make_db() -> tuple[Path, sqlite3.Connection]:
 def _insert_user(conn) -> str:
     uid = str(uuid.uuid4())
     from argon2 import PasswordHasher
+
     ph = PasswordHasher()
     conn.execute(
         "INSERT INTO users (id, username, password_hash, created_at) VALUES (?, ?, ?, ?)",
@@ -91,10 +91,12 @@ def test_duplicate_charge_detected():
     aid = _insert_account(conn, cid)
 
     # Two identical charges close together (same day)
-    _insert_txn(conn, aid, "Netflix", 15.99, date="2024-06-01",
-                authorized_datetime="2024-06-01T10:00:00")
-    _insert_txn(conn, aid, "Netflix", 15.99, date="2024-06-01",
-                authorized_datetime="2024-06-01T11:00:00")
+    _insert_txn(
+        conn, aid, "Netflix", 15.99, date="2024-06-01", authorized_datetime="2024-06-01T10:00:00"
+    )
+    _insert_txn(
+        conn, aid, "Netflix", 15.99, date="2024-06-01", authorized_datetime="2024-06-01T11:00:00"
+    )
 
     flags = _detect_suspicious_transactions(conn, uid)
     conn.close()
@@ -124,8 +126,9 @@ def test_unusually_large_charge_detected():
     merchants = [f["merchant"] for f in flags]
     reasons = [f["reason"] for f in flags]
     assert any("Starbucks" in (m or "") for m in merchants), f"Expected Starbucks in flags: {flags}"
-    assert any("large" in r.lower() or "unusually" in r.lower() for r in reasons), \
-        f"Expected unusually large reason: {reasons}"
+    assert any(
+        "large" in r.lower() or "unusually" in r.lower() for r in reasons
+    ), f"Expected unusually large reason: {reasons}"
     assert any(f["risk_level"] == "medium" for f in flags), f"Expected medium risk: {flags}"
 
 
@@ -144,8 +147,9 @@ def test_new_merchant_large_amount_detected():
     merchants = [f["merchant"] for f in flags]
     reasons = [f["reason"] for f in flags]
     assert any("AcmeCorp" in (m or "") for m in merchants), f"Expected AcmeCorp in flags: {flags}"
-    assert any("new merchant" in r.lower() or "first" in r.lower() for r in reasons), \
-        f"Expected new-merchant reason: {reasons}"
+    assert any(
+        "new merchant" in r.lower() or "first" in r.lower() for r in reasons
+    ), f"Expected new-merchant reason: {reasons}"
     assert any(f["risk_level"] == "low" for f in flags), f"Expected low risk: {flags}"
 
 
@@ -160,18 +164,19 @@ def test_card_testing_detected():
     base = "2024-06-01T12:00:00"
     for i in range(4):
         ts = f"2024-06-01T12:{i * 5:02d}:00"
-        _insert_txn(conn, aid, "ShadyMerchant", 1.00, date="2024-06-01",
-                    authorized_datetime=ts)
+        _insert_txn(conn, aid, "ShadyMerchant", 1.00, date="2024-06-01", authorized_datetime=ts)
 
     flags = _detect_suspicious_transactions(conn, uid)
     conn.close()
 
     merchants = [f["merchant"] for f in flags]
     reasons = [f["reason"] for f in flags]
-    assert any("ShadyMerchant" in (m or "") for m in merchants), \
-        f"Expected ShadyMerchant in flags: {flags}"
-    assert any("card" in r.lower() or "micro" in r.lower() for r in reasons), \
-        f"Expected card-testing reason: {reasons}"
+    assert any(
+        "ShadyMerchant" in (m or "") for m in merchants
+    ), f"Expected ShadyMerchant in flags: {flags}"
+    assert any(
+        "card" in r.lower() or "micro" in r.lower() for r in reasons
+    ), f"Expected card-testing reason: {reasons}"
     assert any(f["risk_level"] == "high" for f in flags), f"Expected high risk: {flags}"
 
 
@@ -182,10 +187,12 @@ def test_dismissed_transaction_not_reflagged():
     cid = _insert_connection(conn, uid)
     aid = _insert_account(conn, cid)
 
-    tid1 = _insert_txn(conn, aid, "Netflix", 15.99, date="2024-06-01",
-                       authorized_datetime="2024-06-01T10:00:00")
-    tid2 = _insert_txn(conn, aid, "Netflix", 15.99, date="2024-06-01",
-                       authorized_datetime="2024-06-01T11:00:00")
+    tid1 = _insert_txn(
+        conn, aid, "Netflix", 15.99, date="2024-06-01", authorized_datetime="2024-06-01T10:00:00"
+    )
+    tid2 = _insert_txn(
+        conn, aid, "Netflix", 15.99, date="2024-06-01", authorized_datetime="2024-06-01T11:00:00"
+    )
 
     # Pre-insert a dismissed flag for tid1
     conn.execute(
@@ -211,10 +218,22 @@ def test_whitelisted_merchants_not_flagged():
     aid = _insert_account(conn, cid)
 
     # Payroll — two identical charges (would normally be duplicate)
-    _insert_txn(conn, aid, "ADP Payroll", 3000.00, date="2024-06-01",
-                authorized_datetime="2024-06-01T09:00:00")
-    _insert_txn(conn, aid, "ADP Payroll", 3000.00, date="2024-06-01",
-                authorized_datetime="2024-06-01T09:05:00")
+    _insert_txn(
+        conn,
+        aid,
+        "ADP Payroll",
+        3000.00,
+        date="2024-06-01",
+        authorized_datetime="2024-06-01T09:00:00",
+    )
+    _insert_txn(
+        conn,
+        aid,
+        "ADP Payroll",
+        3000.00,
+        date="2024-06-01",
+        authorized_datetime="2024-06-01T09:05:00",
+    )
 
     # Rent — new merchant large amount
     _insert_txn(conn, aid, "Rent Payment", 1800.00, date="2024-06-01")
@@ -226,9 +245,12 @@ def test_whitelisted_merchants_not_flagged():
     conn.close()
 
     merchants = [f["merchant"] for f in flags]
-    assert not any("ADP" in (m or "") for m in merchants), \
-        f"ADP Payroll should not be flagged: {flags}"
-    assert not any("Rent" in (m or "") for m in merchants), \
-        f"Rent Payment should not be flagged: {flags}"
-    assert not any("Mortgage" in (m or "") for m in merchants), \
-        f"Mortgage Payment should not be flagged: {flags}"
+    assert not any(
+        "ADP" in (m or "") for m in merchants
+    ), f"ADP Payroll should not be flagged: {flags}"
+    assert not any(
+        "Rent" in (m or "") for m in merchants
+    ), f"Rent Payment should not be flagged: {flags}"
+    assert not any(
+        "Mortgage" in (m or "") for m in merchants
+    ), f"Mortgage Payment should not be flagged: {flags}"
