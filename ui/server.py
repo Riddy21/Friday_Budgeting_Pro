@@ -851,9 +851,7 @@ def _run_classification_background(user_id: str) -> None:
             result = _sm.classify_pending_transactions(user_id)
             _classify_state["result"] = {"status": "ok", **result}
         except Exception as exc:
-            _logging.getLogger(__name__).error(
-                "Background classification failed: %s", exc
-            )
+            _logging.getLogger(__name__).error("Background classification failed: %s", exc)
             _classify_state["result"] = {"status": "error", "error": str(exc)}
         finally:
             _classify_state["running"] = False
@@ -927,9 +925,7 @@ def api_classify(request: Request):
     if not uid:
         return JSONResponse({"error": "No active user"}, status_code=400)
 
-    _threading.Thread(
-        target=_run_classification_background, args=(uid,), daemon=True
-    ).start()
+    _threading.Thread(target=_run_classification_background, args=(uid,), daemon=True).start()
     return JSONResponse({"status": "ok", "message": "Classification started"})
 
 
