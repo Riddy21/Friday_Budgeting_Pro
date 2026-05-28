@@ -334,8 +334,9 @@ That's the whole API. ~15 tools.
 
 ## Sync Pipeline
 
-Every `sync()` call executes the full pipeline automatically — no separate
-trigger needed:
+The `sync()` MCP tool executes the full pipeline (including classification)
+automatically. The UI `/api/sync` route runs sync and classification as two
+chained async background threads so both phases show progress independently:
 
 ```
 Plaid fetch
@@ -443,8 +444,14 @@ After 3 successful LLM classifications of the same merchant, auto-promote
 to a legacy Tier-1 routing_rule. System gets cheaper and faster over time.
 
 ### classify_pending_transactions — key design notes (#165 + #205)
-- Called automatically at the end of `sync()`. Errors are logged but never
-  block the sync response.
+- Called automatically after every sync via the UI's async classification
+  background thread (see "Async classification" below). Errors are logged
+  but never block the sync or UI response.
+- The `sync()` MCP tool accepts a `classify=True` (default) parameter;
+  the UI route passes `classify=False` and handles classification separately
+  so progress can be tracked and surfaced independently.
+- `POST /api/classify` triggers a standalone classification job.
+- `GET /api/classify/status` returns `{running, result}` for UI polling.
 - Idempotent: already-classified transactions (any `transaction_entries` row)
   are skipped on every call.
 - Pending transactions (`pending=1`) are never classified.

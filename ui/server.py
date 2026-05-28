@@ -27,6 +27,8 @@ Route overview
   GET  /ledgers       read-only ledger tree
   GET  /link          Plaid Link JS embed
   GET  /static/<path> static file serving
+  POST /api/classify        trigger LLM classification of pending transactions
+  GET  /api/classify/status poll classification job state
 """
 
 from __future__ import annotations
@@ -84,6 +86,16 @@ from ui.auth import (
 # Run DB migrations on startup so schema is always up to date
 # (safe to call repeatedly — all operations are idempotent)
 init_db(_paths.DB_PATH)
+
+# ── Background classification state ─────────────────────────────────────────
+# Tracks whether an async LLM classification job is running and its last result.
+import threading as _threading
+
+_classify_lock = _threading.Lock()
+_classify_state: dict = {
+    "running": False,
+    "result": None,  # dict with classified/skipped/uncertain or error
+}
 
 app = FastAPI(title="Friday Budgeting Pro UI", version="0.1.0")
 
@@ -820,13 +832,44 @@ def _get_last_synced_at() -> Optional[str]:
         return str(ts)
 
 
+def _run_classification_background(user_id: str) -> None:
+    """Classify all pending transactions for *user_id* in a background thread.
+
+    Updates ``_classify_state`` so ``/api/classify/status`` can report progress.
+    Safe to call when a classification job is already running — the second call
+    will block on ``_classify_lock`` until the first finishes, then see there
+    are no remaining unclassified transactions (idempotent).
+    """
+    import logging as _logging
+
+    import server.main as _sm
+
+    with _classify_lock:
+        _classify_state["running"] = True
+        _classify_state["result"] = None
+        try:
+            result = _sm.classify_pending_transactions(user_id)
+            _classify_state["result"] = {"status": "ok", **result}
+        except Exception as exc:
+            _logging.getLogger(__name__).error(
+                "Background classification failed: %s", exc
+            )
+            _classify_state["result"] = {"status": "error", "error": str(exc)}
+        finally:
+            _classify_state["running"] = False
+
+
 @app.post("/api/sync")
 def api_sync(request: Request):
-    """AJAX sync — returns JSON immediately; sync runs in a background thread."""
+    """AJAX sync — returns JSON immediately; sync runs in a background thread.
+
+    After the sync completes, LLM classification is automatically kicked off
+    as a separate background thread so the UI can track the two phases
+    independently.  Sync runs with ``classify=False`` so classification does
+    not block the sync response.
+    """
     if not _is_authenticated(request):
         return JSONResponse({"error": "Unauthorized"}, status_code=401)
-
-    import threading
 
     from server.sync_lock import acquire_sync_lock
 
@@ -839,20 +882,67 @@ def api_sync(request: Request):
     def _run():
         try:
             import server.main as _sm
+            from ui.auth import get_active_user_id
 
-            _sm.sync()
+            # Sync without inline classification so we can run it separately.
+            _sm.sync(classify=False)
+
+            # Kick off async LLM classification immediately after sync.
+            uid = get_active_user_id(_paths.DB_PATH)
+            if uid:
+                _threading.Thread(
+                    target=_run_classification_background,
+                    args=(uid,),
+                    daemon=True,
+                ).start()
         except Exception as exc:
             import logging
 
             logging.getLogger(__name__).error("api_sync background: %s", exc)
 
-    threading.Thread(target=_run, daemon=True).start()
+    _threading.Thread(target=_run, daemon=True).start()
     return JSONResponse(
         {
             "status": "ok",
             "added": 0,
             "connections_synced": 0,
             "message": "Sync started in background",
+        }
+    )
+
+
+@app.post("/api/classify")
+def api_classify(request: Request):
+    """Manually trigger LLM classification of all pending transactions."""
+    if not _is_authenticated(request):
+        return JSONResponse({"error": "Unauthorized"}, status_code=401)
+
+    from ui.auth import get_active_user_id
+
+    with _classify_lock:
+        if _classify_state["running"]:
+            return JSONResponse({"status": "already_running"})
+
+    uid = get_active_user_id(_paths.DB_PATH)
+    if not uid:
+        return JSONResponse({"error": "No active user"}, status_code=400)
+
+    _threading.Thread(
+        target=_run_classification_background, args=(uid,), daemon=True
+    ).start()
+    return JSONResponse({"status": "ok", "message": "Classification started"})
+
+
+@app.get("/api/classify/status")
+def api_classify_status(request: Request):
+    """Return current classification job state."""
+    if not _is_authenticated(request):
+        return JSONResponse({"error": "Unauthorized"}, status_code=401)
+
+    return JSONResponse(
+        {
+            "running": _classify_state["running"],
+            "result": _classify_state["result"],
         }
     )
 

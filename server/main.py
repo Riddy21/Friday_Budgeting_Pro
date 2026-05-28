@@ -2009,8 +2009,14 @@ def _detect_suspicious_transactions(conn, user_id: str) -> list[dict]:
 
 
 @mcp.tool
-def sync() -> dict:
-    """Pull new transactions from Plaid, classify them, and return a summary."""
+def sync(classify: bool = True) -> dict:
+    """Pull new transactions from Plaid and return a summary.
+
+    Args:
+        classify: If True (default), run LLM auto-classification on newly synced
+            transactions before returning.  Pass ``False`` when the caller wants
+            to run classification separately (e.g. the UI background flow).
+    """
 
     def _get(obj, key, default=None):
         """Get a field from a dict or an SDK object."""
@@ -2377,24 +2383,26 @@ def sync() -> dict:
                     total_removed += conn_removed
                     total_classified += conn_classified
 
-                # After all connections are synced, run auto-classification on
-                # any newly inserted (unclassified) transactions.  Errors are
-                # caught so a classification failure never blocks sync.
+                # After all connections are synced, optionally run
+                # auto-classification on any newly inserted (unclassified)
+                # transactions.  Errors are caught so a classification failure
+                # never blocks sync.
                 auto_classify_result = {"classified": 0, "skipped": 0, "uncertain": 0}
                 suspicious_flags: list[dict] = []
-                try:
-                    uid = get_active_user_id(server.paths.DB_PATH)
-                    if uid:
-                        auto_classify_result = classify_pending_transactions(uid)
-                        # Run suspicious transaction detection after classification
-                        try:
-                            suspicious_flags = _detect_suspicious_transactions(db_conn, uid)
-                        except Exception as _sus_exc:
-                            _logger.warning(
-                                "Suspicious transaction detection failed: %s", _sus_exc
-                            )
-                except Exception as _exc:
-                    _logger.warning("Auto-classification after sync failed: %s", _exc)
+                if classify:
+                    try:
+                        uid = get_active_user_id(server.paths.DB_PATH)
+                        if uid:
+                            auto_classify_result = classify_pending_transactions(uid)
+                            # Run suspicious transaction detection after classification
+                            try:
+                                suspicious_flags = _detect_suspicious_transactions(db_conn, uid)
+                            except Exception as _sus_exc:
+                                _logger.warning(
+                                    "Suspicious transaction detection failed: %s", _sus_exc
+                                )
+                    except Exception as _exc:
+                        _logger.warning("Auto-classification after sync failed: %s", _exc)
 
             finally:
                 db_conn.close()
