@@ -1580,7 +1580,7 @@ def classify_pending_transactions(user_id: str, limit: int | None = None) -> dic
                             sign_err,
                         )
                         # Determine the correct item_type for this amount sign.
-                        correct_item_type = "income" if amount > 0 else "expense"
+                        correct_item_type = "expense" if amount > 0 else "income"
                         # Try to find a replacement in the same ledger.
                         replacement = conn.execute(
                             "SELECT id FROM line_items"
