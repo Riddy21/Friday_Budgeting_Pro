@@ -1552,6 +1552,61 @@ def classify_pending_transactions(user_id: str, limit: int | None = None) -> dic
                 elif classification_type not in ("transfer", "savings", "skip"):
                     classification_type = "spending"
 
+            # Hard guardrail: amount sign must match line item type.
+            # If the LLM assigned an income line item to a negative (outflow)
+            # transaction — or an expense line item to a positive (inflow)
+            # transaction — try to auto-correct to a same-ledger item of the
+            # right type.  If no replacement is found, mark uncertain so the
+            # user can review.
+            if line_item_id and classification_type not in ("transfer", "savings", "skip"):
+                from server.classifier import validate_sign_matches_item_type
+
+                li_type_check = conn.execute(
+                    "SELECT item_type FROM line_items WHERE id = ?",
+                    (line_item_id,),
+                ).fetchone()
+                if li_type_check:
+                    sign_ok, sign_err = validate_sign_matches_item_type(
+                        amount, li_type_check["item_type"]
+                    )
+                    if not sign_ok:
+                        _logger.warning(
+                            "classify_pending_transactions: sign mismatch for tx_id=%s "
+                            "merchant=%r amount=%.2f item_type=%r — %s — attempting auto-correct",
+                            tx_id,
+                            merchant,
+                            amount,
+                            li_type_check["item_type"],
+                            sign_err,
+                        )
+                        # Determine the correct item_type for this amount sign.
+                        correct_item_type = "income" if amount > 0 else "expense"
+                        # Try to find a replacement in the same ledger.
+                        replacement = conn.execute(
+                            "SELECT id FROM line_items"
+                            " WHERE ledger_id = ? AND item_type = ? ORDER BY name LIMIT 1",
+                            (ledger_id, correct_item_type),
+                        ).fetchone()
+                        if replacement:
+                            line_item_id = replacement["id"]
+                            classification_type = (
+                                "income" if correct_item_type == "income" else "spending"
+                            )
+                            is_uncertain = True  # flag for review since we auto-corrected
+                            reasoning = (
+                                f"[sign-guardrail] {sign_err} Auto-corrected to line item "
+                                f"{line_item_id}. Original reasoning: {reasoning}"
+                            )
+                        else:
+                            # No suitable item found — leave unrouted for review.
+                            line_item_id = None
+                            ledger_id = None
+                            is_uncertain = True
+                            reasoning = (
+                                f"[sign-guardrail] {sign_err} No {correct_item_type} "
+                                "line item found in ledger — manual review required."
+                            )
+
             # Last resort: if still no line_item_id but account has a default
             # ledger, grab the first matching line item from that ledger.
             if line_item_id is None and default_ledger_id:
@@ -4046,7 +4101,7 @@ def correct_transaction(
         # Verify transaction belongs to this user.
         tx_row = conn.execute(
             """
-            SELECT t.id, t.merchant
+            SELECT t.id, t.merchant, t.amount
             FROM transactions t
             JOIN bank_accounts ba    ON ba.id = t.bank_account_id
             JOIN bank_connections bc ON bc.id = ba.connection_id
@@ -4058,7 +4113,28 @@ def correct_transaction(
             return {"status": "error", "error": f"transaction {transaction_id!r} not found"}
 
         merchant = tx_row["merchant"] or "Unknown"
+        tx_amount = tx_row["amount"]
         now = int(_time.time())
+
+        # Hard guardrail: validate that the chosen line item's type matches
+        # the transaction's amount sign before allowing the correction.
+        li_row = conn.execute(
+            "SELECT item_type FROM line_items WHERE id = ?",
+            (line_item_id,),
+        ).fetchone()
+        if li_row is None:
+            return {
+                "status": "error",
+                "error": f"line_item_id {line_item_id!r} does not exist",
+            }
+        from server.classifier import validate_sign_matches_item_type
+
+        sign_ok, sign_err = validate_sign_matches_item_type(tx_amount, li_row["item_type"])
+        if not sign_ok:
+            return {
+                "status": "error",
+                "error": f"sign_mismatch: {sign_err}",
+            }
 
         # Check for an existing entry.
         entry_row = conn.execute(

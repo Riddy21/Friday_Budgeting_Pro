@@ -23,6 +23,56 @@ import json
 import sqlite3
 
 
+# ---------------------------------------------------------------------------
+# Hard guardrail: amount sign must match line item type
+# ---------------------------------------------------------------------------
+
+
+def validate_sign_matches_item_type(
+    amount: float,
+    item_type: str,
+) -> tuple[bool, str]:
+    """Validate that a transaction amount sign matches the line item type.
+
+    Hard guardrail rule (enforced in all routing / correction paths):
+
+    * Positive amounts (money flowing *in*, e.g. income, refunds) must be
+      routed to **income**-type line items only.
+    * Negative amounts (money flowing *out*, e.g. expenses, spending) must
+      be routed to **expense**-type line items only.
+    * A zero amount is always valid and passes through unchanged.
+
+    This prevents the LLM or a user correction from mis-routing a salary
+    deposit to an expense line item (or a grocery charge to an income line
+    item), which would corrupt ledger totals.
+
+    Args:
+        amount:    Raw transaction amount from ``transactions.amount``.
+                   Positive = inflow (income); negative = outflow (expense).
+        item_type: The ``line_items.item_type`` value (``'income'`` or
+                   ``'expense'``).
+
+    Returns:
+        ``(True, "")`` when the sign matches, or
+        ``(False, <human-readable reason>)`` when it does not.
+    """
+    if amount == 0:
+        return True, ""
+    if amount > 0 and item_type != "income":
+        return (
+            False,
+            f"Positive amount ${amount:.2f} (inflow) must be routed to an "
+            f"income-type line item, but '{item_type}' was given.",
+        )
+    if amount < 0 and item_type != "expense":
+        return (
+            False,
+            f"Negative amount ${amount:.2f} (outflow) must be routed to an "
+            f"expense-type line item, but '{item_type}' was given.",
+        )
+    return True, ""
+
+
 def _strip_markdown_json(raw: str) -> str:
     """Strip markdown code fences from an LLM response before JSON parsing.
 
