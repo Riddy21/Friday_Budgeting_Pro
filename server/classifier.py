@@ -36,10 +36,10 @@ def validate_sign_matches_item_type(
 
     Hard guardrail rule (enforced in all routing / correction paths):
 
-    * Positive amounts (money flowing *in*, e.g. income, refunds) must be
-      routed to **income**-type line items only.
-    * Negative amounts (money flowing *out*, e.g. expenses, spending) must
-      be routed to **expense**-type line items only.
+    * Positive amounts (money flowing *out*, e.g. expenses, spending, debits)
+      must be routed to **expense**-type line items only.
+    * Negative amounts (money flowing *in*, e.g. income, refunds, credits) must
+      be routed to **income**-type line items only.
     * A zero amount is always valid and passes through unchanged.
 
     This prevents the LLM or a user correction from mis-routing a salary
@@ -48,7 +48,7 @@ def validate_sign_matches_item_type(
 
     Args:
         amount:    Raw transaction amount from ``transactions.amount``.
-                   Positive = inflow (income); negative = outflow (expense).
+                   Positive = outflow (expense/debit); negative = inflow (income/credit).
         item_type: The ``line_items.item_type`` value (``'income'`` or
                    ``'expense'``).
 
@@ -58,17 +58,17 @@ def validate_sign_matches_item_type(
     """
     if amount == 0:
         return True, ""
-    if amount > 0 and item_type != "income":
+    if amount > 0 and item_type != "expense":
         return (
             False,
-            f"Positive amount ${amount:.2f} (inflow) must be routed to an "
-            f"income-type line item, but '{item_type}' was given.",
+            f"Positive amount ${amount:.2f} (outflow/debit) must be routed to an "
+            f"expense-type line item, not income.",
         )
-    if amount < 0 and item_type != "expense":
+    if amount < 0 and item_type != "income":
         return (
             False,
-            f"Negative amount ${amount:.2f} (outflow) must be routed to an "
-            f"expense-type line item, but '{item_type}' was given.",
+            f"Negative amount ${amount:.2f} (inflow/credit) must be routed to an "
+            f"income-type line item, not expense.",
         )
     return True, ""
 
@@ -586,7 +586,7 @@ def classify_transaction(
         "3. classification_type must reflect the chosen line item / rule: "
         "transfer | savings | spending | income | skip. For unmatched "
         "transactions infer the type from the Plaid category and amount sign "
-        "(negative = outflow = spending or transfer).\n"
+        "(positive = outflow = spending or transfer; negative = inflow = income or credit).\n"
         "4. Set confidence < 0.7 when you are not confident — the caller "
         "will flag the transaction for review.\n\n"
         "Reply with ONLY a JSON object — no markdown, no text outside the "
@@ -793,7 +793,7 @@ def classify_with_rules(
         "- Set line_item_id=null when the matched rule has no line_item_id, "
         "or when no rule matched.\n"
         "- When no rule matches, infer classification_type from the Plaid "
-        "category and amount sign (negative = outflow = spending/transfer).\n"
+        "category and amount sign (positive = outflow = spending or transfer; negative = inflow = income or credit).\n"
         "- Set confidence < 0.7 (and the caller will set uncertain=true) when "
         "you are not confident."
     )
