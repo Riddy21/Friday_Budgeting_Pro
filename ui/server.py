@@ -969,6 +969,24 @@ def api_sync_result(request: Request):
         conn.close()
 
 
+@app.get("/api/summary")
+def api_summary(request: Request, period: str = "this_month"):
+    """Return spending/savings summary for the given period.
+
+    Valid period values: ``this_month``, ``last_month``, ``this_year``,
+    ``ytd``, or a specific ``YYYY-MM`` / ``YYYY`` string.
+    """
+    if not _is_authenticated(request):
+        return JSONResponse({"error": "Unauthorized"}, status_code=401)
+    from server.main import summary as _summary
+
+    try:
+        result = _summary(period)
+        return JSONResponse(result)
+    except Exception as exc:  # pragma: no cover
+        return JSONResponse({"error": str(exc)}, status_code=500)
+
+
 @app.get("/dashboard", response_class=HTMLResponse)
 def dashboard_get(request: Request):
     """Main dashboard page.  Requires authentication."""

@@ -179,7 +179,63 @@
           </div>
         </div>
 
-        {# ── Income/Expenses/Net totals footer (#166) ── #}
+        {% set ns_savings = namespace(has_savings=false) %}
+        {% for item in ledger.line_items %}{% if item.item_type == "savings" %}{% set ns_savings.has_savings = true %}{% endif %}{% endfor %}
+        {% if ns_savings.has_savings %}
+        <div class="item-section" data-section="savings" style="border-top:1px solid #fcd34d;margin-top:0.5em;padding-top:0.5em;">
+          <h3 style="color:#d97706;">&#x1F4B0; Savings &amp; Investments</h3>
+          <table>
+            <tbody class="items-tbody" data-section="savings">
+              {% for item in ledger.line_items %}
+              {% if item.item_type == "savings" %}
+              <tr class="line-item-row" data-item-id="{{ item.id }}" data-line-item-id="{{ item.id }}">
+                <td class="item-name-cell">
+                  <span class="item-name-display">{{ item.name }}</span>
+                  <input class="item-name-input" type="text" value="{{ item.name }}"
+                    style="display:none;" data-item-id="{{ item.id }}"
+                    data-ledger-id="{{ ledger.id }}">
+                </td>
+                <td class="item-total-cell" style="color:#d97706;">C${{ "%.2f"|format(item.total) }}</td>
+                <td class="item-count-cell">{{ item.transactions|length }} transaction{% if item.transactions|length != 1 %}s{% endif %}</td>
+                <td class="item-expand-cell">
+                  {% if item.transactions %}
+                  <button class="btn-expand-item" data-item-id="{{ item.id }}" aria-label="Toggle transactions">&#8964;</button>
+                  {% endif %}
+                </td>
+                <td>
+                  <button class="btn-danger btn-delete-item" data-item-id="{{ item.id }}"
+                    data-ledger-id="{{ ledger.id }}">x</button>
+                </td>
+              </tr>
+              {% if item.transactions %}
+              <tr class="txn-detail-row" data-parent-item-id="{{ item.id }}" style="display:none;">
+                <td colspan="5" class="txn-detail-cell">
+                  <table class="txn-table">
+                    {% for tx in item.transactions %}
+                    <tr class="{% if tx.pending %}txn-pending{% endif %}">
+                      <td class="txn-tree">{% if loop.last %}&#9492;&#9472;&#9472;{% else %}&#9500;&#9472;&#9472;{% endif %}</td>
+                      <td class="txn-date">{{ tx.date }}</td>
+                      <td class="txn-merchant">{{ tx.merchant or '(unknown)' }}</td>
+                      <td class="txn-account">{{ tx.account_name or '' }}</td>
+                      <td class="txn-amount" style="color:#d97706;">C${{ "%.2f"|format(tx.amount) }}</td>
+                    </tr>
+                    {% endfor %}
+                  </table>
+                </td>
+              </tr>
+              {% endif %}
+              {% endif %}
+              {% endfor %}
+            </tbody>
+          </table>
+          <div class="add-item-row">
+            <input type="text" class="add-item-input" placeholder="Add savings item&#x2026;"
+              data-ledger-id="{{ ledger.id }}" data-section="savings">
+          </div>
+        </div>
+        {% endif %}
+
+        {# ── Income/Expenses/Savings/Net totals footer (#166, #237) ── #}
         <div class="ledger-totals-row" data-ledger-totals="{{ ledger.id }}">
           <span>
             <span class="total-label">Total income:</span>
@@ -189,6 +245,12 @@
             <span class="total-label">Total expenses:</span>
             <span class="total-value" data-total="expenses">C${{ "%.2f"|format(ledger.totals.expenses) }}</span>
           </span>
+          {% if ledger.totals.savings > 0 %}
+          <span>
+            <span class="total-label" style="color:#d97706;">Savings:</span>
+            <span class="total-value" data-total="savings" style="color:#d97706;font-weight:600;">C${{ "%.2f"|format(ledger.totals.savings) }}</span>
+          </span>
+          {% endif %}
           <span>
             <span class="total-label">Net:</span>
             <span class="total-value {% if ledger.totals.net > 0 %}net-positive{% elif ledger.totals.net < 0 %}net-negative{% else %}net-zero{% endif %}"
