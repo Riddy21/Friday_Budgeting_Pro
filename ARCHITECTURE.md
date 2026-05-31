@@ -201,7 +201,7 @@ Full schema lives in `db/schema.sql` (source of truth). Summary:
 | `bank_connections` | One row per Plaid Item (institution) |
 | `bank_accounts` | Individual accounts within a connection |
 | `ledgers` | Financial entities: personal \| property \| investment |
-| `line_items` | Categories within a ledger (income \| expense) |
+| `line_items` | Categories within a ledger (income \| expense \| savings) |
 | `transactions` | Raw from Plaid — never modified after insert |
 | `transaction_entries` | Classification result: transaction → line item |
 | `classification_rules` | Natural language rules, priority-ordered, evaluated by LLM |
@@ -296,7 +296,7 @@ tool calls; nothing new is required from the UI.
 - `add_ledger(name)` — creates a generic personal ledger
 - `create_property_ledger(name, description?)` — creates a `property` ledger seeded with 6 default line items (Rent income, Mortgage, Property tax, Maintenance & repairs, Insurance, Utilities)
 - `create_investment_ledger(name)` — creates an `investment` ledger seeded with 2 default line items (Contributions, Dividends & Returns)
-- `add_line_item(ledger_id, name, item_type)` — `item_type` is `income` or `expense`
+- `add_line_item(ledger_id, name, item_type)` — `item_type` is `income`, `expense`, or `savings`
 - `remove_line_item(id)`
 - `set_account_ledger(account_id, ledger_id)` — routes transactions from a bank account to a specific ledger by default
 

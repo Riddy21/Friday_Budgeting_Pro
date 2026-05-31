@@ -292,6 +292,7 @@ def apply_initial_setup(
         ("Shopping", "expense"),
         ("Misc", "expense"),
         ("Other", "expense"),
+        ("Investments & Savings", "savings"),
     ]
 
     # Build the full ledger spec: Personal first, then any extras.
@@ -952,6 +953,7 @@ def _build_ledger_drilldown(
 
     total_income = 0.0
     total_expenses = 0.0
+    total_savings = 0.0
     line_items_out = []
 
     for item in item_rows:
@@ -986,6 +988,8 @@ def _build_ledger_drilldown(
         item_total = round(item_total, 2)
         if item["item_type"] == "income":
             total_income += item_total
+        elif item["item_type"] == "savings":
+            total_savings += item_total
         else:
             total_expenses += item_total
 
@@ -1009,7 +1013,8 @@ def _build_ledger_drilldown(
         "totals": {
             "income": round(total_income, 2),
             "expenses": round(total_expenses, 2),
-            "net": round(total_income - total_expenses, 2),
+            "savings": round(total_savings, 2),
+            "net": round(total_income - total_expenses - total_savings, 2),
         },
     }
 
@@ -1107,13 +1112,13 @@ def add_line_item(ledger_id: str, name: str, item_type: str) -> dict:
     name : str
         Non-empty display name for the line item.
     item_type : str
-        Must be ``'income'`` or ``'expense'``.
+        Must be ``'income'``, ``'expense'``, or ``'savings'``.
     """
     name = name.strip() if name else ""
     if not name:
         return {"status": "error", "message": "Line item name must be non-empty"}
-    if item_type not in ("income", "expense"):
-        return {"status": "error", "message": "item_type must be 'income' or 'expense'"}
+    if item_type not in ("income", "expense", "savings"):
+        return {"status": "error", "message": "item_type must be 'income', 'expense', or 'savings'"}
 
     uid = get_active_user_id(server.paths.DB_PATH)
     conn = get_db(server.paths.DB_PATH)
@@ -3223,6 +3228,7 @@ def summary(period: str) -> dict:
 
     income: float = 0.0
     expenses: float = 0.0
+    savings: float = 0.0
     by_line_item: list[dict] = []
 
     for row in rows:
@@ -3237,6 +3243,8 @@ def summary(period: str) -> dict:
         )
         if row["item_type"] == "income":
             income += total
+        elif row["item_type"] == "savings":
+            savings += total
         else:
             expenses += total
 
@@ -3244,7 +3252,8 @@ def summary(period: str) -> dict:
         "period": period,
         "income": round(income, 2),
         "expenses": round(expenses, 2),
-        "net": round(income - expenses, 2),
+        "savings": round(savings, 2),
+        "net": round(income - expenses - savings, 2),
         "by_line_item": by_line_item,
     }
 

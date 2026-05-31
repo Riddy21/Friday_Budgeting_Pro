@@ -80,7 +80,7 @@ CREATE TABLE IF NOT EXISTS line_items (
   id TEXT PRIMARY KEY,
   ledger_id TEXT REFERENCES ledgers(id),
   name TEXT NOT NULL,
-  item_type TEXT DEFAULT 'expense'             -- income | expense
+  item_type TEXT DEFAULT 'expense'             -- income | expense | savings
 );
 
 -- ---------------------------------------------------------------------------
