@@ -326,6 +326,7 @@ are tracked as a follow-up (deferred from #173 to keep scope manageable).
 
 ### Reports
 - `summary(period)` → spending totals; includes `savings_rate`, `savings_rate_ytd`, `savings_contributions`, `unspent_balance`, `total_saved`
+- `budget_summary(period?)` → all `summary()` fields plus `savings_section` with status (`on_track`/`under_saving`/`over_saving`) vs 20% benchmark
 - `savings_trend(months?)` → month-by-month savings breakdown with cumulative total (default 12 months)
 - `export_excel(years?)` → generate Excel file(s)
 

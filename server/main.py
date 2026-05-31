@@ -3433,6 +3433,83 @@ def savings_trend(months: int = 12) -> dict:
 
 
 @mcp.tool
+def budget_summary(period: str = "month") -> dict:
+    """Return a budget breakdown with a dedicated savings section.
+
+    Wraps ``summary()`` and adds a ``savings_section`` with a status field
+    indicating whether the user is on track with savings goals.  All existing
+    summary fields are preserved — this is purely additive.
+
+    The status benchmarks against the common 20% savings-rate target:
+    - ``on_track``      → savings_rate >= 20%
+    - ``under_saving``  → 0 < savings_rate < 20%
+    - ``over_saving``   → savings_contributions > income (edge-case: large lump-sum)
+
+    Parameters
+    ----------
+    period : str
+        Same values as ``summary()`` — e.g. ``"month"``, ``"year"``, ``"ytd"``,
+        or a specific ``"YYYY-MM"`` / ``"YYYY"``.
+
+    Returns
+    -------
+    dict
+        All fields from ``summary()`` plus::
+
+            {
+              ...,  # all summary() fields
+              "savings_section": {
+                "savings_contributions": float,
+                "unspent_balance": float,
+                "total_saved": float,
+                "savings_rate": str,
+                "status": str,   # "on_track" | "under_saving" | "over_saving"
+                "benchmark": "20%",
+                "benchmark_note": str,
+              }
+            }
+    """
+    # Build the full summary result — all fields already present after #248.
+    result = summary(period)
+
+    # Extract the savings values already computed by summary().
+    savings_contributions = result.get("savings_contributions", result.get("savings", 0.0))
+    unspent_balance = result.get("unspent_balance", 0.0)
+    total_saved = result.get("total_saved", 0.0)
+    savings_rate_str = result.get("savings_rate", "0.0%")
+
+    # Parse savings_rate percentage for status determination.
+    try:
+        savings_rate_pct = float(savings_rate_str.rstrip("%"))
+    except (ValueError, AttributeError):
+        savings_rate_pct = 0.0
+
+    income = result.get("income", 0.0)
+
+    if income > 0 and savings_contributions > income:
+        status = "over_saving"
+        benchmark_note = "Your savings contributions exceed your income this period — likely a large lump-sum deposit."
+    elif savings_rate_pct >= 20.0:
+        status = "on_track"
+        benchmark_note = f"Your savings rate of {savings_rate_str} meets the 20% benchmark."
+    else:
+        status = "under_saving"
+        benchmark_note = f"Your savings rate of {savings_rate_str} is below the 20% benchmark. Consider automating a fixed monthly transfer."
+
+    savings_section = {
+        "savings_contributions": savings_contributions,
+        "unspent_balance": unspent_balance,
+        "total_saved": total_saved,
+        "savings_rate": savings_rate_str,
+        "status": status,
+        "benchmark": "20%",
+        "benchmark_note": benchmark_note,
+    }
+
+    return {**result, "savings_section": savings_section}
+
+
+@mcp.tool
 def export_excel(years: Optional[List] = None) -> dict:
     """Generate and return an Excel export of transactions."""
     server.paths.ensure_app_dir()
