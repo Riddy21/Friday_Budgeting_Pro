@@ -12,7 +12,6 @@ Covers:
 from __future__ import annotations
 
 import uuid
-from pathlib import Path
 
 import pytest
 
@@ -36,8 +35,8 @@ def tmp_db(tmp_path, monkeypatch):
 
 def test_add_line_item_savings(tmp_db, monkeypatch):
     """add_line_item() accepts item_type='savings'."""
+    from server.main import add_line_item, apply_initial_setup
     from ui.auth import create_user
-    from server.main import apply_initial_setup, add_line_item
 
     monkeypatch.setenv("OPENCLAW_DIR", str(tmp_db.parent.parent))
     create_user(tmp_db, "testuser", "testpass123")
@@ -65,8 +64,8 @@ def test_add_line_item_savings(tmp_db, monkeypatch):
 
 def test_add_line_item_rejects_invalid_type(tmp_db, monkeypatch):
     """add_line_item() rejects unknown item_type."""
+    from server.main import add_line_item, apply_initial_setup
     from ui.auth import create_user
-    from server.main import apply_initial_setup, add_line_item
 
     monkeypatch.setenv("OPENCLAW_DIR", str(tmp_db.parent.parent))
     create_user(tmp_db, "testuser2", "testpass123")
@@ -83,8 +82,8 @@ def test_add_line_item_rejects_invalid_type(tmp_db, monkeypatch):
 
 def test_personal_ledger_seeds_investments_savings(tmp_db, monkeypatch):
     """Personal ledger includes 'Investments & Savings' with savings type."""
-    from ui.auth import create_user
     from server.main import apply_initial_setup
+    from ui.auth import create_user
 
     monkeypatch.setenv("OPENCLAW_DIR", str(tmp_db.parent.parent))
     create_user(tmp_db, "testuser3", "testpass123")
@@ -102,8 +101,8 @@ def test_personal_ledger_seeds_investments_savings(tmp_db, monkeypatch):
 
 def test_get_ledger_totals_include_savings(tmp_db, monkeypatch):
     """get_ledger() totals include savings separately from expenses."""
-    from ui.auth import create_user
     from server.main import apply_initial_setup, get_ledger
+    from ui.auth import create_user
 
     monkeypatch.setenv("OPENCLAW_DIR", str(tmp_db.parent.parent))
     create_user(tmp_db, "testuser4", "testpass123")
@@ -171,8 +170,8 @@ def test_get_ledger_totals_include_savings(tmp_db, monkeypatch):
 
 def test_summary_includes_savings(tmp_db, monkeypatch):
     """summary() includes savings field, net = income - expenses - savings."""
-    from ui.auth import create_user
     from server.main import apply_initial_setup, summary
+    from ui.auth import create_user
 
     monkeypatch.setenv("OPENCLAW_DIR", str(tmp_db.parent.parent))
     create_user(tmp_db, "testuser5", "testpass123")
