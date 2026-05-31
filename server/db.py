@@ -70,8 +70,8 @@ def init_db(path: str | Path) -> None:
                 (
                     20,
                     "Investment contribution",
-                    "Outflows to Wealthsimple, Questrade, or any investment platform are Transfer/Savings, not spending",
-                    "transfer",
+                    "Outflows to Wealthsimple, Questrade, RBC Direct Investing, RRSP, TFSA, or any investment platform are Savings, not spending or transfers",
+                    "savings",
                 ),
                 (
                     30,
@@ -226,6 +226,21 @@ def init_db(path: str | Path) -> None:
                 revoked                INTEGER NOT NULL DEFAULT 0
             )
         """)
+        conn.commit()
+
+        # Migration: Investment contribution rule → savings type (#235)
+        # The default rule at priority 20 was previously typed 'transfer'.
+        # Update it to 'savings' so investment outflows are classified correctly.
+        conn.execute(
+            """
+            UPDATE classification_rules
+            SET rule_type = 'savings',
+                description = 'Outflows to Wealthsimple, Questrade, RBC Direct Investing, RRSP, TFSA, or any investment platform are Savings, not spending or transfers'
+            WHERE name = 'Investment contribution'
+              AND is_default = 1
+              AND rule_type = 'transfer'
+            """
+        )
         conn.commit()
 
         # Migration: create default user only when there is existing data to migrate

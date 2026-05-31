@@ -86,7 +86,7 @@ def test_apply_minimal_creates_personal_ledger_with_10_items(tmp_db):
     assert result["status"] == "ok"
     assert result["ledgers_created"] == ["Personal"]
     assert result["line_items_created"] == 11  # 10 expense/income + 1 savings
-    assert result["hints_created"] == 0
+    assert result["hints_created"] == 1  # 1 default investment savings hint always seeded
     assert result["banks_to_link"] == []
 
     # Verify in DB
@@ -126,13 +126,14 @@ def test_apply_with_hints_creates_classification_hints(tmp_db):
     hints = ["Amazon is usually Shopping", "Starbucks is Dining"]
     result = apply_initial_setup(banks_to_link=[], extra_ledgers=[], hints=hints)
 
-    assert result["hints_created"] == 2
+    assert result["hints_created"] == 3  # 1 default + 2 user-supplied
 
     conn = get_db(tmp_db)
     rows = conn.execute("SELECT text FROM classification_hints ORDER BY text").fetchall()
     texts = [r["text"] for r in rows]
     assert "Amazon is usually Shopping" in texts
     assert "Starbucks is Dining" in texts
+    assert any("TFSA" in t or "investment" in t.lower() for t in texts), "Default savings hint missing"
     conn.close()
 
 
@@ -169,7 +170,7 @@ def test_apply_is_idempotent(tmp_db):
 
     assert ledger_count == 2  # Personal + Business
     assert line_item_count == 12  # 11 personal + 1 business
-    assert hint_count == 1
+    assert hint_count == 2  # 1 default savings hint + 1 user hint
 
 
 # ---------------------------------------------------------------------------
