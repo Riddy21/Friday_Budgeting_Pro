@@ -3165,7 +3165,13 @@ def summary(period: str) -> dict:
               "period": str,
               "income": float,
               "expenses": float,
-              "net": float,      # income - expenses
+              "savings": float,           # sum of savings-type line items
+              "net": float,               # income - expenses - savings
+              "savings_contributions": float,  # same as savings
+              "unspent_balance": float,    # income - expenses (may be negative)
+              "total_saved": float,        # savings_contributions + unspent_balance
+              "savings_rate": str,         # e.g. "16.8%"
+              "savings_rate_ytd": str,     # year-to-date savings rate
               "by_line_item": [
                 {"line_item": str, "ledger": str, "type": str, "total": float},
                 ...
@@ -3231,6 +3237,20 @@ def summary(period: str) -> dict:
     conn = get_db(server.paths.DB_PATH)
     try:
         rows = conn.execute(sql, date_params).fetchall()
+
+        # Compute YTD savings rate (separate query, only needed when period != ytd/year)
+        ytd_start = f"{year_str}-01-01"
+        ytd_sql = """
+            SELECT li.item_type, SUM(te.amount) AS total
+            FROM transaction_entries te
+            JOIN transactions   t  ON t.id  = te.transaction_id
+            JOIN line_items     li ON li.id = te.line_item_id
+            LEFT JOIN bank_accounts ba ON ba.id = t.bank_account_id
+            WHERE t.date >= ? AND t.date <= ?
+              AND COALESCE(ba.is_duplicate, 0) = 0
+            GROUP BY li.item_type
+        """
+        ytd_rows = conn.execute(ytd_sql, [ytd_start, today_str]).fetchall()
     finally:
         conn.close()
 
@@ -3256,14 +3276,160 @@ def summary(period: str) -> dict:
         else:
             expenses += total
 
+    # Compute savings metrics
+    savings_contributions = round(savings, 2)
+    unspent_balance = round(income - expenses, 2)  # may be negative if overspent
+    total_saved = round(savings_contributions + unspent_balance, 2)
+    savings_rate_pct = round(savings / income * 100, 1) if income > 0 else 0.0
+    savings_rate = f"{savings_rate_pct}%"
+
+    # YTD savings rate from separate query
+    ytd_income: float = 0.0
+    ytd_savings: float = 0.0
+    for row in ytd_rows:
+        v = float(row["total"] or 0.0)
+        if row["item_type"] == "income":
+            ytd_income += v
+        elif row["item_type"] == "savings":
+            ytd_savings += v
+    ytd_rate_pct = round(ytd_savings / ytd_income * 100, 1) if ytd_income > 0 else 0.0
+    savings_rate_ytd = f"{ytd_rate_pct}%"
+
     return {
         "period": period,
         "income": round(income, 2),
         "expenses": round(expenses, 2),
-        "savings": round(savings, 2),
+        "savings": savings_contributions,
         "net": round(income - expenses - savings, 2),
+        "savings_contributions": savings_contributions,
+        "unspent_balance": unspent_balance,
+        "total_saved": total_saved,
+        "savings_rate": savings_rate,
+        "savings_rate_ytd": savings_rate_ytd,
         "by_line_item": by_line_item,
     }
+
+
+@mcp.tool
+def savings_trend(months: int = 12) -> dict:
+    """Return month-by-month savings breakdown for the last N months.
+
+    Each entry includes savings contributions (savings-type line items),
+    unspent balance (income − expenses), total saved, savings rate, and
+    a running cumulative total.
+
+    Parameters
+    ----------
+    months : int
+        Number of months to include, counting back from the current month.
+        Defaults to 12.
+
+    Returns
+    -------
+    dict
+        ::
+
+            {
+              "months": [
+                {
+                  "month": "YYYY-MM",
+                  "income": float,
+                  "expenses": float,
+                  "savings_contributions": float,
+                  "unspent_balance": float,
+                  "total_saved": float,
+                  "savings_rate": str,       # e.g. "16.8%"
+                  "cumulative_saved": float, # running total from oldest month
+                },
+                ...
+              ]
+            }
+
+        Months are ordered oldest-first.  Months with no transactions are
+        included with zero values so charts have continuous x-axis data.
+    """
+    import calendar
+
+    today = _datetime.now().date()
+
+    # Build the list of YYYY-MM strings for the last N months
+    month_list: list[str] = []
+    y, m = today.year, today.month
+    for _ in range(months):
+        month_list.append(f"{y:04d}-{m:02d}")
+        m -= 1
+        if m == 0:
+            m = 12
+            y -= 1
+    month_list.reverse()  # oldest first
+
+    # Single query: fetch income, expenses, savings per month
+    sql = """
+        SELECT
+            substr(t.date, 1, 7)   AS month,
+            li.item_type            AS item_type,
+            SUM(te.amount)          AS total
+        FROM transaction_entries te
+        JOIN transactions   t  ON t.id  = te.transaction_id
+        JOIN line_items     li ON li.id = te.line_item_id
+        LEFT JOIN bank_accounts ba ON ba.id = t.bank_account_id
+        WHERE t.date >= ? AND t.date <= ?
+          AND COALESCE(ba.is_duplicate, 0) = 0
+        GROUP BY month, li.item_type
+        ORDER BY month
+    """
+
+    oldest_month = month_list[0]
+    date_from = f"{oldest_month}-01"
+    last_day = calendar.monthrange(today.year, today.month)[1]
+    date_to = f"{today.year:04d}-{today.month:02d}-{last_day:02d}"
+
+    conn = get_db(server.paths.DB_PATH)
+    try:
+        rows = conn.execute(sql, [date_from, date_to]).fetchall()
+    finally:
+        conn.close()
+
+    # Aggregate by month
+    by_month: dict[str, dict[str, float]] = {}
+    for row in rows:
+        mo = row["month"]
+        if mo not in by_month:
+            by_month[mo] = {"income": 0.0, "expenses": 0.0, "savings": 0.0}
+        total = float(row["total"] or 0.0)
+        if row["item_type"] == "income":
+            by_month[mo]["income"] += total
+        elif row["item_type"] == "savings":
+            by_month[mo]["savings"] += total
+        else:
+            by_month[mo]["expenses"] += total
+
+    # Build output, filling zeros for months with no data
+    cumulative: float = 0.0
+    result_months = []
+    for mo in month_list:
+        data = by_month.get(mo, {"income": 0.0, "expenses": 0.0, "savings": 0.0})
+        inc = data["income"]
+        exp = data["expenses"]
+        sav = data["savings"]
+        unspent = round(inc - exp, 2)
+        total_saved = round(sav + unspent, 2)
+        cumulative = round(cumulative + total_saved, 2)
+        savings_rate_pct = round(sav / inc * 100, 1) if inc > 0 else 0.0
+        result_months.append(
+            {
+                "month": mo,
+                "income": round(inc, 2),
+                "expenses": round(exp, 2),
+                "savings_contributions": round(sav, 2),
+                "unspent_balance": unspent,
+                "total_saved": total_saved,
+                "savings_rate": f"{savings_rate_pct}%",
+                "cumulative_saved": cumulative,
+            }
+        )
+
+    return {"months": result_months}
 
 
 @mcp.tool

@@ -325,7 +325,8 @@ tool calls; nothing new is required from the UI.
 are tracked as a follow-up (deferred from #173 to keep scope manageable).
 
 ### Reports
-- `summary(period)` → spending totals
+- `summary(period)` → spending totals; includes `savings_rate`, `savings_rate_ytd`, `savings_contributions`, `unspent_balance`, `total_saved`
+- `savings_trend(months?)` → month-by-month savings breakdown with cumulative total (default 12 months)
 - `export_excel(years?)` → generate Excel file(s)
 
 That's the whole API. ~15 tools.
