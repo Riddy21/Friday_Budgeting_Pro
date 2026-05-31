@@ -105,9 +105,107 @@
     </script>
   </section>
 
-  <section>
-    <h2>Coming soon</h2>
-    <p class="hint">Charts and spending summaries will appear here in a future update.</p>
+  <section id="savings-summary-section">
+    <h2>Savings Summary</h2>
+    <div id="savings-cards" style="display:flex;gap:1em;flex-wrap:wrap;margin-top:0.75em;">
+      <div class="alert alert-info" id="savings-loading">Loading savings data&#x2026;</div>
+    </div>
   </section>
+
+  <style>
+    .savings-card {
+      background: #fffbeb;
+      border: 1px solid #fcd34d;
+      border-radius: 8px;
+      padding: 1em 1.25em;
+      min-width: 180px;
+      flex: 1;
+    }
+    .savings-card-title {
+      font-size: 0.8em;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: #92400e;
+      margin-bottom: 0.25em;
+    }
+    .savings-card-value {
+      font-size: 1.6em;
+      font-weight: 700;
+      color: #d97706;
+    }
+    .savings-card-sub {
+      font-size: 0.85em;
+      color: #78350f;
+      margin-top: 0.25em;
+    }
+    .savings-badge {
+      display: inline-block;
+      padding: 0.2em 0.6em;
+      border-radius: 4px;
+      font-size: 0.8em;
+      font-weight: 600;
+      margin-top: 0.5em;
+    }
+    .savings-badge-green  { background: #d1fae5; color: #065f46; }
+    .savings-badge-amber  { background: #fef3c7; color: #92400e; }
+    .savings-badge-red    { background: #fee2e2; color: #991b1b; }
+  </style>
+
+  <script>
+  (function() {
+    async function loadSavings() {
+      var container = document.getElementById('savings-cards');
+      try {
+        var r = await fetch('/api/summary?period=this_month');
+        var d = await r.json();
+        if (d.error) {
+          container.innerHTML = '<div class="alert alert-error">&#x26A0;&#xFE0F; ' + d.error + '</div>';
+          return;
+        }
+
+        var totalSaved = d.total_saved || 0;
+        var contributions = d.savings_contributions || 0;
+        var unspent = d.unspent_balance || 0;
+        var savingsRate = d.savings_rate || '0%';
+        var savingsRateYtd = d.savings_rate_ytd || '0%';
+        var savingsRatePct = parseFloat(savingsRate);
+
+        // Determine badge
+        var badgeClass, badgeText;
+        if (totalSaved < 0) {
+          badgeClass = 'savings-badge-red';
+          badgeText = '&#x26A0;&#xFE0F; Overspent';
+        } else if (savingsRatePct >= 20) {
+          badgeClass = 'savings-badge-green';
+          badgeText = '&#x2705; On Track';
+        } else {
+          badgeClass = 'savings-badge-amber';
+          badgeText = '&#x26A0;&#xFE0F; Under Saving';
+        }
+
+        var fmt = function(n) {
+          return 'C$' + Math.abs(n).toFixed(2) + (n < 0 ? ' (deficit)' : '');
+        };
+
+        container.innerHTML =
+          '<div class="savings-card">' +
+            '<div class="savings-card-title">Total Saved</div>' +
+            '<div class="savings-card-value">' + fmt(totalSaved) + '</div>' +
+            '<div class="savings-card-sub">Contributions: ' + fmt(contributions) + '</div>' +
+            '<div class="savings-card-sub">Unspent: ' + fmt(unspent) + '</div>' +
+            '<span class="savings-badge ' + badgeClass + '">' + badgeText + '</span>' +
+          '</div>' +
+          '<div class="savings-card">' +
+            '<div class="savings-card-title">Savings Rate</div>' +
+            '<div class="savings-card-value">' + savingsRate + '</div>' +
+            '<div class="savings-card-sub">YTD rate: ' + savingsRateYtd + '</div>' +
+          '</div>';
+      } catch(e) {
+        document.getElementById('savings-loading').textContent = 'Could not load savings data.';
+      }
+    }
+    loadSavings();
+  })();
+  </script>
 </div>
 {% endblock %}
