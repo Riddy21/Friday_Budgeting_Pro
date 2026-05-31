@@ -295,6 +295,11 @@ def apply_initial_setup(
         ("Investments & Savings", "savings"),
     ]
 
+    # Default classification hints always seeded on setup (#235)
+    DEFAULT_HINTS = [
+        "Transfers to investment accounts (TFSA, RRSP, Wealthsimple, Questrade, brokerage) should be classified as savings, not expenses or transfers",
+    ]
+
     # Build the full ledger spec: Personal first, then any extras.
     ledger_specs = [{"name": "Personal", "line_items": PERSONAL_LINE_ITEMS}]
     for el in extra_ledgers or []:
@@ -350,7 +355,10 @@ def apply_initial_setup(
                     line_items_created += 1
 
             # Upsert hints — de-dupe on exact text.
-            for hint_text in hints or []:
+            # Always include DEFAULT_HINTS; user-supplied hints are additive.
+            # NOTE: use [*iterable] not list() — 'list' is shadowed by the list() MCP tool.
+            all_hints = [*DEFAULT_HINTS, *(hints or [])]
+            for hint_text in all_hints:
                 if uid:
                     existing_hint = conn.execute(
                         "SELECT id FROM classification_hints WHERE text = ? AND user_id = ?",
