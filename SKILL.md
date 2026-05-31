@@ -183,6 +183,7 @@ Invoke for any personal finance request:
 
 ### Reports
 - `summary(period)` — spending totals by category for a period; includes `savings_rate`, `savings_rate_ytd`, `savings_contributions`, `unspent_balance`, `total_saved` fields
+- `budget_summary(period?)` — all `summary()` fields plus `savings_section` with `status` (`on_track`/`under_saving`/`over_saving`), benchmark (20%), and narrative note
 - `savings_trend(months?)` — month-by-month savings breakdown for the last N months (default 12); includes `savings_contributions`, `unspent_balance`, `total_saved`, `savings_rate`, `cumulative_saved` per month
 - `export_excel(years?)` — generate Excel workbook and return download URL
 
