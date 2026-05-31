@@ -85,7 +85,7 @@ def test_apply_minimal_creates_personal_ledger_with_10_items(tmp_db):
 
     assert result["status"] == "ok"
     assert result["ledgers_created"] == ["Personal"]
-    assert result["line_items_created"] == 10
+    assert result["line_items_created"] == 11  # 10 expense/income + 1 savings
     assert result["hints_created"] == 0
     assert result["banks_to_link"] == []
 
@@ -96,13 +96,14 @@ def test_apply_minimal_creates_personal_ledger_with_10_items(tmp_db):
     assert ledgers[0]["name"] == "Personal"
 
     line_items = conn.execute("SELECT name, item_type FROM line_items").fetchall()
-    assert len(line_items) == 10
+    assert len(line_items) == 11
 
     # Check standard items are present
     item_pairs = {(r["name"], r["item_type"]) for r in line_items}
     assert ("Salary", "income") in item_pairs
     assert ("Groceries", "expense") in item_pairs
     assert ("Dining", "expense") in item_pairs
+    assert ("Investments & Savings", "savings") in item_pairs
     conn.close()
 
 
@@ -112,8 +113,8 @@ def test_apply_with_extra_ledger_creates_personal_and_business(tmp_db):
 
     assert result["status"] == "ok"
     assert set(result["ledgers_created"]) == {"Personal", "Business"}
-    # 10 personal + 1 business
-    assert result["line_items_created"] == 11
+    # 11 personal + 1 business
+    assert result["line_items_created"] == 12
 
     conn = get_db(tmp_db)
     ledger_names = {r["name"] for r in conn.execute("SELECT name FROM ledgers").fetchall()}
@@ -167,7 +168,7 @@ def test_apply_is_idempotent(tmp_db):
     conn.close()
 
     assert ledger_count == 2  # Personal + Business
-    assert line_item_count == 11  # 10 personal + 1 business
+    assert line_item_count == 12  # 11 personal + 1 business
     assert hint_count == 1
 
 

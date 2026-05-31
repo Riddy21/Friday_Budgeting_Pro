@@ -161,6 +161,7 @@ def _write_ledger_sheet(
     line_items = _fetch_line_items(conn, ledger["id"])
     income_items = [li for li in line_items if li["item_type"] == "income"]
     expense_items = [li for li in line_items if li["item_type"] == "expense"]
+    savings_items = [li for li in line_items if li["item_type"] == "savings"]
 
     row = 1  # 1-indexed openpyxl rows
 
@@ -206,8 +207,21 @@ def _write_ledger_sheet(
             ws.cell(row=row, column=14, value=ytd)
             row += 1
 
+        # --- Savings section ---
+        for li in savings_items:
+            totals = _fetch_monthly_totals(conn, li["id"], year)
+            ws.cell(row=row, column=1, value=li["name"]).fill = _INCOME_FILL
+            ws.cell(row=row, column=1).font = _BOLD_FONT
+            ytd = 0.0
+            for m in range(1, 13):
+                val = totals.get(m, 0.0)
+                ws.cell(row=row, column=m + 1, value=val)
+                ytd += val
+            ws.cell(row=row, column=14, value=ytd)
+            row += 1
+
         # --- Net row ---
-        # Compute net: income - expenses for each month
+        # Compute net: income - expenses - savings for each month
         income_by_month: dict[int, float] = {}
         for li in income_items:
             for m, v in _fetch_monthly_totals(conn, li["id"], year).items():
@@ -218,11 +232,16 @@ def _write_ledger_sheet(
             for m, v in _fetch_monthly_totals(conn, li["id"], year).items():
                 expense_by_month[m] = expense_by_month.get(m, 0.0) + v
 
+        savings_by_month: dict[int, float] = {}
+        for li in savings_items:
+            for m, v in _fetch_monthly_totals(conn, li["id"], year).items():
+                savings_by_month[m] = savings_by_month.get(m, 0.0) + v
+
         net_cell = ws.cell(row=row, column=1, value="Net")
         net_cell.font = _BOLD_FONT
         net_ytd = 0.0
         for m in range(1, 13):
-            net = income_by_month.get(m, 0.0) - expense_by_month.get(m, 0.0)
+            net = income_by_month.get(m, 0.0) - expense_by_month.get(m, 0.0) - savings_by_month.get(m, 0.0)
             ws.cell(row=row, column=m + 1, value=net)
             net_ytd += net
         ws.cell(row=row, column=14, value=net_ytd)
@@ -244,13 +263,15 @@ def _write_summary_sheet(
     ws.cell(row=1, column=2, value="Year").font = _BOLD_FONT
     ws.cell(row=1, column=3, value="Income").font = _BOLD_FONT
     ws.cell(row=1, column=4, value="Expenses").font = _BOLD_FONT
-    ws.cell(row=1, column=5, value="Net").font = _BOLD_FONT
+    ws.cell(row=1, column=5, value="Savings").font = _BOLD_FONT
+    ws.cell(row=1, column=6, value="Net").font = _BOLD_FONT
 
     row = 2
     for ledger in ledgers:
         line_items = _fetch_line_items(conn, ledger["id"])
         income_items = [li for li in line_items if li["item_type"] == "income"]
         expense_items = [li for li in line_items if li["item_type"] == "expense"]
+        savings_items = [li for li in line_items if li["item_type"] == "savings"]
 
         for year in years:
             total_income = 0.0
@@ -263,13 +284,19 @@ def _write_summary_sheet(
                 totals = _fetch_monthly_totals(conn, li["id"], year)
                 total_expense += sum(totals.values())
 
-            net = total_income - total_expense
+            total_savings = 0.0
+            for li in savings_items:
+                totals = _fetch_monthly_totals(conn, li["id"], year)
+                total_savings += sum(totals.values())
+
+            net = total_income - total_expense - total_savings
 
             ws.cell(row=row, column=1, value=ledger["name"])
             ws.cell(row=row, column=2, value=year)
             ws.cell(row=row, column=3, value=total_income)
             ws.cell(row=row, column=4, value=total_expense)
-            ws.cell(row=row, column=5, value=net)
+            ws.cell(row=row, column=5, value=total_savings)
+            ws.cell(row=row, column=6, value=net)
             row += 1
 
 
