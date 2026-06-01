@@ -243,6 +243,26 @@ def init_db(path: str | Path) -> None:
         )
         conn.commit()
 
+        # Migration: fix savings line items that were seeded as expense type (#284)
+        # Line items whose names indicate savings/investments were historically
+        # seeded as item_type='expense' before the 'savings' type was added (#234).
+        # Correct them so totals and the savings UI work properly.
+        conn.execute(
+            """
+            UPDATE line_items
+            SET item_type = 'savings'
+            WHERE item_type = 'expense'
+              AND name IN (
+                'Investments & Savings',
+                'Savings & Investments',
+                'Investment & Savings',
+                'Savings and Investments',
+                'Investments and Savings'
+              )
+            """
+        )
+        conn.commit()
+
         # Migration: create default user only when there is existing data to migrate
         # (i.e. rows exist that need a user_id) but no users have been created yet.
         # On truly fresh DBs, we leave users empty so the setup wizard can create

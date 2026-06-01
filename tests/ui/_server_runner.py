@@ -98,6 +98,10 @@ def _seed():
             "Healthcare",
         ]
 
+        savings_items = [
+            "Investments & Savings",
+        ]
+
         for name in income_items:
             conn.execute(
                 "INSERT INTO line_items (id, ledger_id, name, item_type) VALUES (?, ?, ?, ?)",
@@ -107,6 +111,11 @@ def _seed():
             conn.execute(
                 "INSERT INTO line_items (id, ledger_id, name, item_type) VALUES (?, ?, ?, ?)",
                 (str(uuid.uuid4()), ledger_id, name, "expense"),
+            )
+        for name in savings_items:
+            conn.execute(
+                "INSERT INTO line_items (id, ledger_id, name, item_type) VALUES (?, ?, ?, ?)",
+                (str(uuid.uuid4()), ledger_id, name, "savings"),
             )
 
         conn.commit()

@@ -1715,7 +1715,7 @@ async def ledgers_rename(request: Request, ledger_id: str):
 
 @app.post("/ledgers/{ledger_id}/items")
 async def ledger_items_create(request: Request, ledger_id: str):
-    """Add a line item. JSON body: {name: str, section: 'income'|'expenses'}."""
+    """Add a line item. JSON body: {name: str, section: 'income'|'expenses'|'savings'}."""
     if not _is_authenticated(request):
         return JSONResponse({"error": "Unauthorized"}, status_code=401)
     body = await request.json()
@@ -1723,8 +1723,13 @@ async def ledger_items_create(request: Request, ledger_id: str):
     section = (body.get("section") or "expenses").strip().lower()
     if not name:
         return JSONResponse({"error": "name is required"}, status_code=400)
-    # Map 'expenses' -> 'expense', 'income' -> 'income'
-    item_type = "income" if section == "income" else "expense"
+    # Map section name to item_type
+    if section == "income":
+        item_type = "income"
+    elif section == "savings":
+        item_type = "savings"
+    else:
+        item_type = "expense"
     conn = get_db(_db_path())
     try:
         row = conn.execute("SELECT id FROM ledgers WHERE id = ?", (ledger_id,)).fetchone()

@@ -179,9 +179,6 @@
           </div>
         </div>
 
-        {% set ns_savings = namespace(has_savings=false) %}
-        {% for item in ledger.line_items %}{% if item.item_type == "savings" %}{% set ns_savings.has_savings = true %}{% endif %}{% endfor %}
-        {% if ns_savings.has_savings %}
         <div class="item-section" data-section="savings" style="border-top:1px solid #fcd34d;margin-top:0.5em;padding-top:0.5em;">
           <h3 style="color:#d97706;">&#x1F4B0; Savings &amp; Investments</h3>
           <table>
@@ -233,7 +230,6 @@
               data-ledger-id="{{ ledger.id }}" data-section="savings">
           </div>
         </div>
-        {% endif %}
 
         {# ── Income/Expenses/Savings/Net totals footer (#166, #237) ── #}
         <div class="ledger-totals-row" data-ledger-totals="{{ ledger.id }}">
@@ -245,12 +241,10 @@
             <span class="total-label">Total expenses:</span>
             <span class="total-value" data-total="expenses">C${{ "%.2f"|format(ledger.totals.expenses) }}</span>
           </span>
-          {% if (ledger.totals.savings | default(0)) > 0 %}
           <span>
             <span class="total-label" style="color:#d97706;">Savings:</span>
             <span class="total-value" data-total="savings" style="color:#d97706;font-weight:600;">C${{ "%.2f"|format(ledger.totals.savings | default(0)) }}</span>
           </span>
-          {% endif %}
           <span>
             <span class="total-label">Net:</span>
             <span class="total-value {% if ledger.totals.net > 0 %}net-positive{% elif ledger.totals.net < 0 %}net-negative{% else %}net-zero{% endif %}"
