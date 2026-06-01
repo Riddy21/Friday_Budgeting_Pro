@@ -913,7 +913,7 @@ def api_sync(request: Request):
             # Run classification inline in this thread so progress log covers
             # both phases and running stays True until both are done.
             uid = get_active_user_id(_paths.DB_PATH)
-            if uid:
+            if uid and total_added > 0:
                 _sync_emit({"phase": "classifying", "msg": "Classifying transactions\u2026"})
                 with _classify_lock:
                     _classify_state["running"] = True
@@ -931,6 +931,8 @@ def api_sync(request: Request):
                 finally:
                     with _classify_lock:
                         _classify_state["running"] = False
+            elif uid:
+                _sync_emit({"phase": "done", "msg": "Done! No new transactions to classify.", "added": 0, "classified": 0})
         except Exception as exc:
             import logging
             logging.getLogger(__name__).error("api_sync background: %s", exc)
