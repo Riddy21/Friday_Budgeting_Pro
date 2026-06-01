@@ -975,6 +975,12 @@ def api_summary(request: Request, period: str = "this_month"):
 
     Valid period values: ``this_month``, ``last_month``, ``this_year``,
     ``ytd``, or a specific ``YYYY-MM`` / ``YYYY`` string.
+
+    Auto-fallback: when ``period=this_month`` and the result has no data
+    (income, expenses, and savings_contributions all zero), the endpoint
+    automatically returns last month's data instead and includes a
+    ``period_label`` field (e.g. ``"Last Month"``) so the caller knows
+    which period was actually used.
     """
     if not _is_authenticated(request):
         return JSONResponse({"error": "Unauthorized"}, status_code=401)
@@ -986,6 +992,7 @@ def api_summary(request: Request, period: str = "this_month"):
     # The UI (and this endpoint's query param) uses: "this_month", "last_month",
     # "this_year", "ytd", "YYYY-MM", "YYYY".
     _today = _date.today()
+    original_period = period
     if period == "this_month":
         period = "month"
     elif period == "this_year":
@@ -998,6 +1005,26 @@ def api_summary(request: Request, period: str = "this_month"):
 
     try:
         result = _summary(period)
+        # Auto-fallback: if this_month has no data, try last_month instead.
+        if (
+            original_period == "this_month"
+            and result.get("income", 0) == 0
+            and result.get("expenses", 0) == 0
+            and result.get("savings_contributions", 0) == 0
+        ):
+            if _today.month == 1:
+                last_month_period = f"{_today.year - 1}-12"
+            else:
+                last_month_period = f"{_today.year}-{_today.month - 1:02d}"
+            last_result = _summary(last_month_period)
+            if (
+                last_result.get("income", 0) != 0
+                or last_result.get("expenses", 0) != 0
+                or last_result.get("savings_contributions", 0) != 0
+            ):
+                last_result["period_label"] = "Last Month"
+                return JSONResponse(last_result)
+        result["period_label"] = "This Month"
         return JSONResponse(result)
     except Exception as exc:  # pragma: no cover
         return JSONResponse({"error": str(exc)}, status_code=500)
@@ -1639,6 +1666,19 @@ def ledgers_get(request: Request, period: str = "this_month"):
         period = "this_month"
     uid = _current_user_id(request)
     ledgers = _get_ledgers(uid, with_drilldown=True, period=period)
+    # Auto-fallback: if this_month has no data, silently show last_month instead.
+    if period == "this_month" and all(
+        sum(li["total"] for li in ldr["line_items"]) == 0 for ldr in ledgers
+    ):
+        from datetime import date as _lm_date
+        _lm_today = _lm_date.today()
+        fallback_ledgers = _get_ledgers(uid, with_drilldown=True, period="last_month")
+        if any(
+            sum(li["total"] for li in ldr["line_items"]) != 0
+            for ldr in fallback_ledgers
+        ):
+            ledgers = fallback_ledgers
+            period = "last_month"
     return templates.TemplateResponse(
         request,
         "ledgers.html",
