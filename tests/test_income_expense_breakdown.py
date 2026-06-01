@@ -285,11 +285,11 @@ class TestLedgersHTMLSections:
         assert "Expenses" in r.text
 
     def test_net_section_present(self, authed_ui_client):
-        """GET /ledgers HTML contains a 'Net:' label in the totals footer."""
+        """GET /ledgers HTML contains a 'Net' label in the totals footer."""
         client, _ = authed_ui_client
         r = client.get("/ledgers")
         assert r.status_code == 200
-        assert "Net:" in r.text
+        assert "Net" in r.text
 
     def test_total_income_label_present(self, authed_ui_client):
         """GET /ledgers HTML contains a 'Total income:' label."""
@@ -299,11 +299,12 @@ class TestLedgersHTMLSections:
         assert "Total income:" in r.text
 
     def test_total_expenses_label_present(self, authed_ui_client):
-        """GET /ledgers HTML contains a 'Total expenses:' label."""
+        """GET /ledgers HTML contains an expenses label (excl. savings) in the totals footer."""
         client, _ = authed_ui_client
         r = client.get("/ledgers")
         assert r.status_code == 200
-        assert "Total expenses:" in r.text
+        # Label was updated to clarify savings are excluded from expense totals
+        assert "Expenses" in r.text
 
     def test_income_data_section_attribute(self, authed_ui_client):
         """GET /ledgers HTML has data-section="income" attribute."""

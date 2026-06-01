@@ -1624,7 +1624,12 @@ def classify_pending_transactions(user_id: str, limit: int | None = None) -> dic
             # Last resort: if still no line_item_id but account has a default
             # ledger, grab the first matching line item from that ledger.
             if line_item_id is None and default_ledger_id:
-                item_type_filter = "income" if classification_type == "income" else "expense"
+                if classification_type == "income":
+                    item_type_filter = "income"
+                elif classification_type == "savings":
+                    item_type_filter = "savings"
+                else:
+                    item_type_filter = "expense"
                 fallback_row = conn.execute(
                     "SELECT id, ledger_id FROM line_items "
                     " WHERE ledger_id = ? AND item_type = ? ORDER BY name LIMIT 1",
