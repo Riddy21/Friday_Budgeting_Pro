@@ -241,12 +241,10 @@
             <span class="total-label">Expenses (excl. savings):</span>
             <span class="total-value" data-total="expenses">C${{ "%.2f"|format(ledger.totals.expenses) }}</span>
           </span>
-          {% if ledger.totals.savings > 0 %}
           <span>
             <span class="total-label">Savings &amp; investments:</span>
-            <span class="total-value" data-total="savings" style="color:#d97706">C${{ "%.2f"|format(ledger.totals.savings) }}</span>
+            <span class="total-value" data-total="savings" style="color:#d97706">C${{ "%.2f"|format(ledger.totals.savings | default(0)) }}</span>
           </span>
-          {% endif %}
           <span>
             <span class="total-label">Net (income − expenses):</span>
             <span class="total-value {% if ledger.totals.net > 0 %}net-positive{% elif ledger.totals.net < 0 %}net-negative{% else %}net-zero{% endif %}"

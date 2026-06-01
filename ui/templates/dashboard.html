@@ -106,7 +106,7 @@
   </section>
 
   <section id="savings-summary-section">
-    <h2>Overall Savings</h2>
+    <h2>Overall Savings <span id="savings-period-label" style="font-size:0.6em;font-weight:400;color:#92400e;vertical-align:middle;"></span></h2>
     <div id="savings-cards" style="display:flex;gap:1em;flex-wrap:wrap;margin-top:0.75em;">
       <div class="alert alert-info" id="savings-loading">Loading savings data&#x2026;</div>
     </div>
@@ -162,6 +162,10 @@
           container.innerHTML = '<div class="alert alert-error">&#x26A0;&#xFE0F; ' + d.error + '</div>';
           return;
         }
+        // Show period label (server returns 'Last Month' when falling back)
+        var periodLabel = d.period_label || 'This Month';
+        var labelEl = document.getElementById('savings-period-label');
+        if (labelEl) labelEl.textContent = '(' + periodLabel + ')';
 
         var totalSaved = d.total_saved || 0;
         var contributions = d.savings_contributions || 0;
