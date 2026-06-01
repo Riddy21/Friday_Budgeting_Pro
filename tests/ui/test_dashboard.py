@@ -66,3 +66,18 @@ def test_dashboard_shows_sync_section(page, server_url):
     # There should be an h2 with "Sync" text
     sync_heading = page.locator("h2", has_text="Sync")
     assert sync_heading.count() > 0, "Expected a 'Sync' section heading on dashboard"
+
+
+def test_dashboard_has_overall_savings_section(page, server_url):
+    """Dashboard has an 'Overall Savings' section heading."""
+    _login(page, server_url)
+    savings_heading = page.locator("h2", has_text="Overall Savings")
+    assert savings_heading.count() > 0, "Expected 'Overall Savings' section heading on dashboard"
+
+
+def test_dashboard_savings_section_id_present(page, server_url):
+    """Dashboard savings section has the expected #savings-summary-section id."""
+    _login(page, server_url)
+    section = page.locator("#savings-summary-section")
+    assert section.count() > 0, "Expected #savings-summary-section on dashboard"
+    assert section.first.is_visible()

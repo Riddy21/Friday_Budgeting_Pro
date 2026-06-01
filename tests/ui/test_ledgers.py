@@ -81,3 +81,67 @@ def test_ledgers_shows_seeded_line_items(page, server_url):
     groceries = page.locator(".item-name-display", has_text="Groceries")
     assert salary.count() > 0, "Expected 'Salary' line item in ledger"
     assert groceries.count() > 0, "Expected 'Groceries' line item in ledger"
+
+
+def test_ledgers_shows_savings_section(page, server_url):
+    """Ledgers page shows a Savings & Investments section for each ledger."""
+    _login(page, server_url)
+    page.goto(server_url + "/ledgers")
+    savings_heading = page.locator("h3", has_text="Savings")
+    assert savings_heading.count() > 0, "Expected a Savings section in the ledger"
+    # Verify it has the correct amber/gold styling
+    section = page.locator(".item-section[data-section='savings']")
+    assert section.count() > 0, "Expected .item-section[data-section='savings'] element"
+
+
+def test_ledgers_savings_section_always_visible(page, server_url):
+    """Savings section is always shown even when no savings transactions exist."""
+    _login(page, server_url)
+    page.goto(server_url + "/ledgers")
+    # The savings section should be present regardless of whether savings data exists
+    section = page.locator(".item-section[data-section='savings']")
+    assert section.count() > 0, "Savings section should always be visible"
+    assert section.first.is_visible(), "Savings section should be visible"
+
+
+def test_ledgers_savings_section_has_add_input(page, server_url):
+    """Savings section has an 'Add savings item' input."""
+    _login(page, server_url)
+    page.goto(server_url + "/ledgers")
+    add_input = page.locator(".add-item-input[data-section='savings']")
+    assert add_input.count() > 0, "Expected 'Add savings item' input in savings section"
+
+
+def test_ledgers_savings_shows_seeded_item(page, server_url):
+    """Seeded 'Investments & Savings' line item appears in the savings section."""
+    _login(page, server_url)
+    page.goto(server_url + "/ledgers")
+    savings_item = page.locator(".item-name-display", has_text="Investments & Savings")
+    assert savings_item.count() > 0, "Expected 'Investments & Savings' in savings section"
+
+
+def test_ledgers_savings_totals_in_footer(page, server_url):
+    """Ledger totals footer shows a Savings row."""
+    _login(page, server_url)
+    page.goto(server_url + "/ledgers")
+    totals_row = page.locator(".ledger-totals-row")
+    assert totals_row.count() > 0, "Expected .ledger-totals-row footer"
+    savings_total = page.locator("[data-total='savings']")
+    assert savings_total.count() > 0, "Expected savings total value in footer"
+
+
+def test_ledgers_can_add_savings_item_via_api(page, server_url):
+    """Adding a savings item via the 'Add savings item' input creates a savings line item."""
+    _login(page, server_url)
+    page.goto(server_url + "/ledgers")
+
+    # Find the savings add-input and add an item
+    add_input = page.locator(".add-item-input[data-section='savings']").first
+    add_input.fill("TFSA Contributions")
+    add_input.press("Enter")
+
+    # Wait for the new item to appear in the savings tbody
+    savings_tbody = page.locator("tbody.items-tbody[data-section='savings']").first
+    new_item = savings_tbody.locator(".item-name-display", has_text="TFSA Contributions")
+    new_item.wait_for(timeout=5000)
+    assert new_item.count() > 0, "Expected 'TFSA Contributions' to appear in savings section"
