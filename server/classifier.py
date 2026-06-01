@@ -58,17 +58,17 @@ def validate_sign_matches_item_type(
     """
     if amount == 0:
         return True, ""
-    if amount > 0 and item_type != "expense":
+    if amount > 0 and item_type not in ("expense", "savings"):
         return (
             False,
             f"Positive amount ${amount:.2f} (outflow/debit) must be routed to an "
-            f"expense-type line item, not income.",
+            f"expense-type or savings-type line item, not income.",
         )
     if amount < 0 and item_type != "income":
         return (
             False,
             f"Negative amount ${amount:.2f} (inflow/credit) must be routed to an "
-            f"income-type line item, not expense.",
+            f"income-type line item, not expense or savings.",
         )
     return True, ""
 

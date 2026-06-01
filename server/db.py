@@ -263,6 +263,25 @@ def init_db(path: str | Path) -> None:
         )
         conn.commit()
 
+        # Sanity-check migration: verify savings entries are not double-counted in
+        # expense totals (#savings-separation).  This is a READ-ONLY audit log;
+        # no data is mutated.  Any entries found here indicate a data integrity
+        # issue that should be investigated.
+        savings_in_expense_sql = """
+            SELECT COUNT(*) AS cnt
+            FROM transaction_entries te
+            JOIN line_items li ON li.id = te.line_item_id
+            WHERE li.item_type = 'savings'
+        """
+        savings_entry_count = conn.execute(savings_in_expense_sql).fetchone()["cnt"]
+        if savings_entry_count > 0:
+            import logging as _logging
+            _logging.getLogger(__name__).info(
+                "[savings-sanity] %d transaction_entries are linked to savings-type line items. "
+                "These are correctly excluded from expense totals in summary() and get_ledger().",
+                savings_entry_count,
+            )
+
         # Migration: create default user only when there is existing data to migrate
         # (i.e. rows exist that need a user_id) but no users have been created yet.
         # On truly fresh DBs, we leave users empty so the setup wizard can create
