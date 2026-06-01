@@ -188,11 +188,13 @@ def test_apply_cron_registered_false_when_openclaw_absent(tmp_db):
     assert result["cron_registered"] is False
 
 
-def test_apply_cron_registered_true_when_openclaw_present(tmp_db, monkeypatch, tmp_path):
-    """cron_registered should be True when ~/.openclaw/ exists.
+def test_apply_cron_registered_false_regardless_of_openclaw_dir(tmp_db, monkeypatch, tmp_path):
+    """cron_registered is always False from apply_initial_setup.
 
-    Creates the fake OpenClaw home, then calls apply_initial_setup and checks
-    that the cron JSON file is written with the expected keys.
+    The cron file approach is deprecated — scheduled syncs are now handled by
+    the daemon's internal background loop (see daemon.py).  apply_initial_setup
+    no longer calls _register_openclaw_cron_file(), so cron_registered is
+    always False regardless of whether ~/.openclaw/ exists.
     """
     import server.main
 
@@ -201,24 +203,22 @@ def test_apply_cron_registered_true_when_openclaw_present(tmp_db, monkeypatch, t
     monkeypatch.setattr(server.main, "_OPENCLAW_HOME", oc_dir)
 
     result = apply_initial_setup(banks_to_link=[], extra_ledgers=[], hints=[])
-    assert result["cron_registered"] is True
+    assert result["cron_registered"] is False
 
+    # The cron file should NOT be written by apply_initial_setup anymore.
     cron_file = oc_dir / "cron" / "friday-budgeting-pro-sync.json"
-    assert cron_file.exists(), f"Expected cron file at {cron_file}"
-
-    spec = json.loads(cron_file.read_text())
-    assert spec["name"] == "friday-budgeting-pro-sync"
-    assert spec["schedule"]["kind"] == "cron"
-    assert spec["schedule"]["expr"] == "0 6 * * *"
-    assert "tz" in spec["schedule"]
-    assert spec["sessionTarget"] == "isolated"
-    assert spec["payload"]["kind"] == "agentTurn"
-    assert spec["payload"]["timeoutSeconds"] == 900
-    assert spec["delivery"]["mode"] == "none"
+    assert not cron_file.exists(), (
+        "apply_initial_setup should not write the cron file (deprecated approach)"
+    )
 
 
-def test_apply_cron_overwrites_on_second_call(tmp_db, monkeypatch, tmp_path):
-    """Re-running apply_initial_setup overwrites the cron file cleanly."""
+def test_apply_cron_no_file_on_second_call(tmp_db, monkeypatch, tmp_path):
+    """Re-running apply_initial_setup never writes a cron file (deprecated).
+
+    Scheduled sync is now handled by the daemon's internal background loop,
+    so apply_initial_setup should not write cron files regardless of how many
+    times it is called.
+    """
     import server.main
 
     oc_dir = tmp_path / "dot-openclaw-overwrite"
@@ -228,8 +228,8 @@ def test_apply_cron_overwrites_on_second_call(tmp_db, monkeypatch, tmp_path):
     result1 = apply_initial_setup(banks_to_link=[], extra_ledgers=[], hints=[])
     result2 = apply_initial_setup(banks_to_link=[], extra_ledgers=[], hints=[])
 
-    assert result1["cron_registered"] is True
-    assert result2["cron_registered"] is True
+    assert result1["cron_registered"] is False
+    assert result2["cron_registered"] is False
 
-    cron_files = list((oc_dir / "cron").iterdir())
-    assert len(cron_files) == 1, "Should have exactly one cron file after two calls"
+    cron_dir = oc_dir / "cron"
+    assert not cron_dir.exists(), "cron/ dir should not be created by apply_initial_setup"

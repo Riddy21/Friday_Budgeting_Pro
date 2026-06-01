@@ -228,6 +228,16 @@ def init_db(path: str | Path) -> None:
         """)
         conn.commit()
 
+        # Migration: sync_log table — persists last sync step log across page refreshes.
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS sync_log (
+                id          INTEGER PRIMARY KEY CHECK (id = 1),
+                steps_json  TEXT,
+                finished_at INTEGER
+            )
+        """)
+        conn.commit()
+
         # Migration: Investment contribution rule → savings type (#235)
         # The default rule at priority 20 was previously typed 'transfer'.
         # Update it to 'savings' so investment outflows are classified correctly.

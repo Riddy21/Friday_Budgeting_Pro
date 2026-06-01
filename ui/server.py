@@ -97,6 +97,19 @@ _classify_state: dict = {
     "result": None,  # dict with classified/skipped/uncertain or error
 }
 
+# ── Background sync progress state ───────────────────────────────────────────
+# Tracks real-time progress for the sync + classify pipeline so the dashboard
+# UI can poll /api/sync/progress and render a live step log.
+_sync_progress_lock = _threading.Lock()
+_sync_progress: dict = {"steps": [], "running": False, "phase": "idle"}
+
+
+def _sync_emit(step: dict) -> None:
+    """Append *step* to the shared sync-progress log (thread-safe)."""
+    with _sync_progress_lock:
+        _sync_progress["steps"].append(step)
+        _sync_progress["phase"] = step.get("phase", "running")
+
 app = FastAPI(title="Friday Budgeting Pro UI", version="0.1.0")
 
 _TEMPLATE_DIR = Path(__file__).parent / "templates"
@@ -836,6 +849,8 @@ def _run_classification_background(user_id: str) -> None:
     """Classify all pending transactions for *user_id* in a background thread.
 
     Updates ``_classify_state`` so ``/api/classify/status`` can report progress.
+    Also emits progress steps to ``_sync_progress`` so the dashboard live log
+    reflects manual classification as well as the post-sync classify phase.
     Safe to call when a classification job is already running — the second call
     will block on ``_classify_lock`` until the first finishes, then see there
     are no remaining unclassified transactions (idempotent).
@@ -848,11 +863,15 @@ def _run_classification_background(user_id: str) -> None:
         _classify_state["running"] = True
         _classify_state["result"] = None
         try:
+            _sync_emit({"phase": "classifying", "msg": "Classifying transactions\u2026"})
             result = _sm.classify_pending_transactions(user_id)
             _classify_state["result"] = {"status": "ok", **result}
+            n = result.get("classified", 0)
+            _sync_emit({"phase": "done", "msg": f"Classification done \u2014 {n} transaction{'s' if n != 1 else ''} auto-classified"})
         except Exception as exc:
             _logging.getLogger(__name__).error("Background classification failed: %s", exc)
             _classify_state["result"] = {"status": "error", "error": str(exc)}
+            _sync_emit({"phase": "error", "msg": f"Classification error: {exc}"})
         finally:
             _classify_state["running"] = False
 
@@ -861,10 +880,10 @@ def _run_classification_background(user_id: str) -> None:
 def api_sync(request: Request):
     """AJAX sync — returns JSON immediately; sync runs in a background thread.
 
-    After the sync completes, LLM classification is automatically kicked off
-    as a separate background thread so the UI can track the two phases
-    independently.  Sync runs with ``classify=False`` so classification does
-    not block the sync response.
+    After the sync completes, LLM classification is automatically run inline
+    within the same background thread so the live progress log reflects both
+    phases.  Sync runs with ``classify=False`` so classification does not run
+    twice.  The background thread is daemonised so it survives page navigation.
     """
     if not _is_authenticated(request):
         return JSONResponse({"error": "Unauthorized"}, status_code=401)
@@ -878,25 +897,63 @@ def api_sync(request: Request):
     lock.close()  # Release — sync() will re-acquire internally
 
     def _run():
+        global _sync_progress
+        with _sync_progress_lock:
+            _sync_progress["steps"] = []
+            _sync_progress["running"] = True
+            _sync_progress["phase"] = "starting"
         try:
             import server.main as _sm
             from ui.auth import get_active_user_id
 
-            # Sync without inline classification so we can run it separately.
-            _sm.sync(classify=False)
+            # Sync without inline classification; use _sync_emit for live progress.
+            sync_result = _sm.sync(classify=False, progress_callback=_sync_emit)
+            total_added = sync_result.get("added", 0) if isinstance(sync_result, dict) else 0
 
-            # Kick off async LLM classification immediately after sync.
+            # Run classification inline in this thread so progress log covers
+            # both phases and running stays True until both are done.
             uid = get_active_user_id(_paths.DB_PATH)
             if uid:
-                _threading.Thread(
-                    target=_run_classification_background,
-                    args=(uid,),
-                    daemon=True,
-                ).start()
+                _sync_emit({"phase": "classifying", "msg": "Classifying transactions\u2026"})
+                with _classify_lock:
+                    _classify_state["running"] = True
+                    _classify_state["result"] = None
+                try:
+                    classify_result = _sm.classify_pending_transactions(uid)
+                    _classify_state["result"] = {"status": "ok", **classify_result}
+                    n = classify_result.get("classified", 0)
+                    _sync_emit({"phase": "done", "msg": f"Done! {n} transaction{'s' if n != 1 else ''} classified", "added": total_added, "classified": n})
+                except Exception as exc:
+                    import logging as _cl_logging
+                    _cl_logging.getLogger(__name__).error("Classification in sync thread failed: %s", exc)
+                    _classify_state["result"] = {"status": "error", "error": str(exc)}
+                    _sync_emit({"phase": "error", "msg": f"Classification error: {exc}"})
+                finally:
+                    with _classify_lock:
+                        _classify_state["running"] = False
         except Exception as exc:
             import logging
-
             logging.getLogger(__name__).error("api_sync background: %s", exc)
+            _sync_emit({"phase": "error", "msg": f"Sync error: {exc}"})
+        finally:
+            with _sync_progress_lock:
+                _sync_progress["running"] = False
+                # Persist the final steps list to DB so a page refresh can restore it.
+                _steps_snapshot = list(_sync_progress["steps"])
+            import json as _json_lib
+            try:
+                _log_conn = get_db(_db_path())
+                try:
+                    _log_conn.execute(
+                        "INSERT OR REPLACE INTO sync_log (id, steps_json, finished_at) VALUES (1, ?, ?)",
+                        (_json_lib.dumps(_steps_snapshot), int(time.time()))
+                    )
+                    _log_conn.commit()
+                finally:
+                    _log_conn.close()
+            except Exception as _log_exc:
+                import logging as _ll
+                _ll.getLogger(__name__).warning("Failed to persist sync_log: %s", _log_exc)
 
     _threading.Thread(target=_run, daemon=True).start()
     return JSONResponse(
@@ -907,6 +964,32 @@ def api_sync(request: Request):
             "message": "Sync started in background",
         }
     )
+
+
+@app.get("/api/sync/progress")
+def api_sync_progress(request: Request):
+    """Return the current sync progress log for the live dashboard step feed."""
+    if not _is_authenticated(request):
+        return JSONResponse({"error": "Unauthorized"}, status_code=401)
+    with _sync_progress_lock:
+        data = dict(_sync_progress)
+    # If no in-memory state and not running, try loading from DB as fallback.
+    if not data["running"] and not data["steps"]:
+        try:
+            import json as _json_lib
+            _log_conn = get_db(_db_path())
+            try:
+                row = _log_conn.execute(
+                    "SELECT steps_json FROM sync_log WHERE id = 1"
+                ).fetchone()
+                if row and row["steps_json"]:
+                    data["steps"] = _json_lib.loads(row["steps_json"])
+                    data["restored"] = True
+            finally:
+                _log_conn.close()
+        except Exception:
+            pass
+    return JSONResponse(data)
 
 
 @app.post("/api/classify")

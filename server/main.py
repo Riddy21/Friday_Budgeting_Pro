@@ -88,8 +88,14 @@ def _get_local_tz() -> str:
     return _datetime.now().astimezone().tzname() or "UTC"
 
 
-def _register_openclaw_cron() -> bool:
+def _register_openclaw_cron_file() -> bool:
     """Write the Friday Budgeting Pro sync cron spec to ~/.openclaw/cron/.
+
+    .. deprecated::
+        This approach is deprecated — OpenClaw does not watch the cron
+        directory.  Use the OpenClaw Gateway API directly or rely on the
+        daemon's internal sync loop (see daemon.py and the
+        ``FRIDAY_BP_SYNC_INTERVAL_HOURS`` env var).
 
     Cron file: ``~/.openclaw/cron/friday-budgeting-pro-sync.json``
 
@@ -379,7 +385,8 @@ def apply_initial_setup(
     finally:
         conn.close()
 
-    cron_registered = _register_openclaw_cron()
+    # Scheduled sync is handled by the daemon's internal background loop (see daemon.py).
+    cron_registered = False
 
     # ── Rental properties ─────────────────────────────────────────────────
     properties_created = 0
@@ -2093,13 +2100,15 @@ def _detect_suspicious_transactions(conn, user_id: str) -> list[dict]:
 
 
 @mcp.tool
-def sync(classify: bool = True) -> dict:
+def sync(classify: bool = True, progress_callback=None) -> dict:
     """Pull new transactions from Plaid and return a summary.
 
     Args:
         classify: If True (default), run LLM auto-classification on newly synced
             transactions before returning.  Pass ``False`` when the caller wants
             to run classification separately (e.g. the UI background flow).
+        progress_callback: Optional callable that receives a dict at each key
+            sync phase.  Not exposed via MCP — internal use only.
     """
 
     def _get(obj, key, default=None):
@@ -2115,6 +2124,17 @@ def sync(classify: bool = True) -> dict:
             try:
                 parsed = _json.loads(body)
                 return parsed.get("error_code") == "ITEM_LOGIN_REQUIRED"
+            except Exception:
+                pass
+        return False
+
+    def _is_mutation_during_pagination_error(exc: Exception) -> bool:
+        """Return True when *exc* signals TRANSACTIONS_SYNC_MUTATION_DURING_PAGINATION."""
+        body = getattr(exc, "body", None)
+        if body:
+            try:
+                parsed = _json.loads(body)
+                return parsed.get("error_code") == "TRANSACTIONS_SYNC_MUTATION_DURING_PAGINATION"
             except Exception:
                 pass
         return False
@@ -2138,12 +2158,15 @@ def sync(classify: bool = True) -> dict:
                 # loop below).  Passing the module-level _plaid singleton
                 # would use env-var credentials only, which breaks ClawHub
                 # installs where credentials are stored in plaid_config.
+                if progress_callback:
+                    progress_callback({"phase": "health_check", "msg": "Checking connection health\u2026"})
                 health_check_result = server.health_monitor.check_all_connections(
                     db_conn, plaid_provider=None
                 )
 
                 active_conns = db_conn.execute(
-                    "SELECT id, plaid_access_token_encrypted, plaid_env, user_id "
+                    "SELECT id, plaid_access_token_encrypted, plaid_env, user_id, "
+                    "institution_name "
                     "FROM bank_connections WHERE status = 'active'"
                 ).fetchall()
 
@@ -2153,6 +2176,7 @@ def sync(classify: bool = True) -> dict:
                     access_token = server.crypto.decrypt(encrypted_token)
                     conn_plaid_env = bc["plaid_env"] or "sandbox"
                     conn_user_id = bc["user_id"]
+                    institution_name = bc["institution_name"] or "Unknown"
 
                     # Load per-user credentials from DB (falls back to env vars).
                     cred_client_id, cred_secret, _ = _get_plaid_credentials(conn_user_id)
@@ -2176,6 +2200,9 @@ def sync(classify: bool = True) -> dict:
                     ).fetchone()
                     cursor = cursor_row["cursor"] if cursor_row else None
 
+                    if progress_callback:
+                        progress_callback({"phase": "pulling", "connection": institution_name, "msg": f"Pulling from {institution_name}\u2026"})
+
                     try:
                         result = conn_provider.sync_transactions(access_token, cursor)
                     except Exception as e:
@@ -2186,7 +2213,30 @@ def sync(classify: bool = True) -> dict:
                                     (connection_id,),
                                 )
                             continue
-                        raise
+                        if _is_mutation_during_pagination_error(e):
+                            # Plaid data changed mid-page — reset cursor and retry once from scratch
+                            _logger.warning(
+                                "TRANSACTIONS_SYNC_MUTATION_DURING_PAGINATION for connection %s — "
+                                "resetting cursor and retrying from scratch.",
+                                connection_id,
+                            )
+                            with db_txn(db_conn):
+                                db_conn.execute(
+                                    "DELETE FROM sync_cursors WHERE connection_id = ?",
+                                    (connection_id,),
+                                )
+                            cursor = None
+                            try:
+                                result = conn_provider.sync_transactions(access_token, None)
+                            except Exception as retry_exc:
+                                _logger.error(
+                                    "Sync retry after cursor reset also failed for connection %s: %s",
+                                    connection_id,
+                                    retry_exc,
+                                )
+                                continue
+                        else:
+                            raise
 
                     added_txns = result.get("added", []) if isinstance(result, dict) else []
                     modified_txns = result.get("modified", []) if isinstance(result, dict) else []
@@ -2466,6 +2516,12 @@ def sync(classify: bool = True) -> dict:
                     total_modified += conn_modified
                     total_removed += conn_removed
                     total_classified += conn_classified
+
+                    if progress_callback:
+                        progress_callback({"phase": "pulled", "connection": institution_name, "added": conn_added, "modified": conn_modified, "msg": f"{institution_name}: {conn_added} new, {conn_modified} modified"})
+
+                if progress_callback:
+                    progress_callback({"phase": "sync_complete", "total_added": total_added, "total_modified": total_modified, "msg": f"Pulled {total_added} new transactions across {connections_synced} connection{'s' if connections_synced != 1 else ''}"})
 
                 # After all connections are synced, optionally run
                 # auto-classification on any newly inserted (unclassified)
