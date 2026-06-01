@@ -101,6 +101,32 @@
         }, 800);
       }
 
+      // On page load, restore the last sync log from the server (persisted in DB).
+      document.addEventListener('DOMContentLoaded', async function() {
+        try {
+          const r = await fetch('/api/sync/progress');
+          const d = await r.json();
+          if (!d.running && d.steps && d.steps.length > 0) {
+            const log = document.getElementById('sync-log');
+            showLog();
+            if (d.restored) {
+              const sep = document.createElement('div');
+              sep.className = 'sync-line sync-line-info';
+              sep.textContent = '\u2500\u2500 Previous sync \u2500\u2500';
+              log.appendChild(sep);
+            }
+            for (const s of d.steps) {
+              const icon = PHASE_ICONS[s.phase] || '\u2022';
+              const msg = s.msg || s.phase;
+              const cls = s.phase === 'error' ? 'sync-line-error'
+                        : (s.phase === 'done' || s.phase === 'pulled') ? 'sync-line-done'
+                        : 'sync-line-info';
+              appendLine(log, icon + ' ' + msg, cls);
+            }
+          }
+        } catch(e) { /* ignore - best effort */ }
+      });
+
       window.doSync = async function doSync(btn) {
         btn.disabled = true;
         btn.textContent = 'Syncing\u2026';

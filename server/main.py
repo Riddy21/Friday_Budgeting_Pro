@@ -2128,6 +2128,17 @@ def sync(classify: bool = True, progress_callback=None) -> dict:
                 pass
         return False
 
+    def _is_mutation_during_pagination_error(exc: Exception) -> bool:
+        """Return True when *exc* signals TRANSACTIONS_SYNC_MUTATION_DURING_PAGINATION."""
+        body = getattr(exc, "body", None)
+        if body:
+            try:
+                parsed = _json.loads(body)
+                return parsed.get("error_code") == "TRANSACTIONS_SYNC_MUTATION_DURING_PAGINATION"
+            except Exception:
+                pass
+        return False
+
     connections_synced = 0
     total_added = 0
     total_modified = 0
@@ -2202,7 +2213,30 @@ def sync(classify: bool = True, progress_callback=None) -> dict:
                                     (connection_id,),
                                 )
                             continue
-                        raise
+                        if _is_mutation_during_pagination_error(e):
+                            # Plaid data changed mid-page — reset cursor and retry once from scratch
+                            _logger.warning(
+                                "TRANSACTIONS_SYNC_MUTATION_DURING_PAGINATION for connection %s — "
+                                "resetting cursor and retrying from scratch.",
+                                connection_id,
+                            )
+                            with db_txn(db_conn):
+                                db_conn.execute(
+                                    "DELETE FROM sync_cursors WHERE connection_id = ?",
+                                    (connection_id,),
+                                )
+                            cursor = None
+                            try:
+                                result = conn_provider.sync_transactions(access_token, None)
+                            except Exception as retry_exc:
+                                _logger.error(
+                                    "Sync retry after cursor reset also failed for connection %s: %s",
+                                    connection_id,
+                                    retry_exc,
+                                )
+                                continue
+                        else:
+                            raise
 
                     added_txns = result.get("added", []) if isinstance(result, dict) else []
                     modified_txns = result.get("modified", []) if isinstance(result, dict) else []

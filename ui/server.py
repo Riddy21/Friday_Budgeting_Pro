@@ -938,6 +938,22 @@ def api_sync(request: Request):
         finally:
             with _sync_progress_lock:
                 _sync_progress["running"] = False
+                # Persist the final steps list to DB so a page refresh can restore it.
+                _steps_snapshot = list(_sync_progress["steps"])
+            import json as _json_lib
+            try:
+                _log_conn = get_db(_db_path())
+                try:
+                    _log_conn.execute(
+                        "INSERT OR REPLACE INTO sync_log (id, steps_json, finished_at) VALUES (1, ?, ?)",
+                        (_json_lib.dumps(_steps_snapshot), int(time.time()))
+                    )
+                    _log_conn.commit()
+                finally:
+                    _log_conn.close()
+            except Exception as _log_exc:
+                import logging as _ll
+                _ll.getLogger(__name__).warning("Failed to persist sync_log: %s", _log_exc)
 
     _threading.Thread(target=_run, daemon=True).start()
     return JSONResponse(
@@ -956,7 +972,24 @@ def api_sync_progress(request: Request):
     if not _is_authenticated(request):
         return JSONResponse({"error": "Unauthorized"}, status_code=401)
     with _sync_progress_lock:
-        return JSONResponse(dict(_sync_progress))
+        data = dict(_sync_progress)
+    # If no in-memory state and not running, try loading from DB as fallback.
+    if not data["running"] and not data["steps"]:
+        try:
+            import json as _json_lib
+            _log_conn = get_db(_db_path())
+            try:
+                row = _log_conn.execute(
+                    "SELECT steps_json FROM sync_log WHERE id = 1"
+                ).fetchone()
+                if row and row["steps_json"]:
+                    data["steps"] = _json_lib.loads(row["steps_json"])
+                    data["restored"] = True
+            finally:
+                _log_conn.close()
+        except Exception:
+            pass
+    return JSONResponse(data)
 
 
 @app.post("/api/classify")
