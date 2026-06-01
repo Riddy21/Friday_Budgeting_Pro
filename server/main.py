@@ -1022,7 +1022,8 @@ def _build_ledger_drilldown(
             "income": round(total_income, 2),
             "expenses": round(total_expenses, 2),
             "savings": round(total_savings, 2),
-            "net": round(total_income - total_expenses - total_savings, 2),
+            # net = income - expenses (total kept; includes savings contributions)
+            "net": round(total_income - total_expenses, 2),
         },
     }
 
@@ -3277,22 +3278,25 @@ def summary(period: str) -> dict:
             expenses += total
 
     # Compute savings metrics
+    # unspent_balance = what's left after expenses AND savings contributions
+    # total_saved     = income - expenses (= savings_contributions + unspent_balance)
     savings_contributions = round(savings, 2)
-    unspent_balance = round(income - expenses, 2)  # may be negative if overspent
-    total_saved = round(savings_contributions + unspent_balance, 2)
-    savings_rate_pct = round(savings / income * 100, 1) if income > 0 else 0.0
+    unspent_balance = round(income - expenses - savings, 2)  # truly unallocated leftover
+    total_saved = round(income - expenses, 2)  # total net kept (savings + leftover)
+    savings_rate_pct = round(total_saved / income * 100, 1) if income > 0 else 0.0
     savings_rate = f"{savings_rate_pct}%"
 
     # YTD savings rate from separate query
     ytd_income: float = 0.0
-    ytd_savings: float = 0.0
+    ytd_expenses: float = 0.0
     for row in ytd_rows:
         v = float(row["total"] or 0.0)
         if row["item_type"] == "income":
             ytd_income += v
-        elif row["item_type"] == "savings":
-            ytd_savings += v
-    ytd_rate_pct = round(ytd_savings / ytd_income * 100, 1) if ytd_income > 0 else 0.0
+        elif row["item_type"] != "savings":
+            ytd_expenses += v
+    ytd_net = ytd_income - ytd_expenses
+    ytd_rate_pct = round(ytd_net / ytd_income * 100, 1) if ytd_income > 0 else 0.0
     savings_rate_ytd = f"{ytd_rate_pct}%"
 
     return {
@@ -3300,7 +3304,7 @@ def summary(period: str) -> dict:
         "income": round(income, 2),
         "expenses": round(expenses, 2),
         "savings": savings_contributions,
-        "net": round(income - expenses - savings, 2),
+        "net": total_saved,  # income - expenses (total kept; = savings + unspent)
         "savings_contributions": savings_contributions,
         "unspent_balance": unspent_balance,
         "total_saved": total_saved,
@@ -3412,10 +3416,10 @@ def savings_trend(months: int = 12) -> dict:
         inc = data["income"]
         exp = data["expenses"]
         sav = data["savings"]
-        unspent = round(inc - exp, 2)
-        total_saved = round(sav + unspent, 2)
+        unspent = round(inc - exp - sav, 2)  # truly unallocated cash
+        total_saved = round(inc - exp, 2)  # income - expenses (savings + unspent)
         cumulative = round(cumulative + total_saved, 2)
-        savings_rate_pct = round(sav / inc * 100, 1) if inc > 0 else 0.0
+        savings_rate_pct = round(total_saved / inc * 100, 1) if inc > 0 else 0.0
         result_months.append(
             {
                 "month": mo,
@@ -4422,7 +4426,7 @@ def correct_transaction(
                 """
                 INSERT INTO transaction_entries
                     (id, transaction_id, line_item_id, amount, source, reviewed, corrected_at)
-                SELECT ?, t.id, ?, t.amount, 'manual', 1, ?
+                SELECT ?, t.id, ?, ABS(t.amount), 'manual', 1, ?
                 FROM transactions t WHERE t.id = ?
                 """,
                 (str(uuid.uuid4()), line_item_id, now, transaction_id),

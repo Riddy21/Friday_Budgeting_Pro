@@ -143,16 +143,17 @@ def test_budget_summary_status_on_track(seeded_db):
 
 
 def test_budget_summary_status_under_saving(seeded_db):
-    """status is 'under_saving' when savings_rate < 20%."""
+    """status is 'under_saving' when net savings rate < 20%."""
     from server.main import budget_summary
 
-    # income=1000, savings=100 → 10% → under_saving
+    # income=1000, expenses=850 → net=150, rate=15% → under_saving
+    # savings_rate is now (income-expenses)/income, not savings/income
     _add_entries(
         seeded_db["db_path"],
         seeded_db,
         [
-            (1000.0, seeded_db["income_li"], "2026-07-10"),
-            (100.0, seeded_db["savings_li"], "2026-07-11"),
+            (1000.0, seeded_db["income_li"],  "2026-07-10"),
+            (850.0,  seeded_db["expense_li"], "2026-07-11"),
         ],
     )
     result = budget_summary("2026-07")

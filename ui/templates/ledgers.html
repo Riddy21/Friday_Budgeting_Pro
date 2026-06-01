@@ -231,7 +231,7 @@
           </div>
         </div>
 
-        {# ── Income/Expenses/Savings/Net totals footer (#166, #237) ── #}
+        {# ── Income/Expenses/Net totals footer — Net = income − expenses ── #}
         <div class="ledger-totals-row" data-ledger-totals="{{ ledger.id }}">
           <span>
             <span class="total-label">Total income:</span>
@@ -240,10 +240,6 @@
           <span>
             <span class="total-label">Total expenses:</span>
             <span class="total-value" data-total="expenses">C${{ "%.2f"|format(ledger.totals.expenses) }}</span>
-          </span>
-          <span>
-            <span class="total-label" style="color:#d97706;">Savings:</span>
-            <span class="total-value" data-total="savings" style="color:#d97706;font-weight:600;">C${{ "%.2f"|format(ledger.totals.savings | default(0)) }}</span>
           </span>
           <span>
             <span class="total-label">Net:</span>

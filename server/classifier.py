@@ -902,7 +902,9 @@ def apply_rules(
                 "transaction_id": transaction["id"],
                 "ledger_id": row[3],
                 "line_item_id": row[2],
-                "amount": transaction["amount"],
+                # Normalise to positive just like the LLM classifier path.
+                # Plaid returns income/refunds as negative; we always store ABS.
+                "amount": abs(transaction["amount"]),
                 "source": "rule",
                 "confidence": 1.0,
                 "reviewed": 0,
