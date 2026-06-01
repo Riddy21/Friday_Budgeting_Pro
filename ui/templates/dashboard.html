@@ -189,14 +189,14 @@
 
         container.innerHTML =
           '<div class="savings-card">' +
-            '<div class="savings-card-title">Total Saved</div>' +
+            '<div class="savings-card-title">Net (Income − Expenses)</div>' +
             '<div class="savings-card-value">' + fmt(totalSaved) + '</div>' +
-            '<div class="savings-card-sub">Contributions: ' + fmt(contributions) + '</div>' +
+            '<div class="savings-card-sub">Investments: ' + fmt(contributions) + '</div>' +
             '<div class="savings-card-sub">Unspent: ' + fmt(unspent) + '</div>' +
             '<span class="savings-badge ' + badgeClass + '">' + badgeText + '</span>' +
           '</div>' +
           '<div class="savings-card">' +
-            '<div class="savings-card-title">Savings Rate</div>' +
+            '<div class="savings-card-title">Net Savings Rate</div>' +
             '<div class="savings-card-value">' + savingsRate + '</div>' +
             '<div class="savings-card-sub">YTD rate: ' + savingsRateYtd + '</div>' +
           '</div>';
