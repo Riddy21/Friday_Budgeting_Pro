@@ -23,85 +23,111 @@
       <button class="btn-primary" id="btn-sync-now" onclick="doSync(this)">Sync Now</button>
       <a href="/export/excel" class="btn-secondary">Export to Excel</a>
     </div>
-    <div id="sync-result" style="margin-top:0.75rem"></div>
+    <div id="sync-log" style="display:none; margin-top:0.75rem; max-height:180px; overflow-y:auto;
+         background:#1e1e2e; color:#cdd6f4; font-family:monospace; font-size:0.82em;
+         border-radius:6px; padding:0.6em 0.8em; border:1px solid #45475a;"></div>
+    <p id="sync-note" style="display:none; font-size:0.75em; color:#6b7280; margin-top:0.4rem;">
+      Sync runs in the background &mdash; safe to navigate away
+    </p>
+    <style>
+      .sync-line { margin: 0.15em 0; white-space: pre-wrap; }
+      .sync-line-error { color: #f38ba8; }
+      .sync-line-done  { color: #a6e3a1; }
+      .sync-line-info  { color: #89dceb; }
+    </style>
     <script>
-    async function pollClassification(el) {
-      // Poll /api/classify/status until classification is done, then update el.
-      let polls = 0;
-      const poll = setInterval(async () => {
-        polls++;
-        try {
-          const r = await fetch('/api/classify/status');
-          const d = await r.json();
-          if (!d.running || polls > 40) {
-            clearInterval(poll);
-            if (d.result && d.result.status === 'ok') {
-              const n = d.result.classified || 0;
-              const u = d.result.uncertain || 0;
-              let msg = '&#x1F9E0; Classified ' + n + ' transaction' + (n !== 1 ? 's' : '');
-              if (u > 0) msg += ' (' + u + ' uncertain)';
-              el.innerHTML += '<div class="alert alert-success">' + msg + '</div>';
-            } else if (d.result && d.result.status === 'error') {
-              el.innerHTML += '<div class="alert alert-error">&#x26A0;&#xFE0F; Classification error: ' + (d.result.error || 'unknown') + '</div>';
-            } else if (polls > 40) {
-              el.innerHTML += '<div class="alert alert-info">&#x1F9E0; Classification timed out (still running in background)</div>';
-            }
-          } else {
-            // Still running — update spinner text
-            const spinner = document.getElementById('classify-spinner');
-            if (spinner) spinner.textContent = '&#x1F9E0; Classifying transactions' + '.'.repeat((polls % 3) + 1);
-          }
-        } catch(e) { clearInterval(poll); }
-      }, 2000);
-    }
+    (function() {
+      const PHASE_ICONS = {
+        health_check:  '\u{1F50D}',
+        pulling:       '\u23F3',
+        pulled:        '\u2705',
+        sync_complete: '\u2713',
+        classifying:   '\u{1F9E0}',
+        done:          '\u{1F389}',
+        error:         '\u274C',
+      };
 
-    async function doSync(btn) {
-      btn.disabled = true;
-      btn.textContent = 'Syncing\u2026';
-      document.getElementById('sync-result').innerHTML = '';
-      try {
-        const r = await fetch('/api/sync', {method: 'POST'});
-        const d = await r.json();
-        const el = document.getElementById('sync-result');
-        if (d.status === 'ok') {
-          el.innerHTML = '<div class="alert alert-info">\u29d3 Syncing\u2026</div>';
-          const ts = document.getElementById('last-synced');
-          if (ts) ts.textContent = 'Just now';
-          // Poll for sync result every 3s
-          let polls = 0;
-          const poll = setInterval(async () => {
-            polls++;
-            try {
-              const r2 = await fetch('/api/sync/result');
-              const d2 = await r2.json();
-              if (!d2.running || polls > 20) {
-                clearInterval(poll);
-                const added = d2.added || 0;
-                const conns = d2.connections_synced || 0;
-                el.innerHTML =
-                  '<div class="alert alert-success">\u2705 Synced \u2014 ' + added +
-                  ' new transaction' + (added !== 1 ? 's' : '') +
-                  ' across ' + conns + ' connection' + (conns !== 1 ? 's' : '') + '.</div>' +
-                  '<div class="alert alert-info" id="classify-spinner">\u1F9E0 Classifying transactions\u2026</div>';
-                btn.disabled = false;
-                btn.textContent = 'Sync Now';
-                // Start polling classification status
-                pollClassification(el);
-              }
-            } catch(e) { clearInterval(poll); }
-          }, 3000);
-          return; // keep button disabled while polling sync
-        } else if (d.status === 'already_running') {
-          el.innerHTML = '<div class="alert alert-info">\u29d3 Sync already in progress\u2026</div>';
-        } else {
-          el.innerHTML = '<div class="alert alert-error">\u274c ' + (d.detail || d.message || 'Sync failed') + '</div>';
-        }
-      } catch(e) {
-        document.getElementById('sync-result').innerHTML = '<div class="alert alert-error">\u274c Network error</div>';
+      function fmtTime(d) {
+        return d.toLocaleTimeString('en-CA', {hour:'2-digit', minute:'2-digit', second:'2-digit', hour12:false});
       }
-      btn.disabled = false;
-      btn.textContent = 'Sync Now';
-    }
+
+      function appendLine(log, text, cls) {
+        const div = document.createElement('div');
+        div.className = 'sync-line' + (cls ? ' ' + cls : '');
+        div.textContent = '[' + fmtTime(new Date()) + '] ' + text;
+        log.appendChild(div);
+        log.scrollTop = log.scrollHeight;
+      }
+
+      function showLog() {
+        document.getElementById('sync-log').style.display = '';
+        document.getElementById('sync-note').style.display = '';
+      }
+
+      function startProgressPolling(btn) {
+        const log = document.getElementById('sync-log');
+        let rendered = 0;
+        let polls = 0;
+        const MAX_POLLS = 375; // ~5 min at 800ms
+        const poll = setInterval(async () => {
+          polls++;
+          try {
+            const r = await fetch('/api/sync/progress');
+            const d = await r.json();
+            const steps = d.steps || [];
+            for (let i = rendered; i < steps.length; i++) {
+              const s = steps[i];
+              const icon = PHASE_ICONS[s.phase] || '\u2022';
+              const msg = s.msg || s.phase;
+              const cls = s.phase === 'error' ? 'sync-line-error'
+                        : (s.phase === 'done' || s.phase === 'pulled') ? 'sync-line-done'
+                        : 'sync-line-info';
+              appendLine(log, icon + ' ' + msg, cls);
+            }
+            rendered = steps.length;
+            if (!d.running || polls >= MAX_POLLS) {
+              clearInterval(poll);
+              btn.disabled = false;
+              btn.textContent = 'Sync Now';
+              const ts = document.getElementById('last-synced');
+              if (ts) ts.textContent = 'Just now';
+            }
+          } catch(e) {
+            clearInterval(poll);
+            appendLine(log, '\u274C Network error while polling progress', 'sync-line-error');
+            btn.disabled = false;
+            btn.textContent = 'Sync Now';
+          }
+        }, 800);
+      }
+
+      window.doSync = async function doSync(btn) {
+        btn.disabled = true;
+        btn.textContent = 'Syncing\u2026';
+        const log = document.getElementById('sync-log');
+        log.innerHTML = '';
+        showLog();
+        try {
+          const r = await fetch('/api/sync', {method: 'POST'});
+          const d = await r.json();
+          if (d.status === 'ok') {
+            appendLine(log, '\u23F3 Starting sync\u2026', 'sync-line-info');
+            startProgressPolling(btn);
+            return;
+          } else if (d.status === 'already_running') {
+            appendLine(log, '\u29D3 Sync already in progress \u2014 showing live log\u2026', 'sync-line-info');
+            startProgressPolling(btn);
+            return;
+          } else {
+            appendLine(log, '\u274C ' + (d.detail || d.message || 'Sync failed'), 'sync-line-error');
+          }
+        } catch(e) {
+          appendLine(log, '\u274C Network error', 'sync-line-error');
+        }
+        btn.disabled = false;
+        btn.textContent = 'Sync Now';
+      };
+    })();
     </script>
   </section>
 
