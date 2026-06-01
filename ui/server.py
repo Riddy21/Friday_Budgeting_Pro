@@ -979,6 +979,22 @@ def api_summary(request: Request, period: str = "this_month"):
     if not _is_authenticated(request):
         return JSONResponse({"error": "Unauthorized"}, status_code=401)
     from server.main import summary as _summary
+    from datetime import date as _date
+
+    # Translate UI-friendly period names to the values summary() expects.
+    # summary() accepts: "month", "year", "ytd", "YYYY-MM", "YYYY".
+    # The UI (and this endpoint's query param) uses: "this_month", "last_month",
+    # "this_year", "ytd", "YYYY-MM", "YYYY".
+    _today = _date.today()
+    if period == "this_month":
+        period = "month"
+    elif period == "this_year":
+        period = "year"
+    elif period == "last_month":
+        if _today.month == 1:
+            period = f"{_today.year - 1}-12"
+        else:
+            period = f"{_today.year}-{_today.month - 1:02d}"
 
     try:
         result = _summary(period)
