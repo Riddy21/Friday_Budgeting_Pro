@@ -2,7 +2,7 @@
 tests/test_openclaw_cron.py — Focused unit tests for the OpenClaw cron
 registration helper in server.main.
 
-These tests operate at the helper level (_register_openclaw_cron / the
+These tests operate at the helper level (_register_openclaw_cron_file / the
 _OPENCLAW_HOME module override) and do NOT touch the database, so no tmp_db
 fixture is needed.
 """
@@ -13,7 +13,7 @@ import json
 from pathlib import Path
 
 import server.main as _main
-from server.main import _register_openclaw_cron
+from server.main import _register_openclaw_cron_file
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -31,12 +31,12 @@ def _set_openclaw_home(monkeypatch, path: Path | None) -> None:
 
 
 def test_cron_file_created_when_openclaw_exists(monkeypatch, tmp_path):
-    """_register_openclaw_cron() returns True and writes the cron JSON file."""
+    """_register_openclaw_cron_file() returns True and writes the cron JSON file."""
     oc_dir = tmp_path / ".openclaw"
     oc_dir.mkdir()
     _set_openclaw_home(monkeypatch, oc_dir)
 
-    result = _register_openclaw_cron()
+    result = _register_openclaw_cron_file()
 
     assert result is True
     cron_file = oc_dir / "cron" / "friday-budgeting-pro-sync.json"
@@ -49,7 +49,7 @@ def test_cron_file_has_correct_schedule(monkeypatch, tmp_path):
     oc_dir.mkdir()
     _set_openclaw_home(monkeypatch, oc_dir)
 
-    _register_openclaw_cron()
+    _register_openclaw_cron_file()
 
     cron_file = oc_dir / "cron" / "friday-budgeting-pro-sync.json"
     spec = json.loads(cron_file.read_text())
@@ -64,7 +64,7 @@ def test_cron_file_has_tz(monkeypatch, tmp_path):
     oc_dir.mkdir()
     _set_openclaw_home(monkeypatch, oc_dir)
 
-    _register_openclaw_cron()
+    _register_openclaw_cron_file()
 
     cron_file = oc_dir / "cron" / "friday-budgeting-pro-sync.json"
     spec = json.loads(cron_file.read_text())
@@ -79,7 +79,7 @@ def test_cron_file_has_correct_name_and_payload(monkeypatch, tmp_path):
     oc_dir.mkdir()
     _set_openclaw_home(monkeypatch, oc_dir)
 
-    _register_openclaw_cron()
+    _register_openclaw_cron_file()
 
     cron_file = oc_dir / "cron" / "friday-budgeting-pro-sync.json"
     spec = json.loads(cron_file.read_text())
@@ -98,12 +98,12 @@ def test_cron_file_has_correct_name_and_payload(monkeypatch, tmp_path):
 
 
 def test_returns_false_when_openclaw_absent(monkeypatch, tmp_path):
-    """_register_openclaw_cron() must return False (not raise) when ~/.openclaw/ is missing."""
+    """_register_openclaw_cron_file() must return False (not raise) when ~/.openclaw/ is missing."""
     absent_dir = tmp_path / "not-here"
     # Deliberately do NOT create absent_dir
     _set_openclaw_home(monkeypatch, absent_dir)
 
-    result = _register_openclaw_cron()
+    result = _register_openclaw_cron_file()
 
     assert result is False
 
@@ -113,7 +113,7 @@ def test_no_file_written_when_openclaw_absent(monkeypatch, tmp_path):
     absent_dir = tmp_path / "not-here"
     _set_openclaw_home(monkeypatch, absent_dir)
 
-    _register_openclaw_cron()
+    _register_openclaw_cron_file()
 
     # The directory itself should not have been created
     assert not absent_dir.exists()
@@ -127,7 +127,7 @@ def test_warning_logged_when_openclaw_absent(monkeypatch, tmp_path, caplog):
     _set_openclaw_home(monkeypatch, absent_dir)
 
     with caplog.at_level(logging.WARNING, logger="server.main"):
-        _register_openclaw_cron()
+        _register_openclaw_cron_file()
 
     assert any(
         "cron" in msg.lower() or "openclaw" in msg.lower() for msg in caplog.messages
@@ -140,13 +140,13 @@ def test_warning_logged_when_openclaw_absent(monkeypatch, tmp_path, caplog):
 
 
 def test_overwrite_on_second_call(monkeypatch, tmp_path):
-    """Calling _register_openclaw_cron() twice produces exactly one cron file."""
+    """Calling _register_openclaw_cron_file() twice produces exactly one cron file."""
     oc_dir = tmp_path / ".openclaw"
     oc_dir.mkdir()
     _set_openclaw_home(monkeypatch, oc_dir)
 
-    r1 = _register_openclaw_cron()
-    r2 = _register_openclaw_cron()
+    r1 = _register_openclaw_cron_file()
+    r2 = _register_openclaw_cron_file()
 
     assert r1 is True
     assert r2 is True
@@ -162,8 +162,8 @@ def test_second_call_produces_valid_json(monkeypatch, tmp_path):
     oc_dir.mkdir()
     _set_openclaw_home(monkeypatch, oc_dir)
 
-    _register_openclaw_cron()
-    _register_openclaw_cron()
+    _register_openclaw_cron_file()
+    _register_openclaw_cron_file()
 
     cron_file = oc_dir / "cron" / "friday-budgeting-pro-sync.json"
     spec = json.loads(cron_file.read_text())  # raises if invalid
@@ -182,6 +182,6 @@ def test_cron_dir_auto_created(monkeypatch, tmp_path):
     # Do NOT pre-create cron/
     _set_openclaw_home(monkeypatch, oc_dir)
 
-    _register_openclaw_cron()
+    _register_openclaw_cron_file()
 
     assert (oc_dir / "cron").is_dir()

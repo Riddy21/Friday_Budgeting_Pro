@@ -22,10 +22,17 @@ Lifecycle (in order):
      succeed in test/CI environments without a real Keychain.
   5. Start the FastAPI UI app on 127.0.0.1:6789 (overridable via FRIDAY_BP_UI_PORT)
      using uvicorn.
-  6. Handle SIGTERM/SIGINT for clean shutdown.
+  6. Start an internal background sync loop (asyncio task) that periodically
+     calls sync() without requiring an external scheduler.  The interval is
+     controlled by the ``FRIDAY_BP_SYNC_INTERVAL_HOURS`` environment variable
+     (default: 6 hours, minimum: 0.5 hours).
+  7. Handle SIGTERM/SIGINT for clean shutdown.
 
-Scheduled syncs are managed by OpenClaw cron (registered via apply_initial_setup).
-See issue #105.
+Background sync env var:
+  FRIDAY_BP_SYNC_INTERVAL_HOURS  — float, default "6", minimum 0.5.
+    Controls how often the background task calls sync().  The first sync
+    is deliberately delayed by one full interval so that Plaid rate limits
+    are not hit on every daemon restart.
 
 launchd plist installation is OUT OF SCOPE for this module — it lives in
 issue #59 (ClawHub installer).  This module is what #59 will hook into.
@@ -126,8 +133,35 @@ def _get_port() -> int:
     return _DEFAULT_PORT
 
 
+async def _background_sync_loop(interval_seconds: float) -> None:
+    """Periodically call sync() in a background asyncio task.
+
+    Sleeps for *interval_seconds* first so that Plaid rate limits are not
+    triggered on every daemon cold start.  After waking it calls
+    ``server.main.sync()`` (a blocking function) via a thread-pool executor
+    so as not to block the event loop.  Any exception is caught, logged at
+    WARNING, and the loop continues.
+
+    Parameters
+    ----------
+    interval_seconds:
+        How long to sleep between sync runs.  Should be at least 1800 s
+        (0.5 h) to stay well within Plaid's rate limits.
+    """
+    while True:
+        await asyncio.sleep(interval_seconds)
+        try:
+            loop = asyncio.get_running_loop()
+            from server.main import sync  # local import avoids circular at module level
+
+            result = await loop.run_in_executor(None, sync)
+            log.info("Background sync completed: %s", result)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("Background sync failed (will retry next interval): %s", exc)
+
+
 async def _run() -> None:
-    """Async main — starts uvicorn server."""
+    """Async main — starts uvicorn server and background sync task."""
     port = _get_port()
 
     config = uvicorn.Config(
@@ -155,6 +189,22 @@ async def _run() -> None:
 
     # -----------------------------------------------------------------------
 
+    # --- Background sync task ---------------------------------------------
+    _sync_interval_hours_raw = os.environ.get("FRIDAY_BP_SYNC_INTERVAL_HOURS", "6")
+    try:
+        _sync_interval_hours = float(_sync_interval_hours_raw)
+    except ValueError:
+        log.warning(
+            "FRIDAY_BP_SYNC_INTERVAL_HOURS=%r is not a valid float; using default 6 hours.",
+            _sync_interval_hours_raw,
+        )
+        _sync_interval_hours = 6.0
+    _sync_interval_hours = max(_sync_interval_hours, 0.5)  # enforce minimum
+    _sync_interval_seconds = _sync_interval_hours * 3600.0
+    asyncio.create_task(_background_sync_loop(_sync_interval_seconds))
+    log.info("Background sync scheduled every %.1f hours.", _sync_interval_hours)
+    # -----------------------------------------------------------------------
+
     log.info(
         "Friday Budgeting Pro daemon starting on http://%s:%d",
         _DEFAULT_HOST,
@@ -167,7 +217,19 @@ async def _run() -> None:
 
 
 def main() -> None:
-    """Entry point called by ``python3 -m server.daemon``."""
+    """Entry point called by ``python3 -m server.daemon``.
+
+    Environment variables
+    ---------------------
+    FRIDAY_BP_UI_HOST
+        Host to bind the UI server (default: 127.0.0.1).
+    FRIDAY_BP_UI_PORT
+        Port for the UI server (default: 6789).
+    FRIDAY_BP_SYNC_INTERVAL_HOURS
+        How often the background sync task fires, in hours (default: 6,
+        minimum: 0.5).  The first run is delayed by one full interval so
+        that Plaid rate limits are not triggered on daemon cold starts.
+    """
     # 0. Load .env from project root (no-op if file doesn't exist).
     #    Imported inline so that test patches on dotenv.load_dotenv are
     #    intercepted correctly (module-level import would bind the name before

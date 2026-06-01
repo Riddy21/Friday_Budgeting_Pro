@@ -88,8 +88,14 @@ def _get_local_tz() -> str:
     return _datetime.now().astimezone().tzname() or "UTC"
 
 
-def _register_openclaw_cron() -> bool:
+def _register_openclaw_cron_file() -> bool:
     """Write the Friday Budgeting Pro sync cron spec to ~/.openclaw/cron/.
+
+    .. deprecated::
+        This approach is deprecated — OpenClaw does not watch the cron
+        directory.  Use the OpenClaw Gateway API directly or rely on the
+        daemon's internal sync loop (see daemon.py and the
+        ``FRIDAY_BP_SYNC_INTERVAL_HOURS`` env var).
 
     Cron file: ``~/.openclaw/cron/friday-budgeting-pro-sync.json``
 
@@ -379,7 +385,8 @@ def apply_initial_setup(
     finally:
         conn.close()
 
-    cron_registered = _register_openclaw_cron()
+    # Scheduled sync is handled by the daemon's internal background loop (see daemon.py).
+    cron_registered = False
 
     # ── Rental properties ─────────────────────────────────────────────────
     properties_created = 0
