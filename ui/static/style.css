@@ -838,6 +838,56 @@ html[data-theme="dark"] .net-negative { color: #f87171; }
 
 .txn-detail-row td  { padding: 0; }
 .txn-detail-cell    { padding: var(--space-2) 0 var(--space-2) var(--space-6) !important; background: var(--bg-subtle); }
+
+/* Expandable transaction card list — no horizontal scroll (#328) */
+.txn-card-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+.txn-card {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  border-bottom: 1px solid var(--border-subtle);
+  font-size: var(--text-sm);
+  flex-wrap: wrap;
+}
+.txn-card:last-child { border-bottom: none; }
+.txn-card-pending { color: var(--muted); font-style: italic; }
+.txn-card-merchant {
+  flex: 1;
+  min-width: 0;
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.txn-card-meta {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-shrink: 0;
+  flex-wrap: wrap;
+}
+.txn-card-date    { color: var(--muted); white-space: nowrap; }
+.txn-card-account { color: var(--muted); font-size: var(--text-xs); white-space: nowrap; }
+.txn-card-amount  { font-weight: 600; font-variant-numeric: tabular-nums; white-space: nowrap; flex-shrink: 0; }
+.txn-card-pending-badge {
+  display: inline-block;
+  background: var(--warning-bg);
+  color: var(--warning-fg);
+  border: 1px solid var(--warning-border);
+  border-radius: 4px;
+  font-size: 10px;
+  font-weight: 700;
+  padding: 1px 6px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+/* Legacy table styles — kept for reference, no longer used in drilldown */
 .txn-table          { width: 100%; border-collapse: collapse; font-size: var(--text-sm); }
 .txn-table tr       { border-bottom: 1px solid var(--border-subtle); }
 .txn-tree           { font-family: var(--font-mono); color: var(--muted); padding-right: 6px; white-space: nowrap; }
