@@ -959,6 +959,111 @@ html[data-theme="dark"] .savings-badge-red    { background: #450a0a; color: #fca
 .recent-tx-date     { color: var(--muted); font-size: var(--text-sm); white-space: nowrap; }
 .recent-tx-amount   { font-weight: 600; font-variant-numeric: tabular-nums; white-space: nowrap; }
 
+/* ── Net worth card (#322) ─ used at the top of /accounts ───────────────── */
+
+.net-worth-card {
+  background: linear-gradient(135deg, var(--surface) 0%, var(--accent-soft) 100%);
+  border: 1px solid var(--border);
+}
+
+html[data-theme="dark"] .net-worth-card {
+  background: linear-gradient(135deg, var(--surface) 0%, var(--surface-raised) 100%);
+  border-color: var(--border);
+}
+@media (prefers-color-scheme: dark) {
+  html:not([data-theme]) .net-worth-card {
+    background: linear-gradient(135deg, var(--surface) 0%, var(--surface-raised) 100%);
+  }
+}
+
+.net-worth-header {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  margin-bottom: var(--space-4);
+}
+
+.net-worth-title {
+  font-size: var(--text-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+  font-weight: 600;
+  margin: 0;
+}
+
+.net-worth-total {
+  font-size: clamp(28px, 5vw, 40px);
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-strong);
+  letter-spacing: -0.02em;
+  line-height: 1.1;
+}
+
+.net-worth-summary {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  margin-bottom: var(--space-5);
+  flex-wrap: wrap;
+}
+
+.net-worth-pair {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.net-worth-minus {
+  font-size: var(--text-xl);
+  color: var(--muted);
+  font-weight: 300;
+  align-self: flex-end;
+  padding-bottom: 2px;
+}
+
+.net-worth-asset     { font-size: var(--text-lg); font-weight: 600; color: #16a34a; }
+.net-worth-liability { font-size: var(--text-lg); font-weight: 600; color: var(--danger-fg); }
+
+html[data-theme="dark"] .net-worth-asset { color: #4ade80; }
+@media (prefers-color-scheme: dark) {
+  html:not([data-theme]) .net-worth-asset { color: #4ade80; }
+}
+
+.net-worth-breakdown {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.net-worth-bucket {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: var(--space-3);
+  padding: var(--space-2) 0;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.net-worth-bucket:last-child { border-bottom: none; }
+
+.net-worth-bucket-label { font-weight: 500; }
+.net-worth-bucket-value { font-weight: 600; white-space: nowrap; }
+
+.net-worth-fx-note { margin-top: var(--space-3); }
+
+/* Mobile tweaks for the net-worth card */
+@media (max-width: 480px) {
+  .net-worth-summary {
+    gap: var(--space-2);
+  }
+  .net-worth-summary .net-worth-minus { display: none; }
+  .net-worth-summary .net-worth-pair { flex: 1; min-width: 45%; }
+  .net-worth-total { font-size: 28px; }
+}
+
 /* Top categories bar chart */
 .top-categories { list-style: none; padding: 0; margin: 0; }
 .top-category {
