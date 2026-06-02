@@ -2,9 +2,57 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
   <title>{% block title %}Friday Budgeting Pro{% endblock %}</title>
+  <meta name="color-scheme" content="light dark" />
   <link rel="stylesheet" href="/static/style.css" />
+  <script>
+  // ── Theme bootstrap (runs before paint to avoid a flash of wrong colours) ─
+  (function () {
+    var ls;
+    try { ls = window.localStorage; } catch (e) { ls = null; }
+    var manual = ls ? ls.getItem('friday-theme') : null;  // "light" | "dark" | "auto" | null
+    var theme;
+
+    function autoTheme() {
+      // 6 AM – 9 PM local time = light; 9 PM – 6 AM = dark.
+      var hour = new Date().getHours();
+      var byTime = (hour >= 6 && hour < 21) ? 'light' : 'dark';
+      // Respect system preference as a softer fallback when time-of-day is
+      // ambiguous (e.g. user has overridden their system theme manually).
+      if (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches && hour < 8) {
+        byTime = 'dark';
+      }
+      return byTime;
+    }
+
+    if (manual === 'light' || manual === 'dark') {
+      theme = manual;
+    } else {
+      theme = autoTheme();
+    }
+    document.documentElement.setAttribute('data-theme', theme);
+
+    // Expose helpers so the toggle button (rendered later) can use them.
+    window.__fridayTheme = {
+      get: function () { return document.documentElement.getAttribute('data-theme'); },
+      set: function (t) {
+        document.documentElement.setAttribute('data-theme', t);
+        if (ls) ls.setItem('friday-theme', t);
+      },
+      clear: function () {
+        if (ls) ls.removeItem('friday-theme');
+        document.documentElement.setAttribute('data-theme', autoTheme());
+      },
+      toggle: function () {
+        var next = (this.get() === 'dark') ? 'light' : 'dark';
+        this.set(next);
+        return next;
+      },
+      auto: autoTheme
+    };
+  })();
+  </script>
 </head>
 <body>
   <header>
@@ -17,7 +65,14 @@
         <a href="/accounts" {% if current_page == 'accounts' %}class="active"{% endif %}>Accounts</a>
         <a href="/ledgers" {% if current_page == 'ledgers' %}class="active"{% endif %}>Ledgers</a>
         <a href="/settings" {% if current_page == 'settings' %}class="active"{% endif %}>Settings</a>
-        <a href="/logout" style="margin-left:auto">Log out</a>
+        <a href="/logout" class="nav-logout">Log out</a>
+        <button class="theme-toggle" id="theme-toggle" type="button"
+          aria-label="Toggle dark mode" title="Toggle dark mode">🌓</button>
+      </nav>
+      {% else %}
+      <nav>
+        <button class="theme-toggle" id="theme-toggle" type="button"
+          aria-label="Toggle dark mode" title="Toggle dark mode">🌓</button>
       </nav>
       {% endif %}
       {% endblock %}
@@ -28,13 +83,46 @@
     {% block content %}{% endblock %}
   </main>
 
+  {% if current_page %}
+  <!-- Bottom nav for ≤ 480px viewports (CSS-controlled) -->
+  <nav class="mobile-nav" aria-label="Primary">
+    <ul>
+      <li><a href="/dashboard" {% if current_page == 'dashboard' %}class="active"{% endif %}>
+        <span class="mobile-nav-icon" aria-hidden="true">🏠</span><span>Home</span>
+      </a></li>
+      <li><a href="/accounts" {% if current_page == 'accounts' %}class="active"{% endif %}>
+        <span class="mobile-nav-icon" aria-hidden="true">🏦</span><span>Accounts</span>
+      </a></li>
+      <li><a href="/ledgers" {% if current_page == 'ledgers' %}class="active"{% endif %}>
+        <span class="mobile-nav-icon" aria-hidden="true">📒</span><span>Ledgers</span>
+      </a></li>
+      <li><a href="/settings" {% if current_page == 'settings' %}class="active"{% endif %}>
+        <span class="mobile-nav-icon" aria-hidden="true">⚙️</span><span>Settings</span>
+      </a></li>
+    </ul>
+  </nav>
+  {% endif %}
+
   <footer>
     <p>Local · Private · Yours</p>
   </footer>
 
   <script>
-  // Convert data-utc Unix timestamps to local datetime strings.
-  // Works for any <span class="datetime-local" data-utc="<int>"> element.
+  // ── Theme toggle wiring ────────────────────────────────────────────────
+  (function () {
+    var btn = document.getElementById('theme-toggle');
+    if (!btn || !window.__fridayTheme) return;
+    function updateIcon() {
+      btn.textContent = (window.__fridayTheme.get() === 'dark') ? '☀️' : '🌙';
+    }
+    updateIcon();
+    btn.addEventListener('click', function () {
+      window.__fridayTheme.toggle();
+      updateIcon();
+    });
+  })();
+
+  // ── Local datetime rendering ───────────────────────────────────────────
   (function () {
     document.querySelectorAll('.datetime-local').forEach(function (el) {
       var ts = parseInt(el.dataset.utc, 10);
