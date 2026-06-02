@@ -2490,6 +2490,17 @@ def sync(classify: bool = True, progress_callback=None) -> dict:
                         # --- Removed transactions ---
                         for txn in removed_txns:
                             plaid_txn_id = _get(txn, "transaction_id")
+                            # Delete child rows first to satisfy FK constraints.
+                            # transaction_entries.transaction_id has no ON DELETE CASCADE,
+                            # so we must remove entries before deleting the parent row.
+                            # suspicious_transactions has ON DELETE CASCADE and will be
+                            # cleaned up automatically.
+                            db_conn.execute(
+                                "DELETE FROM transaction_entries WHERE transaction_id = ("
+                                "  SELECT id FROM transactions WHERE plaid_transaction_id = ?"
+                                ")",
+                                (plaid_txn_id,),
+                            )
                             db_conn.execute(
                                 "DELETE FROM transactions WHERE plaid_transaction_id = ?",
                                 (plaid_txn_id,),
