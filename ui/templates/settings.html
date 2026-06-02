@@ -7,11 +7,11 @@
   <h1>Settings</h1>
 
   {% if saved %}
-  <p class="success">Settings saved.</p>
+  <div class="alert alert-success">Settings saved.</div>
   {% endif %}
 
   {% if error %}
-  <p class="error">{{ error }}</p>
+  <div class="alert alert-error">{{ error }}</div>
   {% endif %}
 
   <form method="post" action="/settings">
@@ -35,7 +35,7 @@
       <p class="hint">Used for date display and &ldquo;this month&rdquo; boundaries.</p>
     </div>
 
-    <button type="submit">Save</button>
+    <button type="submit" class="btn-primary">Save</button>
   </form>
 </div>
 
@@ -43,29 +43,31 @@
   <h2>Classification Rules</h2>
   <p class="hint">Rules are evaluated in priority order. Edit via OpenClaw chat.</p>
   {% if rules %}
-  <table>
-    <thead>
-      <tr>
-        <th>Priority</th>
-        <th>Name</th>
-        <th>Type</th>
-        <th>Status</th>
+  <div class="table-scroll">
+    <table>
+      <thead>
+        <tr>
+          <th>Priority</th>
+          <th>Name</th>
+          <th>Type</th>
+          <th>Status</th>
+        </tr>
+      </thead>
+      <tbody>
+      {% for rule in rules %}
+      <tr class="{% if not rule.enabled %}rule-disabled{% endif %}">
+        <td>{{ rule.priority }}</td>
+        <td>{{ rule.name }}</td>
+        <td>{{ rule.rule_type }}</td>
+        <td>
+          {% if rule.enabled %}● enabled{% else %}○ disabled{% endif %}
+          {% if rule.is_default %}<span class="badge badge-default">default</span>{% endif %}
+        </td>
       </tr>
-    </thead>
-    <tbody>
-    {% for rule in rules %}
-    <tr class="{% if not rule.enabled %}rule-disabled{% endif %}">
-      <td>{{ rule.priority }}</td>
-      <td>{{ rule.name }}</td>
-      <td>{{ rule.rule_type }}</td>
-      <td>
-        {% if rule.enabled %}● enabled{% else %}○ disabled{% endif %}
-        {% if rule.is_default %}<span class="badge badge-default">default</span>{% endif %}
-      </td>
-    </tr>
-    {% endfor %}
-    </tbody>
-  </table>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
   {% else %}
   <p class="hint">No classification rules configured yet.</p>
   {% endif %}
