@@ -23,18 +23,10 @@
       <button class="btn-primary" id="btn-sync-now" onclick="doSync(this)">Sync Now</button>
       <a href="/export/excel" class="btn-secondary">Export to Excel</a>
     </div>
-    <div id="sync-log" style="display:none; margin-top:0.75rem; max-height:180px; overflow-y:auto;
-         background:#1e1e2e; color:#cdd6f4; font-family:monospace; font-size:0.82em;
-         border-radius:6px; padding:0.6em 0.8em; border:1px solid #45475a;"></div>
-    <p id="sync-note" style="display:none; font-size:0.75em; color:#6b7280; margin-top:0.4rem;">
-      Sync runs in the background &mdash; safe to navigate away
+    <div id="sync-log" class="sync-log" style="display:none;"></div>
+    <p id="sync-note" class="sync-note" style="display:none;">
+      Sync runs in the background — safe to navigate away
     </p>
-    <style>
-      .sync-line { margin: 0.15em 0; white-space: pre-wrap; }
-      .sync-line-error { color: #f38ba8; }
-      .sync-line-done  { color: #a6e3a1; }
-      .sync-line-info  { color: #89dceb; }
-    </style>
     <script>
     (function() {
       const PHASE_ICONS = {
@@ -101,7 +93,6 @@
         }, 800);
       }
 
-      // On page load, restore the last sync log from the server (persisted in DB).
       document.addEventListener('DOMContentLoaded', async function() {
         try {
           const r = await fetch('/api/sync/progress');
@@ -124,7 +115,7 @@
               appendLine(log, icon + ' ' + msg, cls);
             }
           }
-        } catch(e) { /* ignore - best effort */ }
+        } catch(e) { /* ignore */ }
       });
 
       window.doSync = async function doSync(btn) {
@@ -158,50 +149,11 @@
   </section>
 
   <section id="savings-summary-section">
-    <h2>Overall Savings <span id="savings-period-label" style="font-size:0.6em;font-weight:400;color:#92400e;vertical-align:middle;"></span></h2>
-    <div id="savings-cards" style="display:flex;gap:1em;flex-wrap:wrap;margin-top:0.75em;">
-      <div class="alert alert-info" id="savings-loading">Loading savings data&#x2026;</div>
+    <h2>Overall Savings <span id="savings-period-label" class="muted text-sm"></span></h2>
+    <div id="savings-cards" class="dashboard-grid">
+      <div class="alert alert-info" id="savings-loading">Loading savings data…</div>
     </div>
   </section>
-
-  <style>
-    .savings-card {
-      background: #fffbeb;
-      border: 1px solid #fcd34d;
-      border-radius: 8px;
-      padding: 1em 1.25em;
-      min-width: 180px;
-      flex: 1;
-    }
-    .savings-card-title {
-      font-size: 0.8em;
-      text-transform: uppercase;
-      letter-spacing: 0.05em;
-      color: #92400e;
-      margin-bottom: 0.25em;
-    }
-    .savings-card-value {
-      font-size: 1.6em;
-      font-weight: 700;
-      color: #d97706;
-    }
-    .savings-card-sub {
-      font-size: 0.85em;
-      color: #78350f;
-      margin-top: 0.25em;
-    }
-    .savings-badge {
-      display: inline-block;
-      padding: 0.2em 0.6em;
-      border-radius: 4px;
-      font-size: 0.8em;
-      font-weight: 600;
-      margin-top: 0.5em;
-    }
-    .savings-badge-green  { background: #d1fae5; color: #065f46; }
-    .savings-badge-amber  { background: #fef3c7; color: #92400e; }
-    .savings-badge-red    { background: #fee2e2; color: #991b1b; }
-  </style>
 
   <script>
   (function() {
@@ -214,29 +166,27 @@
           container.innerHTML = '<div class="alert alert-error">&#x26A0;&#xFE0F; ' + d.error + '</div>';
           return;
         }
-        // Show period label (server returns 'Last Month' when falling back)
         var periodLabel = d.period_label || 'This Month';
         var labelEl = document.getElementById('savings-period-label');
         if (labelEl) labelEl.textContent = '(' + periodLabel + ')';
 
-        var totalSaved = d.total_saved || 0;
-        var contributions = d.savings_contributions || 0;
-        var unspent = d.unspent_balance || 0;
-        var savingsRate = d.savings_rate || '0%';
-        var savingsRateYtd = d.savings_rate_ytd || '0%';
-        var savingsRatePct = parseFloat(savingsRate);
+        var totalSaved      = d.total_saved || 0;
+        var contributions   = d.savings_contributions || 0;
+        var unspent         = d.unspent_balance || 0;
+        var savingsRate     = d.savings_rate || '0%';
+        var savingsRateYtd  = d.savings_rate_ytd || '0%';
+        var savingsRatePct  = parseFloat(savingsRate);
 
-        // Determine badge
         var badgeClass, badgeText;
         if (totalSaved < 0) {
           badgeClass = 'savings-badge-red';
-          badgeText = '&#x26A0;&#xFE0F; Overspent';
+          badgeText  = '\u26A0\uFE0F Overspent';
         } else if (savingsRatePct >= 20) {
           badgeClass = 'savings-badge-green';
-          badgeText = '&#x2705; On Track';
+          badgeText  = '\u2705 On Track';
         } else {
           badgeClass = 'savings-badge-amber';
-          badgeText = '&#x26A0;&#xFE0F; Under Saving';
+          badgeText  = '\u26A0\uFE0F Under Saving';
         }
 
         var fmt = function(n) {
@@ -244,17 +194,17 @@
         };
 
         container.innerHTML =
-          '<div class="savings-card">' +
-            '<div class="savings-card-title">Net (Income − Expenses)</div>' +
-            '<div class="savings-card-value">' + fmt(totalSaved) + '</div>' +
-            '<div class="savings-card-sub">Investments: ' + fmt(contributions) + '</div>' +
-            '<div class="savings-card-sub">Unspent: ' + fmt(unspent) + '</div>' +
+          '<div class="stat-card savings">' +
+            '<div class="stat-card-title">Net (Income \u2212 Expenses)</div>' +
+            '<div class="stat-card-value">' + fmt(totalSaved) + '</div>' +
+            '<div class="stat-card-sub">Investments: ' + fmt(contributions) + '</div>' +
+            '<div class="stat-card-sub">Unspent: ' + fmt(unspent) + '</div>' +
             '<span class="savings-badge ' + badgeClass + '">' + badgeText + '</span>' +
           '</div>' +
-          '<div class="savings-card">' +
-            '<div class="savings-card-title">Net Savings Rate</div>' +
-            '<div class="savings-card-value">' + savingsRate + '</div>' +
-            '<div class="savings-card-sub">YTD rate: ' + savingsRateYtd + '</div>' +
+          '<div class="stat-card savings">' +
+            '<div class="stat-card-title">Net Savings Rate</div>' +
+            '<div class="stat-card-value">' + savingsRate + '</div>' +
+            '<div class="stat-card-sub">YTD rate: ' + savingsRateYtd + '</div>' +
           '</div>';
       } catch(e) {
         document.getElementById('savings-loading').textContent = 'Could not load savings data.';

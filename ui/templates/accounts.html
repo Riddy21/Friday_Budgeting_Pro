@@ -4,27 +4,27 @@
 
 {% block content %}
 <div class="card">
-  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1.25rem">
-    <h1 style="margin:0">Accounts</h1>
-    <a href="/link/start" class="btn btn-primary">+ Connect a bank</a>
+  <div class="card-toolbar">
+    <h1>Accounts</h1>
+    <a href="/link/start" class="btn-primary">+ Connect a bank</a>
   </div>
 
   {% if not grouped_accounts %}
   <p class="hint">No bank accounts connected yet. <a href="/link/start">Connect a bank</a> to get started.</p>
   {% else %}
   {% for institution, data in grouped_accounts.items() %}
-  <section class="institution-group" style="margin-bottom:2rem">
-    <div class="institution-header" style="display:flex;justify-content:space-between;align-items:center;border-bottom:2px solid #e2e8f0;padding-bottom:0.5rem;margin-bottom:0.75rem">
-      <h2 style="margin:0;font-size:1.1rem;font-weight:600">── {{ institution }}{% if data.syncing %} <span style="font-size:0.8rem;font-weight:400;color:#94a3b8">⏳ syncing…</span>{% endif %}</h2>
-      <div style="display:flex;gap:0.4rem;align-items:center">
-        <button type="button" class="btn btn-sm btn-secondary copy-token-btn"
+  <section class="institution-group">
+    <div class="institution-header">
+      <h2>── {{ institution }}{% if data.syncing %} <span class="institution-syncing">⏳ syncing…</span>{% endif %}</h2>
+      <div class="institution-actions">
+        <button type="button" class="btn-secondary btn-sm copy-token-btn"
           data-connection-id="{{ data.connection_id }}">
           Copy token
         </button>
-        <form method="post" action="/profile" style="display:inline;margin:0">
+        <form method="post" action="/profile">
           <input type="hidden" name="action" value="disconnect_bank">
           <input type="hidden" name="bank_id" value="{{ data.connection_id }}">
-          <button type="submit" class="btn btn-sm btn-danger"
+          <button type="submit" class="btn-danger btn-sm"
             onclick="return confirm('Disconnect {{ institution }}? This will remove all linked accounts.')">
             Disconnect
           </button>
@@ -32,62 +32,64 @@
       </div>
     </div>
     {% if data.syncing and not data.accounts %}
-    <p style="color:#64748b;font-style:italic;padding:0.5rem 0">⏳ Accounts will appear here once the initial sync completes…</p>
+    <p class="hint">⏳ Accounts will appear here once the initial sync completes…</p>
     {% else %}
-    <table style="width:100%;border-collapse:collapse">
-      <thead>
-        <tr style="text-align:left;color:#64748b;font-size:0.8rem;text-transform:uppercase;letter-spacing:0.04em">
-          <th style="padding:0.35rem 0.6rem">Account</th>
-          <th style="padding:0.35rem 0.6rem">Type</th>
-          <th style="padding:0.35rem 0.6rem;text-align:right">Balance</th>
-          <th style="padding:0.35rem 0.6rem"></th>
-        </tr>
-      </thead>
-      <tbody>
-        {% for acct in data.accounts %}
-        <tr style="border-top:1px solid #f1f5f9" data-account-id="{{ acct.id }}">
-          <td style="padding:0.55rem 0.6rem">
-            <span class="acct-name" data-original="{{ acct.name or '' }}">{{ acct.name or '(unnamed)' }}</span>
-            {% if acct.mask %}
-            <span style="color:#94a3b8;font-size:0.78rem"> ···{{ acct.mask }}</span>
-            {% endif %}
-          </td>
-          <td style="padding:0.55rem 0.6rem;color:#64748b;font-size:0.875rem">
-            {{ acct.subtype or acct.type or '—' }}
-          </td>
-          <td style="padding:0.55rem 0.6rem;text-align:right;font-weight:600;font-variant-numeric:tabular-nums">
-            {% set balance = acct.balance_current if acct.balance_current is not none else acct.balance_available %}
-            {% if balance is not none %}
-              {% set currency = acct.currency or 'CAD' %}
-              {# Credit cards: Plaid returns amount owed as positive — negate for display #}
-              {% set display_balance = -balance if acct.type == 'credit' else balance %}
-              {% if currency == 'CAD' %}C$
-              {% elif currency == 'USD' %}US$
-              {% elif currency == 'GBP' %}£
-              {% elif currency == 'EUR' %}€
-              {% else %}{{ currency }} {% endif %}{{ "%.2f"|format(display_balance) }}
-            {% else %}
-              <span style="color:#94a3b8">—</span>
-            {% endif %}
-          </td>
-          <td style="padding:0.55rem 0.6rem;text-align:right">
-            <button class="btn btn-sm btn-secondary rename-btn" data-id="{{ acct.id }}">rename</button>
-            <button class="btn btn-sm btn-secondary txn-toggle-btn" data-id="{{ acct.id }}" style="margin-left:0.25rem">transactions</button>
-          </td>
-        </tr>
-        <tr class="txn-expand-row" id="txn-expand-{{ acct.id }}" style="display:none">
-          <td colspan="4" style="padding:0;background:#f8fafc;border-top:1px solid #e2e8f0">
-            <div id="txn-content-{{ acct.id }}" style="padding:0.5rem 1rem 0.75rem">
-              <span style="color:#94a3b8;font-size:0.85rem">Loading…</span>
-            </div>
-          </td>
-        </tr>
-        {% endfor %}
-      </tbody>
-    </table>
+    <div class="table-scroll">
+      <table class="account-table">
+        <thead>
+          <tr>
+            <th>Account</th>
+            <th class="responsive-hide-sm">Type</th>
+            <th style="text-align:right">Balance</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for acct in data.accounts %}
+          <tr data-account-id="{{ acct.id }}">
+            <td>
+              <span class="acct-name" data-original="{{ acct.name or '' }}">{{ acct.name or '(unnamed)' }}</span>
+              {% if acct.mask %}
+              <span class="acct-mask">···{{ acct.mask }}</span>
+              {% endif %}
+            </td>
+            <td class="acct-type responsive-hide-sm">
+              {{ acct.subtype or acct.type or '—' }}
+            </td>
+            <td class="acct-balance">
+              {% set balance = acct.balance_current if acct.balance_current is not none else acct.balance_available %}
+              {% if balance is not none %}
+                {% set currency = acct.currency or 'CAD' %}
+                {# Credit cards: Plaid returns amount owed as positive — negate for display #}
+                {% set display_balance = -balance if acct.type == 'credit' else balance %}
+                {% if currency == 'CAD' %}C$
+                {% elif currency == 'USD' %}US$
+                {% elif currency == 'GBP' %}£
+                {% elif currency == 'EUR' %}€
+                {% else %}{{ currency }} {% endif %}{{ "%.2f"|format(display_balance) }}
+              {% else %}
+                <span class="muted">—</span>
+              {% endif %}
+            </td>
+            <td class="acct-actions">
+              <button class="btn-secondary btn-sm rename-btn" data-id="{{ acct.id }}">rename</button>
+              <button class="btn-secondary btn-sm txn-toggle-btn" data-id="{{ acct.id }}">transactions</button>
+            </td>
+          </tr>
+          <tr class="txn-expand-row" id="txn-expand-{{ acct.id }}" style="display:none">
+            <td colspan="4">
+              <div class="txn-expand-inner" id="txn-content-{{ acct.id }}">
+                <span class="muted text-sm">Loading…</span>
+              </div>
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
     {% endif %}
     {% if data.hidden_count %}
-    <p style="color:#94a3b8;font-size:0.8rem;margin:0.35rem 0.6rem 0">
+    <p class="hint">
       {{ data.hidden_count }} shared account{{ 's' if data.hidden_count != 1 else '' }} hidden (duplicate of another connected bank).
     </p>
     {% endif %}
@@ -99,11 +101,11 @@
 <script>
 // ── Transaction list toggle ──────────────────────────────────────────────
 const TXN_ENTRY_COLORS = {
-  transfer: { bg: '#eff6ff', fg: '#2563eb', border: '#93c5fd' },
-  spending:  { bg: '#fff1f2', fg: '#dc2626', border: '#fca5a5' },
-  income:    { bg: '#f0fdf4', fg: '#16a34a', border: '#86efac' },
-  savings:   { bg: '#fffbeb', fg: '#d97706', border: '#fcd34d' },
-  skip:      { bg: '#f8fafc', fg: '#94a3b8', border: '#e2e8f0' },
+  transfer: { bg: 'var(--info-bg)',    fg: 'var(--info-fg)',    border: 'var(--info-border)' },
+  spending: { bg: 'var(--danger-bg)',  fg: 'var(--danger-fg)',  border: 'var(--danger-border)' },
+  income:   { bg: 'var(--success-bg)', fg: 'var(--success-fg)', border: 'var(--success-border)' },
+  savings:  { bg: 'var(--savings-bg)', fg: 'var(--savings-fg)', border: 'var(--savings-border)' },
+  skip:     { bg: 'var(--bg-subtle)',  fg: 'var(--muted)',      border: 'var(--border-subtle)' },
 };
 
 function escHtml(s) {
@@ -112,45 +114,44 @@ function escHtml(s) {
 
 function buildTxnTable(txns) {
   if (!txns || txns.length === 0) {
-    return '<p style="color:#94a3b8;margin:0.25rem 0;font-size:0.85rem">No transactions found for this account.</p>';
+    return '<p class="muted text-sm">No transactions found for this account.</p>';
   }
   let rows = txns.map(t => {
     const isPending = !!t.pending;
     const et  = !isPending ? (t.entry_type || null) : null;
-    const clr = et ? (TXN_ENTRY_COLORS[et] || { bg:'#f8fafc', fg:'#64748b', border:'#e2e8f0' }) : null;
+    const clr = et ? (TXN_ENTRY_COLORS[et] || { bg:'var(--bg-subtle)', fg:'var(--muted)', border:'var(--border-subtle)' }) : null;
     const badge = isPending
-      ? '<span style="background:#fefce8;color:#ca8a04;border:1px solid #fde047;padding:0.1rem 0.45rem;border-radius:3px;font-size:0.75rem;font-weight:700;letter-spacing:0.02em">Pending</span>'
+      ? '<span style="background:var(--warning-bg);color:var(--warning-fg);border:1px solid var(--warning-border);padding:2px 8px;border-radius:4px;font-size:11px;font-weight:700;letter-spacing:0.02em;text-transform:uppercase">Pending</span>'
       : et
-        ? `<span style="background:${clr.bg};color:${clr.fg};border:1px solid ${clr.border};padding:0.1rem 0.45rem;border-radius:3px;font-size:0.75rem;font-weight:700;letter-spacing:0.02em">${et.charAt(0).toUpperCase()+et.slice(1)}</span>${t.uncertain ? ' <span title="Uncertain classification" style="color:#f59e0b">&#9888;</span>' : ''}`
-        : '<span style="color:#94a3b8;font-size:0.8rem">—</span>';
+        ? `<span style="background:${clr.bg};color:${clr.fg};border:1px solid ${clr.border};padding:2px 8px;border-radius:4px;font-size:11px;font-weight:700;letter-spacing:0.02em;text-transform:uppercase">${et.charAt(0).toUpperCase()+et.slice(1)}</span>${t.uncertain ? ' <span title="Uncertain classification" style="color:var(--warning)">&#9888;</span>' : ''}`
+        : '<span class="muted text-sm">—</span>';
     const currency = t.currency || 'CAD';
     const prefix   = currency === 'CAD' ? 'C$' : currency === 'USD' ? 'US$' : currency === 'GBP' ? '\u00a3' : currency === 'EUR' ? '\u20ac' : currency + '\u00a0';
     const amt      = t.amount;
     const amtStr   = prefix + Math.abs(amt).toFixed(2);
-    const amtColor = amt < 0 ? '#16a34a' : (isPending ? '#94a3b8' : '#64748b');
+    const amtColor = amt < 0 ? '#16a34a' : (isPending ? 'var(--muted)' : 'var(--muted-strong)');
     const sign     = amt < 0 ? '+' : '\u2212';
     const category = isPending
-      ? '<span style="color:#94a3b8;font-size:0.8rem;font-style:italic">Pending — not yet categorized</span>'
-      : t.line_item_name ? escHtml((t.ledger_name ? t.ledger_name + ' · ' : '') + t.line_item_name) : '<span style="color:#94a3b8">—</span>';
-    const rowStyle = isPending ? 'border-top:1px solid #f1f5f9;background:#fefce8;opacity:0.9' : 'border-top:1px solid #f1f5f9';
-    return `<tr style="${rowStyle}">
-      <td style="padding:0.3rem 0.5rem;color:#64748b;white-space:nowrap;font-size:0.82rem" title="${escHtml(t.authorized_datetime||t.date||'')}">${(()=>{ if(t.authorized_datetime){ const d=new Date(t.authorized_datetime); if(!isNaN(d)){return escHtml(d.toLocaleDateString('en-CA')+' '+d.toLocaleTimeString('en-CA',{hour:'2-digit',minute:'2-digit'}));} } return escHtml(t.date||''); })()}</td>
-      <td style="padding:0.3rem 0.5rem;font-size:0.85rem${isPending ? ';color:#78716c' : ''}">${escHtml(t.merchant||'(unknown)')}</td>
-      <td style="padding:0.3rem 0.5rem;text-align:right;font-weight:600;color:${amtColor};white-space:nowrap;font-size:0.85rem;font-variant-numeric:tabular-nums">${sign}${amtStr}</td>
-      <td style="padding:0.3rem 0.5rem">${badge}</td>
-      <td style="padding:0.3rem 0.5rem;color:#94a3b8;font-size:0.8rem">${category}</td>
+      ? '<span class="muted text-sm" style="font-style:italic">Pending — not yet categorized</span>'
+      : t.line_item_name ? escHtml((t.ledger_name ? t.ledger_name + ' · ' : '') + t.line_item_name) : '<span class="muted">—</span>';
+    return `<tr${isPending ? ' class="txn-pending"' : ''}>
+      <td class="txn-date" title="${escHtml(t.authorized_datetime||t.date||'')}">${(()=>{ if(t.authorized_datetime){ const d=new Date(t.authorized_datetime); if(!isNaN(d)){return escHtml(d.toLocaleDateString('en-CA')+' '+d.toLocaleTimeString('en-CA',{hour:'2-digit',minute:'2-digit'}));} } return escHtml(t.date||''); })()}</td>
+      <td class="txn-merchant">${escHtml(t.merchant||'(unknown)')}</td>
+      <td class="txn-amount" style="color:${amtColor}">${sign}${amtStr}</td>
+      <td>${badge}</td>
+      <td class="muted text-sm">${category}</td>
     </tr>`;
   }).join('');
-  return `<table style="width:100%;border-collapse:collapse">
-    <thead><tr style="color:#94a3b8;font-size:0.75rem;text-transform:uppercase;letter-spacing:0.04em">
-      <th style="padding:0.3rem 0.5rem;text-align:left">Date</th>
-      <th style="padding:0.3rem 0.5rem;text-align:left">Merchant</th>
-      <th style="padding:0.3rem 0.5rem;text-align:right">Amount</th>
-      <th style="padding:0.3rem 0.5rem;text-align:left">Type</th>
-      <th style="padding:0.3rem 0.5rem;text-align:left">Category</th>
+  return `<div class="table-scroll"><table class="txn-table">
+    <thead><tr>
+      <th class="muted text-xs">Date</th>
+      <th class="muted text-xs">Merchant</th>
+      <th class="muted text-xs" style="text-align:right">Amount</th>
+      <th class="muted text-xs">Type</th>
+      <th class="muted text-xs">Category</th>
     </tr></thead>
     <tbody>${rows}</tbody>
-  </table>`;
+  </table></div>`;
 }
 
 document.querySelectorAll('.txn-toggle-btn').forEach(btn => {
@@ -173,7 +174,7 @@ document.querySelectorAll('.txn-toggle-btn').forEach(btn => {
       content.innerHTML = buildTxnTable(data.transactions || []);
       loaded = true;
     } catch(e) {
-      content.innerHTML = '<p style="color:#dc2626;font-size:0.85rem;margin:0.25rem 0">Failed to load transactions.</p>';
+      content.innerHTML = '<p class="alert alert-error">Failed to load transactions.</p>';
     }
   });
 });
@@ -186,10 +187,7 @@ document.querySelectorAll('.rename-btn').forEach(btn => {
     const nameSpan = row.querySelector('.acct-name');
     const currentName = nameSpan.dataset.original || nameSpan.textContent.trim();
 
-    // Already in edit mode? cancel.
-    if (btn.dataset.editing === '1') {
-      return;
-    }
+    if (btn.dataset.editing === '1') return;
 
     const input = document.createElement('input');
     input.type = 'text';
@@ -217,21 +215,14 @@ document.querySelectorAll('.rename-btn').forEach(btn => {
 
     const save = async () => {
       const newName = input.value.trim();
-      if (!newName || newName === currentName) {
-        restore(currentName);
-        return;
-      }
+      if (!newName || newName === currentName) { restore(currentName); return; }
       try {
         const resp = await fetch(`/accounts/${id}/name`, {
           method: 'PATCH',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ name: newName })
         });
-        if (resp.ok) {
-          restore(newName);
-        } else {
-          restore(currentName);
-        }
+        if (resp.ok) restore(newName); else restore(currentName);
       } catch (e) {
         restore(currentName);
       }
@@ -243,7 +234,6 @@ document.querySelectorAll('.rename-btn').forEach(btn => {
     });
     input.addEventListener('blur', () => { if (!saved) save(); });
 
-    // Cancel button click
     btn.addEventListener('click', () => {
       if (btn.dataset.editing === '1') {
         saved = true;
@@ -255,15 +245,13 @@ document.querySelectorAll('.rename-btn').forEach(btn => {
   });
 });
 
-// ── Copy access token ──────────────────────────────────────────────────────────────────────────────────────────────
+// ── Copy access token ─────────────────────────────────────────────────────
 document.querySelectorAll('.copy-token-btn').forEach(btn => {
   btn.addEventListener('click', async function(event) {
     const connectionId = btn.dataset.connectionId;
     try {
       const resp = await fetch(`/accounts/${connectionId}/access-token`);
-      if (!resp.ok) {
-        throw new Error(`HTTP ${resp.status}`);
-      }
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
       const data = await resp.json();
       await navigator.clipboard.writeText(data.access_token);
       btn.textContent = 'Copied!';
