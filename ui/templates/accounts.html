@@ -3,6 +3,51 @@
 {% block title %}Accounts — Friday Budgeting Pro{% endblock %}
 
 {% block content %}
+{% if net_worth and net_worth.has_data %}
+{% set cur_symbol = {'CAD':'C$','USD':'US$','GBP':'£','EUR':'€'}.get(net_worth.home_currency, net_worth.home_currency + ' ') %}
+<div class="card net-worth-card">
+  <div class="net-worth-header">
+    <h1 class="net-worth-title">Net Worth</h1>
+    <div class="net-worth-total {% if net_worth.net_worth > 0 %}net-positive{% elif net_worth.net_worth < 0 %}net-negative{% else %}net-zero{% endif %}">
+      {% if net_worth.net_worth < 0 %}−{% endif %}{{ cur_symbol }}{{ "{:,.2f}".format(net_worth.net_worth | abs) }}
+    </div>
+  </div>
+  <div class="net-worth-summary">
+    <span class="net-worth-pair">
+      <span class="muted text-sm">Assets</span>
+      <span class="numeric net-worth-asset">{{ cur_symbol }}{{ "{:,.2f}".format(net_worth.assets) }}</span>
+    </span>
+    <span class="net-worth-minus" aria-hidden="true">−</span>
+    <span class="net-worth-pair">
+      <span class="muted text-sm">Liabilities</span>
+      <span class="numeric net-worth-liability">{{ cur_symbol }}{{ "{:,.2f}".format(net_worth.liabilities) }}</span>
+    </span>
+  </div>
+  {% if net_worth.breakdown %}
+  <ul class="net-worth-breakdown">
+    {% for b in net_worth.breakdown %}
+    <li class="net-worth-bucket">
+      <span class="net-worth-bucket-label">{{ b.label }}
+        <span class="muted text-sm">· {{ b.count }} account{{ 's' if b.count != 1 else '' }}</span>
+      </span>
+      <span class="numeric net-worth-bucket-value {% if b.is_liability %}net-negative{% endif %}">
+        {% if b.is_liability %}−{% endif %}{{ cur_symbol }}{{ "{:,.2f}".format(b.total | abs) }}
+      </span>
+    </li>
+    {% endfor %}
+  </ul>
+  {% endif %}
+  {% if net_worth.mixed_currency %}
+  <p class="hint net-worth-fx-note">
+    Showing balances in {{ net_worth.home_currency }} only.
+    Accounts in other currencies
+    ({% for cur, _ in net_worth.by_currency.items() %}{% if cur != net_worth.home_currency %}{{ cur }}{% if not loop.last %}, {% endif %}{% endif %}{% endfor %})
+    are listed below but not summed (no FX conversion available).
+  </p>
+  {% endif %}
+</div>
+{% endif %}
+
 <div class="card">
   <div class="card-toolbar">
     <h1>Accounts</h1>

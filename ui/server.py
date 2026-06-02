@@ -1347,6 +1347,151 @@ def _get_accounts_grouped(user_id: Optional[str] = None) -> dict:
         conn.close()
 
 
+def _compute_net_worth(grouped: dict, home_currency: str = "CAD") -> dict:
+    """Compute a net-worth summary across the supplied grouped accounts (#322).
+
+    Plaid balance convention used here:
+      * depository / investment / loan account balances are taken as-is
+        (positive numbers represent money the user owns).
+      * credit-card balances are returned as positive amounts owed; we
+        negate them so they reduce net worth.
+
+    Returns::
+
+        {
+          "home_currency": "CAD",
+          "assets": float,        # sum of positive (asset) balances in home_currency
+          "liabilities": float,   # sum of liability balances (positive number)
+          "net_worth": float,     # assets - liabilities, in home_currency
+          "breakdown": [{"label", "total", "count"}, …],
+          "by_currency": {"CAD": {assets, liabilities, net}, "USD": …},
+          "mixed_currency": bool,
+          "has_data": bool,       # False when there are no real balances yet
+        }
+
+    When accounts hold currencies other than ``home_currency`` we surface
+    a per-currency breakdown rather than silently mis-summing them.
+    """
+    asset_subtypes = {
+        "chequing": "Chequing",
+        "checking": "Chequing",
+        "savings":  "Savings",
+        "cd":       "Savings",
+        "money market": "Savings",
+    }
+
+    def categorise(acct: dict) -> str:
+        """Return a coarse bucket label for a single bank_account row."""
+        t = (acct.get("type") or "").lower()
+        s = (acct.get("subtype") or "").lower()
+        if t == "credit":
+            return "Credit Cards"
+        if t == "loan":
+            return "Loans"
+        if t == "investment" or s in ("401k", "403b", "ira", "roth", "tfsa", "rrsp", "brokerage"):
+            return "Investments"
+        return asset_subtypes.get(s, "Cash")
+
+    buckets: dict = {}              # label -> {total, count, currencies}
+    by_currency: dict = {}          # currency -> {assets, liabilities, net}
+    has_data = False
+
+    for inst_name, data in (grouped or {}).items():
+        for acct in data.get("accounts", []):
+            balance = acct.get("balance_current")
+            if balance is None:
+                balance = acct.get("balance_available")
+            if balance is None:
+                continue  # never synced — skip
+            has_data = True
+            currency = (acct.get("currency") or home_currency).upper()
+            is_liability = (acct.get("type") or "").lower() == "credit"
+            # Net-worth sign: credit cards reduce net worth.
+            value = -float(balance) if is_liability else float(balance)
+            label = categorise(acct)
+
+            b = buckets.setdefault(label, {"total": 0.0, "count": 0, "currencies": set()})
+            b["total"] += value
+            b["count"] += 1
+            b["currencies"].add(currency)
+
+            c = by_currency.setdefault(currency, {"assets": 0.0, "liabilities": 0.0, "net": 0.0})
+            if is_liability:
+                c["liabilities"] += float(balance)
+            else:
+                c["assets"] += float(balance)
+            c["net"] = c["assets"] - c["liabilities"]
+
+    # Stable ordering: Cash, Savings, Investments, Credit Cards, Loans
+    order = ["Cash", "Savings", "Investments", "Credit Cards", "Loans"]
+    breakdown = []
+    for label in order:
+        if label in buckets:
+            b = buckets.pop(label)
+            breakdown.append({
+                "label": label,
+                "total": b["total"],
+                "count": b["count"],
+                "is_liability": label in ("Credit Cards", "Loans"),
+            })
+    # Any unknown buckets (e.g. a new Plaid subtype) trail at the end.
+    for label, b in buckets.items():
+        breakdown.append({
+            "label": label,
+            "total": b["total"],
+            "count": b["count"],
+            "is_liability": False,
+        })
+
+    currencies = set(by_currency.keys())
+    mixed = len(currencies) > 1
+    home_currency_upper = home_currency.upper()
+
+    if not mixed and (home_currency_upper in currencies or not currencies):
+        # All balances are in the user's home currency — safe to sum.
+        c = by_currency.get(home_currency_upper, {"assets": 0.0, "liabilities": 0.0})
+        assets = c["assets"]
+        liabilities = c["liabilities"]
+        net = assets - liabilities
+    else:
+        # Mixed currencies — the headline number is the home-currency slice
+        # only.  The template surfaces a hint when other currencies exist.
+        c = by_currency.get(home_currency_upper, {"assets": 0.0, "liabilities": 0.0})
+        assets = c["assets"]
+        liabilities = c["liabilities"]
+        net = assets - liabilities
+
+    return {
+        "home_currency": home_currency_upper,
+        "assets": assets,
+        "liabilities": liabilities,
+        "net_worth": net,
+        "breakdown": breakdown,
+        "by_currency": by_currency,
+        "mixed_currency": mixed,
+        "has_data": has_data,
+    }
+
+
+def _get_home_currency(uid: Optional[str]) -> str:
+    """Look up the active user's home currency, falling back to CAD."""
+    if not uid:
+        return "CAD"
+    try:
+        conn = get_db(_db_path())
+        try:
+            row = conn.execute(
+                "SELECT home_currency FROM users WHERE id = ?", (uid,)
+            ).fetchone()
+            if row and row["home_currency"]:
+                return str(row["home_currency"]).upper()
+        finally:
+            conn.close()
+    except Exception:
+        pass
+    return "CAD"
+
+
 @app.get("/accounts", response_class=HTMLResponse)
 def accounts_get(request: Request):
     """Accounts page — bank accounts grouped by institution with balances (#158)."""
@@ -1354,10 +1499,19 @@ def accounts_get(request: Request):
         return _redirect("/login")
     uid = _current_user_id(request)
     grouped = _get_accounts_grouped(uid)
+    home_currency = _get_home_currency(uid)
+    try:
+        net_worth = _compute_net_worth(grouped, home_currency=home_currency)
+    except Exception:
+        net_worth = None
     return templates.TemplateResponse(
         request,
         "accounts.html",
-        {"current_page": "accounts", "grouped_accounts": grouped},
+        {
+            "current_page": "accounts",
+            "grouped_accounts": grouped,
+            "net_worth": net_worth,
+        },
     )
 
 
