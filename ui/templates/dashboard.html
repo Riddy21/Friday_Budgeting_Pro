@@ -155,6 +155,64 @@
     </div>
   </section>
 
+  {% if needs_review_count and needs_review_count > 0 %}
+  <section>
+    <div class="alert alert-warning" style="display:flex;align-items:center;justify-content:space-between;gap:var(--space-3);flex-wrap:wrap;">
+      <span>
+        <strong>{{ needs_review_count }}</strong>
+        transaction{{ 's' if needs_review_count != 1 else '' }} need{{ '' if needs_review_count != 1 else 's' }} manual review.
+      </span>
+      <a href="/accounts" class="btn-secondary btn-sm">Review now</a>
+    </div>
+  </section>
+  {% endif %}
+
+  {% if top_categories %}
+  <section>
+    <h2>Top spending this month</h2>
+    <ul class="top-categories">
+      {% for cat in top_categories %}
+      <li class="top-category">
+        <div class="top-category-head">
+          <span class="top-category-name">{{ cat.line_item_name }}
+            <span class="muted text-sm">· {{ cat.ledger_name }}</span>
+          </span>
+          <span class="top-category-amount numeric">C${{ "%.2f"|format(cat.total) }}
+            <span class="muted text-sm">({{ cat.tx_count }})</span>
+          </span>
+        </div>
+        <div class="top-category-bar">
+          <div class="top-category-bar-fill" style="width: {{ cat.percent }}%"></div>
+        </div>
+      </li>
+      {% endfor %}
+    </ul>
+  </section>
+  {% endif %}
+
+  {% if recent_transactions %}
+  <section>
+    <h2>Recent transactions</h2>
+    <ul class="recent-tx-list">
+      {% for tx in recent_transactions %}
+      <li>
+        <span class="recent-tx-date">{{ tx.date }}</span>
+        <span class="recent-tx-merchant">{{ tx.merchant }}
+          {% if tx.line_item_name %}
+            <span class="muted text-sm">· {{ tx.line_item_name }}</span>
+          {% elif tx.pending %}
+            <span class="badge badge-default">Pending</span>
+          {% endif %}
+        </span>
+        <span class="recent-tx-amount {% if tx.amount < 0 %}net-positive{% else %}net-negative{% endif %}">
+          {% if tx.amount < 0 %}+{% else %}−{% endif %}C${{ "%.2f"|format(tx.amount | abs) }}
+        </span>
+      </li>
+      {% endfor %}
+    </ul>
+  </section>
+  {% endif %}
+
   <script>
   (function() {
     async function loadSavings() {

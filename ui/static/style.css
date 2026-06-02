@@ -955,9 +955,40 @@ html[data-theme="dark"] .savings-badge-red    { background: #450a0a; color: #fca
   border-bottom: 1px solid var(--border-subtle);
 }
 .recent-tx-list li:last-child { border-bottom: none; }
-.recent-tx-merchant { flex: 1; font-weight: 500; }
+.recent-tx-merchant { flex: 1; font-weight: 500; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .recent-tx-date     { color: var(--muted); font-size: var(--text-sm); white-space: nowrap; }
 .recent-tx-amount   { font-weight: 600; font-variant-numeric: tabular-nums; white-space: nowrap; }
+
+/* Top categories bar chart */
+.top-categories { list-style: none; padding: 0; margin: 0; }
+.top-category {
+  padding: var(--space-2) 0;
+  border-bottom: 1px solid var(--border-subtle);
+}
+.top-category:last-child { border-bottom: none; }
+.top-category-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-3);
+  margin-bottom: 6px;
+  flex-wrap: wrap;
+}
+.top-category-name { font-weight: 500; }
+.top-category-amount { font-weight: 600; white-space: nowrap; }
+.top-category-bar {
+  width: 100%;
+  height: 8px;
+  background: var(--bg-subtle);
+  border-radius: var(--radius-pill);
+  overflow: hidden;
+}
+.top-category-bar-fill {
+  height: 100%;
+  background: linear-gradient(90deg, var(--accent), var(--accent-hover));
+  border-radius: var(--radius-pill);
+  transition: width 0.4s ease;
+}
 
 /* ── 15. Mobile bottom nav ────────────────────────────────────────────── */
 

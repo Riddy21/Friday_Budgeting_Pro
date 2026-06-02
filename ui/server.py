@@ -1115,12 +1115,143 @@ def api_summary(request: Request, period: str = "this_month"):
         return JSONResponse({"error": str(exc)}, status_code=500)
 
 
+def _get_dashboard_widgets() -> dict:
+    """Server-side data for the dashboard widgets (#297).
+
+    Returns:
+        recent_transactions: last 8 classified transactions (most recent first)
+        needs_review_count:  number of transactions awaiting manual review
+        top_categories:      top 5 line items by spending this month
+    """
+    from datetime import date as _date
+    today = _date.today()
+    # Month range
+    month_start = today.replace(day=1).isoformat()
+    month_end = today.isoformat()
+
+    conn = get_db(_db_path())
+    try:
+        from ui.auth import get_active_user_id
+        uid = get_active_user_id(_db_path())
+
+        # ── Recent transactions ──────────────────────────────────────────
+        # Pull 8 most-recent transactions whose entry was classified for
+        # this user, joined with the line-item name and amount sign.
+        if uid:
+            recent_rows = conn.execute(
+                """
+                SELECT t.id, t.merchant, t.amount, t.date, t.currency,
+                       t.pending, ba.name AS account_name,
+                       li.name AS line_item_name,
+                       te.entry_type
+                  FROM transactions t
+                  JOIN bank_accounts ba ON ba.id = t.bank_account_id
+                  JOIN bank_connections bc ON bc.id = ba.connection_id
+                  LEFT JOIN transaction_entries te ON te.transaction_id = t.id
+                  LEFT JOIN line_items li ON li.id = te.line_item_id
+                 WHERE bc.user_id = ?
+                 ORDER BY t.date DESC, t.id DESC
+                 LIMIT 8
+                """,
+                (uid,),
+            ).fetchall()
+        else:
+            recent_rows = []
+        recent_transactions = [
+            {
+                "id": r["id"],
+                "merchant": r["merchant"] or "(unknown)",
+                "amount": r["amount"],
+                "date": r["date"],
+                "currency": r["currency"] or "CAD",
+                "pending": bool(r["pending"]),
+                "account_name": r["account_name"],
+                "line_item_name": r["line_item_name"],
+                "entry_type": r["entry_type"],
+            }
+            for r in recent_rows
+        ]
+
+        # ── Needs-review count ───────────────────────────────────────────
+        if uid:
+            cnt = conn.execute(
+                """
+                SELECT COUNT(*) AS c
+                  FROM transaction_entries te
+                  JOIN transactions t ON t.id = te.transaction_id
+                  JOIN bank_accounts ba ON ba.id = t.bank_account_id
+                  JOIN bank_connections bc ON bc.id = ba.connection_id
+                 WHERE bc.user_id = ?
+                   AND (te.uncertain = 1 OR te.line_item_id IS NULL)
+                """,
+                (uid,),
+            ).fetchone()
+            needs_review_count = int(cnt["c"] or 0) if cnt else 0
+        else:
+            needs_review_count = 0
+
+        # ── Top categories (this month, by absolute spending) ───────────
+        if uid:
+            top_rows = conn.execute(
+                """
+                SELECT li.name AS line_item_name, l.name AS ledger_name,
+                       SUM(ABS(te.amount)) AS total,
+                       COUNT(*) AS tx_count
+                  FROM transaction_entries te
+                  JOIN transactions t ON t.id = te.transaction_id
+                  JOIN bank_accounts ba ON ba.id = t.bank_account_id
+                  JOIN bank_connections bc ON bc.id = ba.connection_id
+                  JOIN line_items li ON li.id = te.line_item_id
+                  JOIN ledgers l ON l.id = li.ledger_id
+                 WHERE bc.user_id = ?
+                   AND te.entry_type = 'spending'
+                   AND t.date >= ? AND t.date <= ?
+                 GROUP BY te.line_item_id
+                 ORDER BY total DESC
+                 LIMIT 5
+                """,
+                (uid, month_start, month_end),
+            ).fetchall()
+        else:
+            top_rows = []
+        top_categories = [
+            {
+                "line_item_name": r["line_item_name"],
+                "ledger_name": r["ledger_name"],
+                "total": float(r["total"] or 0),
+                "tx_count": int(r["tx_count"] or 0),
+            }
+            for r in top_rows
+        ]
+        max_total = max((c["total"] for c in top_categories), default=0) or 1.0
+        for c in top_categories:
+            c["percent"] = round(100 * c["total"] / max_total, 1)
+
+        return {
+            "recent_transactions": recent_transactions,
+            "needs_review_count": needs_review_count,
+            "top_categories": top_categories,
+        }
+    finally:
+        conn.close()
+
+
 @app.get("/dashboard", response_class=HTMLResponse)
 def dashboard_get(request: Request):
     """Main dashboard page.  Requires authentication."""
     if not _is_authenticated(request):
         return _redirect("/login")
     last_synced = _get_last_synced_at()
+    try:
+        widgets = _get_dashboard_widgets()
+    except Exception:
+        # Widgets are non-critical — if the query fails for any reason,
+        # render the page without them rather than crashing.
+        widgets = {
+            "recent_transactions": [],
+            "needs_review_count": 0,
+            "top_categories": [],
+        }
     return templates.TemplateResponse(
         request,
         "dashboard.html",
@@ -1128,6 +1259,7 @@ def dashboard_get(request: Request):
             "current_page": "dashboard",
             "last_synced_at": last_synced,
             "action_result": None,
+            **widgets,
         },
     )
 
