@@ -718,12 +718,120 @@ html[data-theme="dark"] .net-negative { color: #f87171; }
   margin-left: var(--space-2);
 }
 
-/* Account-table specifics */
+/* Account-table specifics (legacy, kept for compat) */
 .account-table .acct-mask    { color: var(--muted); font-size: var(--text-sm); margin-left: 4px; }
 .account-table .acct-type    { color: var(--muted); font-size: var(--text-sm); }
 .account-table .acct-balance { text-align: right; font-weight: 600; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .account-table .acct-actions { text-align: right; white-space: nowrap; }
 .account-table .acct-actions .btn-sm { margin-left: 4px; }
+
+/* Compact account list (#329) */
+.acct-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+.acct-list-item {
+  border-bottom: 1px solid var(--border-subtle);
+}
+.acct-list-item:last-child { border-bottom: none; }
+
+/* The clickable account row (button) */
+.acct-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  width: 100%;
+  padding: var(--space-3) var(--space-4);
+  background: var(--surface);
+  border: none;
+  border-radius: 0;
+  cursor: pointer;
+  text-align: left;
+  font-family: var(--font);
+  font-size: var(--text-md);
+  color: var(--text);
+  transition: background 0.12s;
+  min-height: var(--tap);
+}
+.acct-row:hover { background: var(--bg-subtle); }
+.acct-row[aria-expanded="true"] { background: var(--accent-soft); }
+
+.acct-row-main {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex: 1;
+  min-width: 0;
+  flex-wrap: wrap;
+}
+.acct-row-right {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  flex-shrink: 0;
+}
+
+.acct-row .acct-name {
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.acct-row .acct-mask {
+  color: var(--muted);
+  font-size: var(--text-sm);
+}
+.acct-type-pill {
+  display: inline-block;
+  padding: 1px 7px;
+  border-radius: var(--radius-pill);
+  font-size: var(--text-xs);
+  font-weight: 500;
+  background: var(--bg-subtle);
+  border: 1px solid var(--border-subtle);
+  color: var(--muted);
+  text-transform: capitalize;
+  white-space: nowrap;
+}
+.acct-row .acct-balance {
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  color: var(--muted-strong);
+}
+.acct-chevron {
+  color: var(--muted);
+  font-size: var(--text-lg);
+  line-height: 1;
+  transition: transform 0.2s;
+}
+.acct-row[aria-expanded="true"] .acct-chevron { transform: rotate(90deg); }
+
+/* Expand panel */
+.acct-expand-panel {
+  border-top: 1px solid var(--border-subtle);
+  background: var(--bg-subtle);
+}
+.acct-expand-panel[hidden] { display: none; }
+.acct-expand-inner {
+  padding: var(--space-3) var(--space-4);
+}
+.acct-expand-actions {
+  display: flex;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+  margin-bottom: var(--space-2);
+}
+.acct-expand-inner .txn-expand-inner {
+  margin-top: var(--space-2);
+  border-top: 1px solid var(--border-subtle);
+  padding-top: var(--space-2);
+}
 
 /* On phones: convert the accounts table to a stacked card layout so the
    action buttons aren't clipped. */
