@@ -17,6 +17,30 @@
     <a href="/ledgers?period=all" class="{% if period == 'all' %}active{% endif %}" aria-current="{% if period == 'all' %}page{% endif %}">All time</a>
   </div>
 
+  {# ── Custom date range picker (#330) ── #}
+  <form class="custom-range-form" method="get" action="/ledgers" id="custom-range-form">
+    <div class="custom-range-row">
+      <label class="custom-range-label" for="date_from">From</label>
+      <input type="date" id="date_from" name="date_from" class="custom-range-input"
+        value="{{ date_from }}" placeholder="YYYY-MM-DD">
+      <label class="custom-range-label" for="date_to">To</label>
+      <input type="date" id="date_to" name="date_to" class="custom-range-input"
+        value="{{ date_to }}" placeholder="YYYY-MM-DD">
+      <button type="submit" class="btn-primary btn-sm">Apply</button>
+      {% if period == 'custom' %}
+      <a href="/ledgers" class="btn-secondary btn-sm">Clear</a>
+      {% endif %}
+    </div>
+  </form>
+
+  {# ── Transaction search bar (#330) ── #}
+  <div class="ledger-search-row">
+    <input type="search" id="ledger-search" class="ledger-search-input"
+      placeholder="Search transactions by merchant…" autocomplete="off"
+      aria-label="Search transactions">
+    <span class="ledger-search-count" id="ledger-search-count" aria-live="polite"></span>
+  </div>
+
   <div id="add-ledger-form" class="action-row" style="display:none;margin-bottom:1em;">
     <input type="text" id="new-ledger-name" placeholder="Ledger name" style="flex:1">
     <button class="btn-primary" id="btn-add-ledger-submit">Create</button>
@@ -467,6 +491,59 @@
     btn.classList.toggle("expanded", !isOpen);
     btn.setAttribute("aria-expanded", !isOpen);
   });
+
+  // ── Transaction search (#330) ────────────────────────────────────────────
+  (function () {
+    var searchInput = document.getElementById("ledger-search");
+    var countEl    = document.getElementById("ledger-search-count");
+    if (!searchInput) return;
+
+    function normalise(s) { return String(s).toLowerCase().trim(); }
+
+    searchInput.addEventListener("input", function () {
+      var q = normalise(searchInput.value);
+      var allCards = document.querySelectorAll(".txn-card");
+      var matched = 0;
+      var matchedItems = new Set();
+
+      allCards.forEach(function (card) {
+        var merchantEl = card.querySelector(".txn-card-merchant");
+        var merchantText = merchantEl ? normalise(merchantEl.textContent) : "";
+        var hit = !q || merchantText.includes(q);
+        card.style.display = hit ? "" : "none";
+        if (hit) {
+          matched++;
+          var detailRow = card.closest(".txn-detail-row");
+          if (detailRow) matchedItems.add(detailRow.dataset.parentItemId);
+        }
+      });
+
+      if (q) {
+        // Auto-expand rows with matches, hide drilldown rows without matches
+        document.querySelectorAll(".txn-detail-row").forEach(function (dr) {
+          var itemId = dr.dataset.parentItemId;
+          var hasMatch = matchedItems.has(itemId);
+          dr.style.display = hasMatch ? "" : "none";
+          var expandBtn = document.querySelector(".btn-expand-item[data-item-id='" + itemId + "']");
+          if (expandBtn) {
+            expandBtn.classList.toggle("expanded", hasMatch);
+            expandBtn.setAttribute("aria-expanded", hasMatch);
+          }
+        });
+        countEl.textContent = matched + " match" + (matched !== 1 ? "es" : "");
+      } else {
+        // Clear: collapse all drilldown rows and reset card visibility
+        document.querySelectorAll(".txn-detail-row").forEach(function (dr) {
+          dr.style.display = "none";
+          var itemId = dr.dataset.parentItemId;
+          var expandBtn = document.querySelector(".btn-expand-item[data-item-id='" + itemId + "']");
+          if (expandBtn) { expandBtn.classList.remove("expanded"); expandBtn.setAttribute("aria-expanded", false); }
+        });
+        allCards.forEach(function (c) { c.style.display = ""; });
+        countEl.textContent = "";
+      }
+    });
+  })();
 })();
 </script>
 {% endblock %}

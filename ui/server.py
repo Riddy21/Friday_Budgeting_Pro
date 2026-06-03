@@ -259,6 +259,8 @@ def _get_ledgers(
     user_id: Optional[str] = None,
     with_drilldown: bool = False,
     period: Optional[str] = "this_month",
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
 ) -> list[dict]:
     """Query ledgers + line_items from the DB and return a list of dicts.
 
@@ -273,6 +275,11 @@ def _get_ledgers(
     period :
         Date filter applied to transactions: ``"this_month"``, ``"last_month"``,
         ``"last_3_months"``, ``"this_year"``, ``"all"``, or ``None`` (all time).
+        Ignored when ``date_from`` or ``date_to`` is supplied.
+    date_from : str | None
+        Custom range start date (``YYYY-MM-DD``, inclusive).
+    date_to : str | None
+        Custom range end date (``YYYY-MM-DD``, inclusive).
     """
     from server.main import _build_ledger_drilldown
 
@@ -295,7 +302,10 @@ def _get_ledgers(
         ledgers = []
         for lr in ledger_rows:
             if with_drilldown:
-                drilldown = _build_ledger_drilldown(conn, lr, period=drilldown_period)
+                drilldown = _build_ledger_drilldown(
+                    conn, lr, period=drilldown_period,
+                    date_from=date_from, date_to=date_to,
+                )
                 ledgers.append(
                     {
                         "id": lr["id"],
@@ -2018,7 +2028,12 @@ _VALID_PERIODS = {"this_month", "last_month", "last_3_months", "this_year", "all
 
 
 @app.get("/ledgers", response_class=HTMLResponse)
-def ledgers_get(request: Request, period: str = "this_month"):
+def ledgers_get(
+    request: Request,
+    period: str = "this_month",
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
+):
     """Read-only ledger tree with optional date-range filter.  Requires authentication.
 
     Queries the DB directly because server.main.list_ledgers() is still a
@@ -2028,21 +2043,45 @@ def ledgers_get(request: Request, period: str = "this_month"):
     ------------
     period : str
         One of ``this_month`` (default), ``last_month``, ``last_3_months``,
-        ``this_year``, ``all``.
+        ``this_year``, ``all``.  Ignored when ``date_from`` or ``date_to``
+        is supplied.
+    date_from : str | None
+        Custom range start (``YYYY-MM-DD``, inclusive).  When set, overrides
+        ``period``.
+    date_to : str | None
+        Custom range end (``YYYY-MM-DD``, inclusive).  When set, overrides
+        ``period``.
     """
+    import re as _re
+    _ISO_RE = _re.compile(r"^\d{4}-\d{2}-\d{2}$")
+
     if not _is_authenticated(request):
         return _redirect("/login")
-    # Reject unknown period values and fall back to default
-    if period not in _VALID_PERIODS:
+
+    # Validate custom date range; silently discard malformed values.
+    if date_from and not _ISO_RE.match(date_from):
+        date_from = None
+    if date_to and not _ISO_RE.match(date_to):
+        date_to = None
+
+    # When a custom range is supplied, treat period as "custom" (no preset).
+    using_custom_range = bool(date_from or date_to)
+    if using_custom_range:
+        period = "custom"
+    elif period not in _VALID_PERIODS:
+        # Reject unknown period values and fall back to default
         period = "this_month"
+
     uid = _current_user_id(request)
-    ledgers = _get_ledgers(uid, with_drilldown=True, period=period)
-    # Auto-fallback: if this_month has no data, silently show last_month instead.
-    if period == "this_month" and all(
+    ledgers = _get_ledgers(
+        uid, with_drilldown=True, period=period,
+        date_from=date_from, date_to=date_to,
+    )
+    # Auto-fallback: if this_month has no data, silently show last_month instead
+    # (only when not using a custom range).
+    if not using_custom_range and period == "this_month" and all(
         sum(li["total"] for li in ldr["line_items"]) == 0 for ldr in ledgers
     ):
-        from datetime import date as _lm_date
-        _lm_today = _lm_date.today()
         fallback_ledgers = _get_ledgers(uid, with_drilldown=True, period="last_month")
         if any(
             sum(li["total"] for li in ldr["line_items"]) != 0
@@ -2053,7 +2092,13 @@ def ledgers_get(request: Request, period: str = "this_month"):
     return templates.TemplateResponse(
         request,
         "ledgers.html",
-        {"current_page": "ledgers", "ledgers": ledgers, "period": period},
+        {
+            "current_page": "ledgers",
+            "ledgers": ledgers,
+            "period": period,
+            "date_from": date_from or "",
+            "date_to": date_to or "",
+        },
     )
 
 

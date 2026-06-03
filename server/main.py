@@ -897,6 +897,8 @@ def _build_ledger_drilldown(
     conn,
     ledger_row: dict,
     period: str | None = "this_month",
+    date_from: str | None = None,
+    date_to: str | None = None,
 ) -> dict:
     """Return a ledger dict with line_items + transactions per item and totals.
 
@@ -913,6 +915,12 @@ def _build_ledger_drilldown(
         - ``"last_month"``  — previous calendar month
         - ``"this_year"``   — current calendar year
         - ``None``          — all time
+        When ``date_from`` or ``date_to`` is supplied this parameter is
+        ignored and the custom range takes precedence.
+    date_from : str | None
+        ISO date (``YYYY-MM-DD``) inclusive lower bound for the custom range.
+    date_to : str | None
+        ISO date (``YYYY-MM-DD``) inclusive upper bound for the custom range.
     """
     from datetime import datetime as _dt
 
@@ -920,7 +928,17 @@ def _build_ledger_drilldown(
     date_filter_sql = ""
     date_params: list = []
 
-    if period is not None:
+    # Custom date range overrides preset period -------------------------
+    if date_from or date_to:
+        parts = []
+        if date_from:
+            parts.append("t.date >= ?")
+            date_params.append(date_from)
+        if date_to:
+            parts.append("t.date <= ?")
+            date_params.append(date_to)
+        date_filter_sql = " AND " + " AND ".join(parts)
+    elif period is not None:
         now = _dt.now()
         if period == "this_month":
             start = _dt(now.year, now.month, 1).strftime("%Y-%m-%d")

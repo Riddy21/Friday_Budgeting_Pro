@@ -817,6 +817,71 @@ html[data-theme="dark"] .net-negative { color: #f87171; }
   font-weight: 600;
 }
 
+/* Custom date range form (#330) */
+.custom-range-form {
+  margin-bottom: var(--space-3);
+}
+.custom-range-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+.custom-range-label {
+  font-size: var(--text-sm);
+  color: var(--muted);
+  white-space: nowrap;
+  font-weight: 500;
+}
+.custom-range-input {
+  width: auto;
+  min-height: 36px;
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-size: var(--text-sm);
+  font-family: var(--font);
+  color: var(--text);
+  background: var(--surface-sunken);
+  cursor: pointer;
+}
+.custom-range-input:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.18);
+}
+
+/* Ledger transaction search bar (#330) */
+.ledger-search-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  margin-bottom: var(--space-4);
+}
+.ledger-search-input {
+  flex: 1;
+  min-height: 40px;
+  padding: 8px 14px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-size: var(--text-md);
+  font-family: var(--font);
+  color: var(--text);
+  background: var(--surface-sunken);
+}
+.ledger-search-input:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.18);
+}
+.ledger-search-count {
+  font-size: var(--text-sm);
+  color: var(--muted);
+  white-space: nowrap;
+  min-width: 6em;
+  text-align: right;
+}
+
 /* Ledger / line-item rows */
 .item-total-cell  { text-align: right; white-space: nowrap; padding-right: var(--space-2); color: var(--muted-strong); font-size: var(--text-md); }
 .item-count-cell  { white-space: nowrap; color: var(--muted); font-size: var(--text-sm); padding-right: var(--space-2); }
