@@ -2297,11 +2297,20 @@ def link_start(request: Request, back: Optional[str] = None):
 
 
 @app.get("/link", response_class=HTMLResponse)
-def link_get(request: Request, token: Optional[str] = None, back: Optional[str] = None):
+def link_get(
+    request: Request,
+    token: Optional[str] = None,
+    back: Optional[str] = None,
+    connection_id: Optional[str] = None,
+):
     """Plaid Link JS embed.
 
     Accepts ?token=<link_token> from whoever generates the link token
     (setup wizard, profile page, or an MCP-issued URL).
+
+    When ``connection_id`` is present (set by ``refresh_connection``) the page
+    operates in **Update Mode** — on success, ``/link/complete`` will update
+    the existing connection instead of creating a new one.
 
     Loopback-only binding is enforced by daemon.py; this route just renders
     the embed.
@@ -2316,6 +2325,7 @@ def link_get(request: Request, token: Optional[str] = None, back: Optional[str] 
             "link_token": token,
             "complete_url": "/link/complete",
             "back_url": back_url,
+            "connection_id": connection_id,
         },
     )
 
@@ -2327,6 +2337,10 @@ async def link_complete(request: Request):
     Called by the Plaid Link success callback via a hidden form POST.
     Stores the bank connection, triggers an initial sync to populate
     bank_accounts, then redirects to /accounts.
+
+    When ``connection_id`` is present in the form data this is an **Update
+    Mode** completion — the existing connection is updated in-place rather
+    than creating a duplicate.
     """
     if not _is_authenticated(request):
         return _redirect("/login")
@@ -2334,10 +2348,11 @@ async def link_complete(request: Request):
     public_token = (form.get("public_token") or "").strip()
     if not public_token:
         return _redirect("/accounts?error=missing_token")
+    connection_id = (form.get("connection_id") or "").strip() or None
     try:
         import server.main as _sm_cl
 
-        _sm_cl.complete_link(public_token=public_token)
+        _sm_cl.complete_link(public_token=public_token, connection_id=connection_id)
     except Exception as exc:  # noqa: BLE001
         import logging
 

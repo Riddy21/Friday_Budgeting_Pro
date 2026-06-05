@@ -457,15 +457,16 @@ def start_link(plaid_env: str | None = None) -> dict:
 
 
 @mcp.tool
-def complete_link(public_token: str, plaid_env: str | None = None) -> dict:
+def complete_link(
+    public_token: str,
+    plaid_env: str | None = None,
+    connection_id: str | None = None,
+) -> dict:
     """Exchange a Plaid public token and store the access token.
 
     Exchanges the public_token for a Plaid access_token + item_id, encrypts
-    the access token via server.crypto, and inserts a new row into
-    bank_connections.  Returns the new connection_id.
-
-    institution_name is left NULL for now — fetching it requires
-    Plaid /institutions/get_by_id which is out of scope; see issue #34.
+    the access token via server.crypto, and either inserts a new row into
+    bank_connections (normal mode) or updates an existing one (Update Mode).
 
     Parameters
     ----------
@@ -475,7 +476,17 @@ def complete_link(public_token: str, plaid_env: str | None = None) -> dict:
         the value is read from the ``PLAID_ENV`` environment variable
         (falling back to ``'sandbox'`` if unset).  Stored on the connection
         row so every subsequent sync uses the correct environment.
+    connection_id : str or None
+        When provided, this is treated as **Update Mode** — the user just
+        re-authenticated an existing connection.  Instead of inserting a new
+        row, the existing ``bank_connections`` row is updated in-place:
+        its ``status`` is set to ``'active'``, ``last_synced_at`` is refreshed,
+        and the encrypted access token is re-stored (Plaid returns the same
+        token after re-auth, but we refresh it for safety).  No duplicate row
+        is created.
     """
+    import time as _time
+
     uid = get_active_user_id(server.paths.DB_PATH)
     db_client_id, db_secret, db_env = _get_plaid_credentials(uid)
     resolved_env = plaid_env or db_env
@@ -484,6 +495,42 @@ def complete_link(public_token: str, plaid_env: str | None = None) -> dict:
     access_token = result["access_token"]
     item_id = result["item_id"]
 
+    encrypted_token = server.crypto.encrypt(access_token)
+
+    # ------------------------------------------------------------------ #
+    # Update Mode: re-auth an existing connection — update, don’t insert  #
+    # ------------------------------------------------------------------ #
+    if connection_id is not None:
+        conn = get_db(server.paths.DB_PATH)
+        try:
+            conn.execute(
+                """
+                UPDATE bank_connections
+                SET status = 'active',
+                    last_synced_at = ?,
+                    plaid_access_token_encrypted = ?,
+                    plaid_item_id = ?
+                WHERE id = ?
+                """,
+                (int(_time.time()), encrypted_token, item_id, connection_id),
+            )
+            # Keep the revocation log current with the refreshed token.
+            conn.execute(
+                """
+                UPDATE plaid_revocation_log
+                SET access_token_encrypted = ?
+                WHERE plaid_item_id = ?
+                """,
+                (encrypted_token, item_id),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+        return {"connection_id": connection_id, "institution_name": None, "update_mode": True}
+
+    # ------------------------------------------------------------------ #
+    # Normal Mode: new connection — insert a fresh row                     #
+    # ------------------------------------------------------------------ #
     # Fetch institution name via /item/get + /institutions/get_by_id
     institution_name: str | None = None
     try:
@@ -495,8 +542,7 @@ def complete_link(public_token: str, plaid_env: str | None = None) -> dict:
             "complete_link: could not fetch institution name: %s", _inst_exc
         )
 
-    encrypted_token = server.crypto.encrypt(access_token)
-    connection_id = str(uuid.uuid4())
+    new_connection_id = str(uuid.uuid4())
 
     conn = get_db(server.paths.DB_PATH)
     try:
@@ -507,7 +553,7 @@ def complete_link(public_token: str, plaid_env: str | None = None) -> dict:
                  status, user_id, plaid_env)
             VALUES (?, ?, ?, ?, 'active', ?, ?)
             """,
-            (connection_id, item_id, encrypted_token, institution_name, uid, provider.env),
+            (new_connection_id, item_id, encrypted_token, institution_name, uid, provider.env),
         )
         # Mirror the token into the revocation log so wipe.py and
         # retry_pending_revocations() can revoke it even after the
@@ -524,7 +570,7 @@ def complete_link(public_token: str, plaid_env: str | None = None) -> dict:
     finally:
         conn.close()
 
-    return {"connection_id": connection_id, "institution_name": institution_name}
+    return {"connection_id": new_connection_id, "institution_name": institution_name}
 
 
 @mcp.tool
@@ -663,17 +709,40 @@ def get_connections_needing_attention() -> dict:
 def refresh_connection(id: str) -> dict:
     """Trigger an Update Mode Plaid Link for an existing connection.
 
-    Generates a new Plaid Link token for Update Mode.  The plaid-python SDK
-    supports passing an access_token to create_link_token() for proper Update
-    Mode, but our wrapper does not yet expose that parameter — see TODO below.
+    Fetches the stored access token for *id*, decrypts it, and passes it to
+    Plaid's ``create_link_token`` as the ``access_token`` parameter.  This
+    produces a true Update Mode link token so the user re-authenticates their
+    existing connection in-place instead of creating a brand-new one.
 
-    TODO: Pass the decrypted access_token to create_link_token() for a true
-    Update Mode link token (requires plaid_client.create_link_token to accept
-    an optional access_token kwarg).  Tracked in issue #34.
+    The returned URL includes ``connection_id=<id>`` so that ``/link/complete``
+    can call ``complete_link(connection_id=...)`` and update the existing row
+    rather than inserting a duplicate.
     """
-    # For now, generate a fresh link token (same as start_link)
-    link_token = _plaid.create_link_token()
-    return {"url": f"http://127.0.0.1:6789/link?token={link_token}"}
+    uid = get_active_user_id(server.paths.DB_PATH)
+    db_client_id, db_secret, db_env = _get_plaid_credentials(uid)
+
+    db = get_db(server.paths.DB_PATH)
+    try:
+        row = db.execute(
+            "SELECT plaid_access_token_encrypted, plaid_env "
+            "FROM bank_connections WHERE id = ?",
+            (id,),
+        ).fetchone()
+    finally:
+        db.close()
+
+    if row is None:
+        return {"error": f"Connection {id!r} not found"}
+
+    access_token = server.crypto.decrypt(row["plaid_access_token_encrypted"])
+    plaid_env = row["plaid_env"] or db_env
+
+    provider = PlaidProvider(env=plaid_env, client_id=db_client_id, secret=db_secret)
+    link_token = provider.create_link_token(access_token=access_token)
+    return {
+        "url": f"http://127.0.0.1:6789/link?token={link_token}&connection_id={id}",
+        "connection_id": id,
+    }
 
 
 @mcp.tool
@@ -737,6 +806,34 @@ def disconnect(id: str) -> dict:
                     (plaid_item_id,),
                 )
             # On failure leave revoked=0 so retry_pending_revocations() can retry
+
+        # Cascade-delete all rows that reference this connection, in FK order.
+        # bank_accounts → transactions → transaction_entries
+        # Without this the DELETE on bank_connections raises a FK constraint.
+        conn.execute(
+            """
+            DELETE FROM transaction_entries
+            WHERE transaction_id IN (
+                SELECT t.id FROM transactions t
+                JOIN bank_accounts ba ON ba.id = t.bank_account_id
+                WHERE ba.connection_id = ?
+            )
+            """,
+            (id,),
+        )
+        conn.execute(
+            """
+            DELETE FROM transactions
+            WHERE bank_account_id IN (
+                SELECT id FROM bank_accounts WHERE connection_id = ?
+            )
+            """,
+            (id,),
+        )
+        conn.execute(
+            "DELETE FROM bank_accounts WHERE connection_id = ?",
+            (id,),
+        )
         conn.execute(
             "DELETE FROM sync_cursors WHERE connection_id = ?",
             (id,),
