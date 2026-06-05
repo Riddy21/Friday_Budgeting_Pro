@@ -3808,6 +3808,55 @@ def undo_auto_promoted_rule(rule_id: str) -> dict:
 # ---------------------------------------------------------------------------
 
 
+def _merge_env_keys(env_path: Path, updates: dict) -> str:
+    """Return .env file text with *updates* applied, preserving all other keys.
+
+    Reads the existing file (if any), replaces the value of each key that
+    appears in *updates*, and appends any keys that were not already present.
+    Lines that do not look like KEY=VALUE assignments (blank lines, comments,
+    lines without ``=``) are preserved verbatim.
+
+    Parameters
+    ----------
+    env_path : Path
+        Path to the .env file.  May not exist yet.
+    updates : dict[str, str]
+        Mapping of key → new value to inject.
+
+    Returns
+    -------
+    str
+        The complete new file content (does NOT write to disk).
+    """
+    existing_lines: list[str] = []
+    if env_path.exists():
+        existing_lines = env_path.read_text().splitlines(keepends=True)
+        # Ensure last line ends with newline so appended keys are on their own line.
+        if existing_lines and not existing_lines[-1].endswith("\n"):
+            existing_lines[-1] += "\n"
+
+    remaining_updates = dict(updates)  # keys we still need to write
+    new_lines: list[str] = []
+    for line in existing_lines:
+        stripped = line.strip()
+        # Check whether this line sets one of the keys we want to update.
+        matched_key = None
+        for key in [*remaining_updates]:  # avoid shadowed builtin `list` (MCP tool)
+            if stripped == key or stripped.startswith(f"{key}="):
+                matched_key = key
+                break
+        if matched_key is not None:
+            new_lines.append(f"{matched_key}={remaining_updates.pop(matched_key)}\n")
+        else:
+            new_lines.append(line)
+
+    # Append any keys that were not already present in the file.
+    for key, value in remaining_updates.items():
+        new_lines.append(f"{key}={value}\n")
+
+    return "".join(new_lines)
+
+
 @mcp.tool
 def configure_plaid(
     client_id: str,
@@ -3884,15 +3933,24 @@ def configure_plaid(
         )
 
     # --- Also write .env as fallback for initial daemon startup ---
+    # Safe merge: update ONLY the three Plaid keys and leave every other key
+    # (OPENCLAW_API_URL, OPENCLAW_GATEWAY_TOKEN, ANTHROPIC_API_KEY, …) intact.
+    # This prevents configure_plaid from silently destroying unrelated secrets
+    # that live in the same .env file.  See issue #337.
     env_path = project_root / ".env"
-    content = f"PLAID_CLIENT_ID={client_id}\nPLAID_SECRET={secret}\nPLAID_ENV={env}\n"
+    plaid_updates = {
+        "PLAID_CLIENT_ID": client_id,
+        "PLAID_SECRET": secret,
+        "PLAID_ENV": env,
+    }
+    merged_content = _merge_env_keys(env_path, plaid_updates)
 
     # Atomic write: write to a sibling temp file, then os.replace into place.
     env_path.parent.mkdir(parents=True, exist_ok=True)
     fd, tmp_path_str = tempfile.mkstemp(dir=env_path.parent, prefix=".env.tmp")
     try:
         with os.fdopen(fd, "w") as fh:
-            fh.write(content)
+            fh.write(merged_content)
     except Exception:
         try:
             os.unlink(tmp_path_str)
@@ -3909,7 +3967,7 @@ def configure_plaid(
     os.environ["PLAID_SECRET"] = secret
     os.environ["PLAID_ENV"] = env
 
-    _logger.info("configure_plaid: wrote .env (env=%s)", env)
+    _logger.info("configure_plaid: wrote .env with safe merge (env=%s)", env)
 
     return {"ok": True, "env": env}
 

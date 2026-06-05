@@ -107,8 +107,10 @@ def _load_plaid_config_from_db() -> None:
         os.environ["PLAID_SECRET"] = row["secret"]
         os.environ["PLAID_ENV"] = row["plaid_env"]
         log.info(
-            "_load_plaid_config_from_db: Plaid credentials loaded from DB (env=%s).",
+            "_load_plaid_config_from_db: Plaid credentials loaded from DB — "
+            "env=%s client_id=%s",
             row["plaid_env"],
+            row["client_id"],
         )
     except Exception as exc:  # noqa: BLE001
         log.warning(
@@ -250,6 +252,22 @@ def main() -> None:
     #    provides the baseline; DB values override it).  Ensures sync() works
     #    immediately after a daemon restart without calling configure_plaid.
     _load_plaid_config_from_db()
+
+    # 3b. Startup validation: log which Plaid credentials are active so it's
+    #     easy to verify the right keys loaded (client_id only — never log secret).
+    active_client_id = os.environ.get("PLAID_CLIENT_ID", "<not set>")
+    active_env = os.environ.get("PLAID_ENV", "<not set>")
+    if active_client_id == "<not set>":
+        log.warning(
+            "Plaid startup validation: NO credentials loaded — Plaid features will "
+            "not work until configure_plaid() is called."
+        )
+    else:
+        log.info(
+            "Plaid startup validation: active env=%s client_id=%s",
+            active_env,
+            active_client_id,
+        )
 
     # 4. Crypto initialisation (graceful fallback for headless/CI environments).
     #    See module docstring for the trade-off rationale.
