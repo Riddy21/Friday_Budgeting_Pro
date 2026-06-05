@@ -519,6 +519,7 @@ html[data-theme="dark"] select {
 .alert-success { background: var(--success-bg); border-color: var(--success-border); color: var(--success-fg); }
 .alert-warning { background: var(--warning-bg); border-color: var(--warning-border); color: var(--warning-fg); }
 .alert-info    { background: var(--info-bg);    border-color: var(--info-border);    color: var(--info-fg); }
+.reauth-banner { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: var(--space-2); }
 
 /* ── 9. Tables ────────────────────────────────────────────────────────── */
 

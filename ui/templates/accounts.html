@@ -54,14 +54,51 @@
     <a href="/link/start" class="btn-primary">+ Connect a bank</a>
   </div>
 
+  {# Re-auth banners for connections that need attention #}
+  {% set reauth_statuses = ['needs_reauth', 'pending_expiration'] %}
+  {% for institution, data in grouped_accounts.items() %}
+    {% if data.status in reauth_statuses %}
+    <div class="alert alert-warning reauth-banner" id="reauth-banner-{{ data.connection_id }}" role="alert">
+      <span>
+        {% if data.status == 'needs_reauth' %}
+          ⚠️ <strong>{{ institution }}</strong> needs to be re-connected — your session has expired and transactions are no longer syncing.
+        {% else %}
+          ⚠️ <strong>{{ institution }}</strong>'s connection is expiring soon. Re-connect to keep transactions syncing.
+        {% endif %}
+      </span>
+      <button
+        type="button"
+        class="btn-warning btn-sm reauth-btn"
+        data-connection-id="{{ data.connection_id }}"
+        data-institution="{{ institution }}"
+        style="margin-left: 1rem;"
+      >Re-connect</button>
+    </div>
+    {% endif %}
+  {% endfor %}
+
   {% if not grouped_accounts %}
   <p class="hint">No bank accounts connected yet. <a href="/link/start">Connect a bank</a> to get started.</p>
   {% else %}
   {% for institution, data in grouped_accounts.items() %}
   <section class="institution-group">
     <div class="institution-header">
-      <h2>── {{ institution }}{% if data.syncing %} <span class="institution-syncing">⏳ syncing…</span>{% endif %}</h2>
+      <h2>── {{ institution }}{% if data.syncing %} <span class="institution-syncing">⏳ syncing…</span>{% endif %}
+        {% if data.status in reauth_statuses %}
+        <span class="status-pill status-{{ data.status }}" style="font-size:0.75rem;vertical-align:middle;margin-left:0.5rem;">
+          {{ 'needs re-auth' if data.status == 'needs_reauth' else 'expiring soon' }}
+        </span>
+        {% endif %}
+      </h2>
       <div class="institution-actions">
+        {% if data.status in reauth_statuses %}
+        <button
+          type="button"
+          class="btn-warning btn-sm reauth-btn"
+          data-connection-id="{{ data.connection_id }}"
+          data-institution="{{ institution }}"
+        >Re-connect</button>
+        {% endif %}
         <button type="button" class="btn-secondary btn-sm copy-token-btn"
           data-connection-id="{{ data.connection_id }}">
           Copy token
@@ -289,6 +326,44 @@ document.querySelectorAll('.rename-btn').forEach(btn => {
     }, { once: true });
   });
 });
+
+// ── Re-connect (re-auth) ───────────────────────────────────────────────
+// Opens Plaid Link Update Mode in the current tab, then dismisses the
+// warning banner on success.  Works for both the top-level banner and
+// the inline button inside each institution header.
+document.querySelectorAll('.reauth-btn').forEach(btn => {
+  btn.addEventListener('click', async function() {
+    const connectionId = btn.dataset.connectionId;
+    const institution = btn.dataset.institution || 'this bank';
+    btn.disabled = true;
+    btn.textContent = 'Loading…';
+    try {
+      const resp = await fetch(`/api/connections/${connectionId}/refresh`, { method: 'POST' });
+      const data = await resp.json();
+      if (!resp.ok || data.error) {
+        throw new Error(data.error || `HTTP ${resp.status}`);
+      }
+      const url = data.url;
+      if (!url) throw new Error('No URL returned');
+      // Navigate to the Plaid Link page for re-auth.
+      // On return, the banner and status badge will reflect the updated status.
+      window.location.href = url;
+    } catch(e) {
+      btn.disabled = false;
+      btn.textContent = 'Re-connect';
+      alert(`Could not start re-auth for ${institution}: ${e.message}`);
+    }
+  });
+});
+
+// Dismiss banner if the user just returned from a successful re-auth
+// (?linked=1 is set by /link/complete).
+(function() {
+  const params = new URLSearchParams(window.location.search);
+  if (params.get('linked') === '1') {
+    document.querySelectorAll('.reauth-banner').forEach(el => el.remove());
+  }
+})();
 
 // ── Copy access token ─────────────────────────────────────────────────────
 document.querySelectorAll('.copy-token-btn').forEach(btn => {

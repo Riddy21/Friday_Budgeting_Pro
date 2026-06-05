@@ -1289,14 +1289,14 @@ def _get_accounts_grouped(user_id: Optional[str] = None) -> dict:
         # --- Connections (always present after link) ---
         if user_id:
             bc_rows = conn.execute(
-                "SELECT id, institution_name, last_synced_at"
+                "SELECT id, institution_name, last_synced_at, status"
                 "  FROM bank_connections WHERE user_id = ?"
                 " ORDER BY institution_name",
                 (user_id,),
             ).fetchall()
         else:
             bc_rows = conn.execute(
-                "SELECT id, institution_name, last_synced_at"
+                "SELECT id, institution_name, last_synced_at, status"
                 "  FROM bank_connections ORDER BY institution_name"
             ).fetchall()
 
@@ -1305,6 +1305,7 @@ def _get_accounts_grouped(user_id: Optional[str] = None) -> dict:
         for bc in bc_rows:
             grouped[bc["institution_name"] or "Unknown Institution"] = {
                 "connection_id": bc["id"],
+                "status": bc["status"] or "active",
                 "accounts": [],
                 "hidden_count": 0,
                 "syncing": bc["last_synced_at"] is None,
@@ -1339,8 +1340,13 @@ def _get_accounts_grouped(user_id: Optional[str] = None) -> dict:
         for r in rows:
             inst = r["institution_name"] or "Unknown Institution"
             if inst not in grouped:
+                conn_status_row = conn.execute(
+                    "SELECT status FROM bank_connections WHERE id = ?",
+                    (r["connection_id"],),
+                ).fetchone()
                 grouped[inst] = {
                     "connection_id": r["connection_id"],
+                    "status": (conn_status_row["status"] if conn_status_row else None) or "active",
                     "accounts": [],
                     "hidden_count": 0,
                     "syncing": False,
@@ -2353,3 +2359,27 @@ async def link_complete(request: Request):
 
     threading.Thread(target=_bg_sync, daemon=True).start()
     return _redirect("/accounts?linked=1")
+
+
+# ── /api/connections/:id/refresh ────────────────────────────────────────────
+
+
+@app.post("/api/connections/{connection_id}/refresh")
+def api_connection_refresh(request: Request, connection_id: str):
+    """Generate a Plaid Link Update-Mode URL for a connection that needs re-auth.
+
+    Returns JSON: {"url": "http://127.0.0.1:.../link?token=..."}  on success,
+    or {"error": "..."} on failure.
+    """
+    if not _is_authenticated(request):
+        return JSONResponse({"error": "Unauthorized"}, status_code=401)
+    import server.main as _sm
+
+    try:
+        result = _sm.refresh_connection(id=connection_id)
+        url = result.get("url", "")
+        if not url:
+            return JSONResponse({"error": "No URL returned from refresh_connection"}, status_code=500)
+        return JSONResponse({"url": url})
+    except Exception as exc:
+        return JSONResponse({"error": str(exc)}, status_code=500)
