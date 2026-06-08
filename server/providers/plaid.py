@@ -120,9 +120,22 @@ class PlaidProvider(BankProvider):
     # BankProvider interface
     # ------------------------------------------------------------------
 
-    def create_link_token(self, user_id: str = "friday-bp-user") -> str:
+    def create_link_token(
+        self,
+        user_id: str = "friday-bp-user",
+        access_token: str | None = None,
+    ) -> str:
         """
         Create a Plaid Link token for the given *user_id*.
+
+        Parameters
+        ----------
+        access_token : str or None
+            When provided, generates an **Update Mode** link token for the
+            existing Plaid item identified by this access token.  The user
+            will be prompted to re-authenticate their existing connection
+            rather than linking a new one.  Pass ``None`` (the default) to
+            generate a standard new-connection link token.
 
         Returns the ``link_token`` string that the frontend passes to Plaid Link.
 
@@ -136,10 +149,14 @@ class PlaidProvider(BankProvider):
         _kwargs = dict(
             user=LinkTokenCreateRequestUser(client_user_id=user_id),
             client_name=_APP_NAME,
-            products=[Products("transactions")],
             country_codes=[CountryCode("CA")],
             language="en",
         )
+        if access_token:
+            # Update Mode — re-auth an existing item; omit products (not needed)
+            _kwargs["access_token"] = access_token
+        else:
+            _kwargs["products"] = [Products("transactions")]
         if _redirect_uri:
             _kwargs["redirect_uri"] = _redirect_uri
         request = LinkTokenCreateRequest(**_kwargs)

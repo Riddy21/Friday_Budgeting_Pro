@@ -229,13 +229,123 @@ def test_disconnect_nonexistent_id_returns_ok(db_path):
 
 
 def test_refresh_connection_returns_url_with_link_token(db_path):
+    """refresh_connection must fetch the stored access token and pass it to
+    create_link_token for true Plaid Update Mode."""
+    exchange_result = {"access_token": "access-refresh", "item_id": "item-refresh"}
+    with patch(
+        "server.providers.plaid.PlaidProvider.exchange_public_token",
+        return_value=exchange_result,
+    ):
+        from server.main import complete_link
+
+        link_result = complete_link("public-token-refresh")
+
+    connection_id = link_result["connection_id"]
+
     with patch(
         "server.providers.plaid.PlaidProvider.create_link_token", return_value="link-update-token"
     ) as mock_create:
         from server.main import refresh_connection
 
-        result = refresh_connection("any-connection-id")
+        result = refresh_connection(connection_id)
 
     assert "url" in result
     assert "link-update-token" in result["url"]
-    mock_create.assert_called_once()
+    # connection_id must be embedded in the URL so /link/complete can use Update Mode
+    assert connection_id in result["url"]
+    assert result.get("connection_id") == connection_id
+    # Must have been called with the decrypted access_token for Update Mode
+    mock_create.assert_called_once_with(access_token="access-refresh")
+
+
+def test_refresh_connection_unknown_id_returns_error(db_path):
+    """refresh_connection on a non-existent connection_id must return an error dict."""
+    from server.main import refresh_connection
+
+    result = refresh_connection("no-such-id")
+    assert "error" in result
+
+
+def test_complete_link_update_mode_updates_existing_connection(db_path):
+    """complete_link with connection_id= must update the existing row, not insert a new one."""
+    exchange_result = {"access_token": "access-orig", "item_id": "item-orig"}
+    with patch(
+        "server.providers.plaid.PlaidProvider.exchange_public_token",
+        return_value=exchange_result,
+    ):
+        from server.main import complete_link
+
+        create_result = complete_link("public-token-orig")
+
+    connection_id = create_result["connection_id"]
+
+    # Simulate needs_reauth
+    conn = get_db(db_path)
+    conn.execute("UPDATE bank_connections SET status='needs_reauth' WHERE id=?", (connection_id,))
+    conn.commit()
+    conn.close()
+
+    # Re-auth via Update Mode
+    reauth_exchange = {"access_token": "access-refreshed", "item_id": "item-orig"}
+    with patch(
+        "server.providers.plaid.PlaidProvider.exchange_public_token",
+        return_value=reauth_exchange,
+    ):
+        update_result = complete_link("public-token-reauth", connection_id=connection_id)
+
+    assert update_result["connection_id"] == connection_id
+    assert update_result.get("update_mode") is True
+
+    # Verify status is back to active and no duplicate connection was created
+    conn = get_db(db_path)
+    rows = conn.execute("SELECT id, status FROM bank_connections").fetchall()
+    conn.close()
+    assert len(rows) == 1, "Update Mode must not create a duplicate connection"
+    assert rows[0]["status"] == "active"
+
+
+def test_disconnect_cascade_deletes_accounts_and_transactions(db_path):
+    """disconnect must cascade-delete bank_accounts and transactions so the
+    FK constraint on bank_connections never fires."""
+    exchange_result = {"access_token": "access-cascade", "item_id": "item-cascade"}
+    with patch(
+        "server.providers.plaid.PlaidProvider.exchange_public_token",
+        return_value=exchange_result,
+    ):
+        from server.main import complete_link
+
+        result = complete_link("public-token-cascade")
+
+    connection_id = result["connection_id"]
+
+    # Manually insert a bank_account and transaction to simulate a real connection
+    import uuid
+
+    acct_id = str(uuid.uuid4())
+    txn_id = str(uuid.uuid4())
+    conn = get_db(db_path)
+    conn.execute(
+        "INSERT INTO bank_accounts (id, connection_id, plaid_account_id, name) VALUES (?, ?, ?, ?)",
+        (acct_id, connection_id, "plaid-acct-1", "Test Account"),
+    )
+    conn.execute(
+        "INSERT INTO transactions (id, bank_account_id, plaid_transaction_id, date, amount)"
+        " VALUES (?, ?, ?, '2024-01-01', 10.0)",
+        (txn_id, acct_id, "plaid-txn-1"),
+    )
+    conn.commit()
+    conn.close()
+
+    from server.main import disconnect
+
+    with patch("server.main.PlaidProvider") as mock_cls:
+        mock_cls.return_value.remove_item.return_value = {"revoked": True, "request_id": "r"}
+        disconnect_result = disconnect(connection_id)
+
+    assert disconnect_result["ok"] is True
+
+    conn = get_db(db_path)
+    assert conn.execute("SELECT id FROM bank_connections WHERE id=?", (connection_id,)).fetchone() is None
+    assert conn.execute("SELECT id FROM bank_accounts WHERE id=?", (acct_id,)).fetchone() is None
+    assert conn.execute("SELECT id FROM transactions WHERE id=?", (txn_id,)).fetchone() is None
+    conn.close()

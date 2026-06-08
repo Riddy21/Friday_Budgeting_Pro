@@ -32,6 +32,13 @@
       input.name = 'public_token';
       input.value = public_token;
       form.appendChild(input);
+      {% if connection_id %}
+      var cidInput = document.createElement('input');
+      cidInput.type = 'hidden';
+      cidInput.name = 'connection_id';
+      cidInput.value = {{ connection_id | tojson }};
+      form.appendChild(cidInput);
+      {% endif %}
       document.body.appendChild(form);
       form.submit();
     }

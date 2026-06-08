@@ -92,12 +92,13 @@
               {% endif %}
             </td>
             <td class="action-cell">
-              {% if conn.status == "needs_reauth" %}
-              <form method="post" action="/profile">
-                <input type="hidden" name="action" value="reconnect_bank">
-                <input type="hidden" name="bank_id" value="{{ conn.id }}">
-                <button type="submit" class="btn-warning btn-sm">Reconnect</button>
-              </form>
+              {% if conn.status in ['needs_reauth', 'pending_expiration'] %}
+              <button
+                type="button"
+                class="btn-warning btn-sm reauth-btn"
+                data-connection-id="{{ conn.id }}"
+                data-institution="{{ conn.institution_name or 'this bank' }}"
+              >Reconnect</button>
               {% endif %}
               <form method="post" action="/profile">
                 <input type="hidden" name="action" value="disconnect_bank">
@@ -178,4 +179,27 @@
 
   </section>
 </div>
+
+<script>
+// ── Re-connect (Plaid Link Update Mode) ───────────────────────────────
+document.querySelectorAll('.reauth-btn').forEach(function(btn) {
+  btn.addEventListener('click', async function() {
+    const connectionId = btn.dataset.connectionId;
+    const institution  = btn.dataset.institution || 'this bank';
+    btn.disabled = true;
+    btn.textContent = 'Loading…';
+    try {
+      const resp = await fetch('/api/connections/' + connectionId + '/refresh', { method: 'POST' });
+      const data = await resp.json();
+      if (!resp.ok || data.error) throw new Error(data.error || 'HTTP ' + resp.status);
+      if (!data.url) throw new Error('No URL returned');
+      window.location.href = data.url;
+    } catch(e) {
+      btn.disabled = false;
+      btn.textContent = 'Reconnect';
+      alert('Could not start re-auth for ' + institution + ': ' + e.message);
+    }
+  });
+});
+</script>
 {% endblock %}

@@ -259,6 +259,8 @@ def _get_ledgers(
     user_id: Optional[str] = None,
     with_drilldown: bool = False,
     period: Optional[str] = "this_month",
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
 ) -> list[dict]:
     """Query ledgers + line_items from the DB and return a list of dicts.
 
@@ -273,6 +275,11 @@ def _get_ledgers(
     period :
         Date filter applied to transactions: ``"this_month"``, ``"last_month"``,
         ``"last_3_months"``, ``"this_year"``, ``"all"``, or ``None`` (all time).
+        Ignored when ``date_from`` or ``date_to`` is supplied.
+    date_from : str | None
+        Custom range start date (``YYYY-MM-DD``, inclusive).
+    date_to : str | None
+        Custom range end date (``YYYY-MM-DD``, inclusive).
     """
     from server.main import _build_ledger_drilldown
 
@@ -295,7 +302,10 @@ def _get_ledgers(
         ledgers = []
         for lr in ledger_rows:
             if with_drilldown:
-                drilldown = _build_ledger_drilldown(conn, lr, period=drilldown_period)
+                drilldown = _build_ledger_drilldown(
+                    conn, lr, period=drilldown_period,
+                    date_from=date_from, date_to=date_to,
+                )
                 ledgers.append(
                     {
                         "id": lr["id"],
@@ -1279,14 +1289,14 @@ def _get_accounts_grouped(user_id: Optional[str] = None) -> dict:
         # --- Connections (always present after link) ---
         if user_id:
             bc_rows = conn.execute(
-                "SELECT id, institution_name, last_synced_at"
+                "SELECT id, institution_name, last_synced_at, status"
                 "  FROM bank_connections WHERE user_id = ?"
                 " ORDER BY institution_name",
                 (user_id,),
             ).fetchall()
         else:
             bc_rows = conn.execute(
-                "SELECT id, institution_name, last_synced_at"
+                "SELECT id, institution_name, last_synced_at, status"
                 "  FROM bank_connections ORDER BY institution_name"
             ).fetchall()
 
@@ -1295,6 +1305,7 @@ def _get_accounts_grouped(user_id: Optional[str] = None) -> dict:
         for bc in bc_rows:
             grouped[bc["institution_name"] or "Unknown Institution"] = {
                 "connection_id": bc["id"],
+                "status": bc["status"] or "active",
                 "accounts": [],
                 "hidden_count": 0,
                 "syncing": bc["last_synced_at"] is None,
@@ -1329,8 +1340,13 @@ def _get_accounts_grouped(user_id: Optional[str] = None) -> dict:
         for r in rows:
             inst = r["institution_name"] or "Unknown Institution"
             if inst not in grouped:
+                conn_status_row = conn.execute(
+                    "SELECT status FROM bank_connections WHERE id = ?",
+                    (r["connection_id"],),
+                ).fetchone()
                 grouped[inst] = {
                     "connection_id": r["connection_id"],
+                    "status": (conn_status_row["status"] if conn_status_row else None) or "active",
                     "accounts": [],
                     "hidden_count": 0,
                     "syncing": False,
@@ -2018,7 +2034,12 @@ _VALID_PERIODS = {"this_month", "last_month", "last_3_months", "this_year", "all
 
 
 @app.get("/ledgers", response_class=HTMLResponse)
-def ledgers_get(request: Request, period: str = "this_month"):
+def ledgers_get(
+    request: Request,
+    period: str = "this_month",
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
+):
     """Read-only ledger tree with optional date-range filter.  Requires authentication.
 
     Queries the DB directly because server.main.list_ledgers() is still a
@@ -2028,21 +2049,45 @@ def ledgers_get(request: Request, period: str = "this_month"):
     ------------
     period : str
         One of ``this_month`` (default), ``last_month``, ``last_3_months``,
-        ``this_year``, ``all``.
+        ``this_year``, ``all``.  Ignored when ``date_from`` or ``date_to``
+        is supplied.
+    date_from : str | None
+        Custom range start (``YYYY-MM-DD``, inclusive).  When set, overrides
+        ``period``.
+    date_to : str | None
+        Custom range end (``YYYY-MM-DD``, inclusive).  When set, overrides
+        ``period``.
     """
+    import re as _re
+    _ISO_RE = _re.compile(r"^\d{4}-\d{2}-\d{2}$")
+
     if not _is_authenticated(request):
         return _redirect("/login")
-    # Reject unknown period values and fall back to default
-    if period not in _VALID_PERIODS:
+
+    # Validate custom date range; silently discard malformed values.
+    if date_from and not _ISO_RE.match(date_from):
+        date_from = None
+    if date_to and not _ISO_RE.match(date_to):
+        date_to = None
+
+    # When a custom range is supplied, treat period as "custom" (no preset).
+    using_custom_range = bool(date_from or date_to)
+    if using_custom_range:
+        period = "custom"
+    elif period not in _VALID_PERIODS:
+        # Reject unknown period values and fall back to default
         period = "this_month"
+
     uid = _current_user_id(request)
-    ledgers = _get_ledgers(uid, with_drilldown=True, period=period)
-    # Auto-fallback: if this_month has no data, silently show last_month instead.
-    if period == "this_month" and all(
+    ledgers = _get_ledgers(
+        uid, with_drilldown=True, period=period,
+        date_from=date_from, date_to=date_to,
+    )
+    # Auto-fallback: if this_month has no data, silently show last_month instead
+    # (only when not using a custom range).
+    if not using_custom_range and period == "this_month" and all(
         sum(li["total"] for li in ldr["line_items"]) == 0 for ldr in ledgers
     ):
-        from datetime import date as _lm_date
-        _lm_today = _lm_date.today()
         fallback_ledgers = _get_ledgers(uid, with_drilldown=True, period="last_month")
         if any(
             sum(li["total"] for li in ldr["line_items"]) != 0
@@ -2053,7 +2098,13 @@ def ledgers_get(request: Request, period: str = "this_month"):
     return templates.TemplateResponse(
         request,
         "ledgers.html",
-        {"current_page": "ledgers", "ledgers": ledgers, "period": period},
+        {
+            "current_page": "ledgers",
+            "ledgers": ledgers,
+            "period": period,
+            "date_from": date_from or "",
+            "date_to": date_to or "",
+        },
     )
 
 
@@ -2246,11 +2297,20 @@ def link_start(request: Request, back: Optional[str] = None):
 
 
 @app.get("/link", response_class=HTMLResponse)
-def link_get(request: Request, token: Optional[str] = None, back: Optional[str] = None):
+def link_get(
+    request: Request,
+    token: Optional[str] = None,
+    back: Optional[str] = None,
+    connection_id: Optional[str] = None,
+):
     """Plaid Link JS embed.
 
     Accepts ?token=<link_token> from whoever generates the link token
     (setup wizard, profile page, or an MCP-issued URL).
+
+    When ``connection_id`` is present (set by ``refresh_connection``) the page
+    operates in **Update Mode** — on success, ``/link/complete`` will update
+    the existing connection instead of creating a new one.
 
     Loopback-only binding is enforced by daemon.py; this route just renders
     the embed.
@@ -2265,6 +2325,7 @@ def link_get(request: Request, token: Optional[str] = None, back: Optional[str] 
             "link_token": token,
             "complete_url": "/link/complete",
             "back_url": back_url,
+            "connection_id": connection_id,
         },
     )
 
@@ -2276,6 +2337,10 @@ async def link_complete(request: Request):
     Called by the Plaid Link success callback via a hidden form POST.
     Stores the bank connection, triggers an initial sync to populate
     bank_accounts, then redirects to /accounts.
+
+    When ``connection_id`` is present in the form data this is an **Update
+    Mode** completion — the existing connection is updated in-place rather
+    than creating a duplicate.
     """
     if not _is_authenticated(request):
         return _redirect("/login")
@@ -2283,10 +2348,11 @@ async def link_complete(request: Request):
     public_token = (form.get("public_token") or "").strip()
     if not public_token:
         return _redirect("/accounts?error=missing_token")
+    connection_id = (form.get("connection_id") or "").strip() or None
     try:
         import server.main as _sm_cl
 
-        _sm_cl.complete_link(public_token=public_token)
+        _sm_cl.complete_link(public_token=public_token, connection_id=connection_id)
     except Exception as exc:  # noqa: BLE001
         import logging
 
@@ -2308,3 +2374,27 @@ async def link_complete(request: Request):
 
     threading.Thread(target=_bg_sync, daemon=True).start()
     return _redirect("/accounts?linked=1")
+
+
+# ── /api/connections/:id/refresh ────────────────────────────────────────────
+
+
+@app.post("/api/connections/{connection_id}/refresh")
+def api_connection_refresh(request: Request, connection_id: str):
+    """Generate a Plaid Link Update-Mode URL for a connection that needs re-auth.
+
+    Returns JSON: {"url": "http://127.0.0.1:.../link?token=..."}  on success,
+    or {"error": "..."} on failure.
+    """
+    if not _is_authenticated(request):
+        return JSONResponse({"error": "Unauthorized"}, status_code=401)
+    import server.main as _sm
+
+    try:
+        result = _sm.refresh_connection(id=connection_id)
+        url = result.get("url", "")
+        if not url:
+            return JSONResponse({"error": "No URL returned from refresh_connection"}, status_code=500)
+        return JSONResponse({"url": url})
+    except Exception as exc:
+        return JSONResponse({"error": str(exc)}, status_code=500)
