@@ -5,6 +5,9 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
   <title>{% block title %}Friday Budgeting Pro{% endblock %}</title>
   <meta name="color-scheme" content="light dark" />
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;1,9..40,400&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/static/style.css" />
   <script>
   // ── Theme bootstrap (runs before paint to avoid a flash of wrong colours) ─
@@ -79,6 +82,14 @@
     </div>
   </header>
 
+  {% if current_page and reauth_needed %}
+  <div class="alert alert-warning reauth-banner" id="reauth-banner" role="alert">
+    ⚠️ One or more bank connections need to be re-authenticated.
+    <a href="/profile#linked-accounts">Fix on Profile →</a>
+    <button type="button" class="reauth-banner-dismiss" onclick="document.getElementById('reauth-banner').remove()" aria-label="Dismiss">✕</button>
+  </div>
+  {% endif %}
+
   <main>
     {% block content %}{% endblock %}
   </main>
@@ -106,6 +117,9 @@
   <footer>
     <p>Local · Private · Yours</p>
   </footer>
+
+  <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.min.js"></script>
+  <script>document.addEventListener('DOMContentLoaded', () => lucide.createIcons());</script>
 
   <script>
   // ── Theme toggle wiring ────────────────────────────────────────────────
