@@ -65,8 +65,8 @@ logging.basicConfig(
 log = logging.getLogger(__name__)
 
 _DEFAULT_HOST = os.environ.get(
-    "FRIDAY_BP_UI_HOST", "127.0.0.1"
-)  # localhost-only by default; override via FRIDAY_BP_UI_HOST
+    "FRIDAY_BP_UI_HOST", "0.0.0.0"
+)  # bind all interfaces by default so remote access (e.g. Tailscale) works; override via FRIDAY_BP_UI_HOST
 _DEFAULT_PORT = 6789
 
 

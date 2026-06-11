@@ -1260,7 +1260,7 @@ def dashboard_get(request: Request):
             "current_page": "dashboard",
             "last_synced_at": last_synced,
             "action_result": None,
-            "reauth_needed": _has_reauth_needed(uid),
+            "reauth_connections": _get_reauth_connections(uid),
             **widgets,
         },
     )
@@ -1513,7 +1513,7 @@ def accounts_get(request: Request):
             "current_page": "accounts",
             "grouped_accounts": grouped,
             "net_worth": net_worth,
-            "reauth_needed": _has_reauth_needed(uid),
+            "reauth_connections": _get_reauth_connections(uid),
         },
     )
 
@@ -1661,7 +1661,7 @@ def settings_get(request: Request):
             "timezones": _VALID_TIMEZONES,
             "saved": saved,
             "rules": rules,
-            "reauth_needed": _has_reauth_needed(uid),
+            "reauth_connections": _get_reauth_connections(uid),
         },
     )
 
@@ -1710,7 +1710,7 @@ async def settings_post(request: Request):
                 "timezones": _VALID_TIMEZONES,
                 "saved": False,
                 "error": " ".join(errors),
-                "reauth_needed": _has_reauth_needed(uid),
+                "reauth_connections": _get_reauth_connections(uid),
             },
         )
     conn = get_db(_db_path())
@@ -1774,18 +1774,25 @@ def _get_connections(user_id: Optional[str] = None) -> list[dict]:
 
 def _has_reauth_needed(user_id: Optional[str] = None) -> bool:
     """Return True if any bank connection for user_id has needs_reauth status."""
+    return bool(_get_reauth_connections(user_id))
+
+
+def _get_reauth_connections(user_id: Optional[str] = None) -> list[dict]:
+    """Return list of bank connections with needs_reauth status for the user."""
     db = get_db(_db_path())
     try:
         if user_id:
-            row = db.execute(
-                "SELECT 1 FROM bank_connections WHERE user_id = ? AND status = 'needs_reauth' LIMIT 1",
+            rows = db.execute(
+                "SELECT id, institution_name FROM bank_connections"
+                " WHERE user_id = ? AND status = 'needs_reauth'",
                 (user_id,),
-            ).fetchone()
+            ).fetchall()
         else:
-            row = db.execute(
-                "SELECT 1 FROM bank_connections WHERE status = 'needs_reauth' LIMIT 1",
-            ).fetchone()
-        return row is not None
+            rows = db.execute(
+                "SELECT id, institution_name FROM bank_connections"
+                " WHERE status = 'needs_reauth'"
+            ).fetchall()
+        return [dict(r) for r in rows]
     finally:
         db.close()
 
@@ -1837,7 +1844,7 @@ def profile_get(request: Request):
                 "connections": connections,
                 "accounts": accounts,
                 "action_result": None,
-                "reauth_needed": any(c.get("status") == "needs_reauth" for c in connections),
+                "reauth_connections": [c for c in connections if c.get("status") == "needs_reauth"],
             },
         )
     st = request.cookies.get(_SETUP_COMPLETE_COOKIE)
@@ -1865,7 +1872,7 @@ def profile_get(request: Request):
                 "connections": connections,
                 "accounts": accounts,
                 "action_result": None,
-                "reauth_needed": any(c.get("status") == "needs_reauth" for c in connections),
+                "reauth_connections": [c for c in connections if c.get("status") == "needs_reauth"],
             },
         )
         resp.set_cookie(SESSION_COOKIE, st, httponly=True, samesite="lax")
@@ -1963,7 +1970,7 @@ async def profile_post(request: Request):
                 "connections": connections,
                 "accounts": accounts,
                 "action_result": None,
-                "reauth_needed": any(c.get("status") == "needs_reauth" for c in connections),
+                "reauth_connections": [c for c in connections if c.get("status") == "needs_reauth"],
             },
         )
 
@@ -1977,7 +1984,7 @@ async def profile_post(request: Request):
             "connections": connections,
             "accounts": accounts,
             "action_result": action_result,
-            "reauth_needed": any(c.get("status") == "needs_reauth" for c in connections),
+            "reauth_connections": [c for c in connections if c.get("status") == "needs_reauth"],
         },
     )
 
@@ -2080,7 +2087,7 @@ def ledgers_get(request: Request, period: str = "this_month"):
     return templates.TemplateResponse(
         request,
         "ledgers.html",
-        {"current_page": "ledgers", "ledgers": ledgers, "period": period, "reauth_needed": _has_reauth_needed(uid)},
+        {"current_page": "ledgers", "ledgers": ledgers, "period": period, "reauth_connections": _get_reauth_connections(uid)},
     )
 
 

@@ -82,10 +82,18 @@
     </div>
   </header>
 
-  {% if current_page and reauth_needed %}
+  {% if current_page and reauth_connections %}
   <div class="alert alert-warning reauth-banner" id="reauth-banner" role="alert">
-    ⚠️ One or more bank connections need to be re-authenticated.
-    <a href="/profile#linked-accounts">Fix on Profile →</a>
+    <span>⚠️ One or more bank connections need to be re-authenticated.</span>
+    <span class="reauth-banner-actions">
+      {% for conn in reauth_connections %}
+      <form method="post" action="/profile" style="display:inline">
+        <input type="hidden" name="action" value="reconnect_bank">
+        <input type="hidden" name="bank_id" value="{{ conn.id }}">
+        <button type="submit" class="btn-warning btn-sm">Reconnect {{ conn.institution_name or 'Bank' }} →</button>
+      </form>
+      {% endfor %}
+    </span>
     <button type="button" class="reauth-banner-dismiss" onclick="document.getElementById('reauth-banner').remove()" aria-label="Dismiss">✕</button>
   </div>
   {% endif %}

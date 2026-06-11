@@ -453,7 +453,7 @@ def start_link(plaid_env: str | None = None) -> dict:
     resolved_env = plaid_env or db_env
     provider = PlaidProvider(env=resolved_env, client_id=db_client_id, secret=db_secret)
     link_token = provider.create_link_token()
-    return {"url": f"http://127.0.0.1:6789/link?token={link_token}", "plaid_env": provider.env}
+    return {"url": f"{_get_ui_base_url()}/link?token={link_token}", "plaid_env": provider.env}
 
 
 @mcp.tool
@@ -673,7 +673,7 @@ def refresh_connection(id: str) -> dict:
     """
     # For now, generate a fresh link token (same as start_link)
     link_token = _plaid.create_link_token()
-    return {"url": f"http://127.0.0.1:6789/link?token={link_token}"}
+    return {"url": f"{_get_ui_base_url()}/link?token={link_token}"}
 
 
 @mcp.tool
@@ -3893,13 +3893,7 @@ def reset_ui_password() -> dict:
     except Exception:
         pass
 
-    raw = os.environ.get("FRIDAY_BP_UI_PORT")
-    try:
-        port = int(raw) if raw is not None else 6789
-    except ValueError:
-        port = 6789
-
-    recovery_url = f"http://127.0.0.1:{port}/reset?t={token}"
+    recovery_url = f"{_get_ui_base_url()}/reset?t={token}"
     return {"status": "ok", "recovery_url": recovery_url}
 
 
@@ -4249,6 +4243,23 @@ def set_setting(key: str, value: str) -> dict:
 _VALID_PAGES = {"accounts", "ledgers", "profile", "dashboard"}
 
 
+def _get_ui_base_url() -> str:
+    """Return the public base URL for the UI (no trailing slash).
+
+    Prefers ``FRIDAY_BP_PUBLIC_URL`` from the environment (e.g. Tailscale IP)
+    over the localhost fallback so links work when accessed remotely.
+    """
+    public_url = os.environ.get("FRIDAY_BP_PUBLIC_URL", "").rstrip("/")
+    if public_url:
+        return public_url
+    raw = os.environ.get("FRIDAY_BP_UI_PORT")
+    try:
+        port = int(raw) if raw is not None else 6789
+    except ValueError:
+        port = 6789
+    return f"http://127.0.0.1:{port}"
+
+
 @mcp.tool
 def get_ui_url(page: str = None) -> dict:
     """Return the local UI URL, optionally deep-linked to a specific page.
@@ -4266,13 +4277,7 @@ def get_ui_url(page: str = None) -> dict:
     dict
         ``{"url": "http://127.0.0.1:<port>[/<page>]"}``
     """
-    raw = os.environ.get("FRIDAY_BP_UI_PORT")
-    try:
-        port = int(raw) if raw is not None else 6789
-    except ValueError:
-        port = 6789
-
-    base = f"http://127.0.0.1:{port}"
+    base = _get_ui_base_url()
 
     if page is None:
         return {"url": base}
