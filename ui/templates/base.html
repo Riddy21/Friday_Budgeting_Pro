@@ -82,6 +82,14 @@
     </div>
   </header>
 
+  {% if current_page and reauth_needed %}
+  <div class="alert alert-warning reauth-banner" id="reauth-banner" role="alert">
+    ⚠️ One or more bank connections need to be re-authenticated.
+    <a href="/profile#linked-accounts">Fix on Profile →</a>
+    <button type="button" class="reauth-banner-dismiss" onclick="document.getElementById('reauth-banner').remove()" aria-label="Dismiss">✕</button>
+  </div>
+  {% endif %}
+
   <main>
     {% block content %}{% endblock %}
   </main>
