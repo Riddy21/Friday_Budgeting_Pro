@@ -2022,6 +2022,42 @@ async def account_description_patch(request: Request, account_id: str):
     return JSONResponse({"status": "ok", "account_id": account_id})
 
 
+# ── /reconnect/{connection_id} ────────────────────────────────────────────────
+
+
+@app.get("/reconnect/{connection_id}")
+def reconnect_bank(request: Request, connection_id: str):
+    """Direct reauth route for a specific bank connection.
+
+    Requires authentication.  Generates a Plaid Link token in Update Mode
+    for the given connection and redirects straight to the Plaid Link page.
+    The user sees their bank pre-loaded — no "choose your bank" screen, no
+    extra navigation, no re-login.
+
+    Used by the global reauth banner in base.html so reconnecting from any
+    page goes directly to Plaid without touching the profile form flow.
+    """
+    if not _is_authenticated(request):
+        return _redirect("/login")
+
+    import server.main as _sm
+
+    try:
+        result = _sm.refresh_connection(id=connection_id)
+        url = result.get("url", "")
+    except Exception as exc:  # noqa: BLE001
+        import logging
+
+        logging.getLogger(__name__).error("reconnect_bank failed: %s", exc)
+        return _redirect("/accounts?error=reconnect_failed")
+
+    if not url:
+        return _redirect("/accounts?error=reconnect_no_url")
+
+    # The URL points to /link?token=... on this same server; redirect there.
+    return _redirect(url)
+
+
 # ── /ledgers ─────────────────────────────────────────────────────────────────
 
 

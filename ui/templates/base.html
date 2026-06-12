@@ -87,11 +87,7 @@
     <span>⚠️ One or more bank connections need to be re-authenticated.</span>
     <span class="reauth-banner-actions">
       {% for conn in reauth_connections %}
-      <form method="post" action="/profile" style="display:inline">
-        <input type="hidden" name="action" value="reconnect_bank">
-        <input type="hidden" name="bank_id" value="{{ conn.id }}">
-        <button type="submit" class="btn-warning btn-sm">Reconnect {{ conn.institution_name or 'Bank' }} →</button>
-      </form>
+      <a href="/reconnect/{{ conn.id }}" class="btn-warning btn-sm">Reconnect {{ conn.institution_name or 'Bank' }} →</a>
       {% endfor %}
     </span>
     <button type="button" class="reauth-banner-dismiss" onclick="document.getElementById('reauth-banner').remove()" aria-label="Dismiss">✕</button>
