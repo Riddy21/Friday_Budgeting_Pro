@@ -120,9 +120,24 @@ class PlaidProvider(BankProvider):
     # BankProvider interface
     # ------------------------------------------------------------------
 
-    def create_link_token(self, user_id: str = "friday-bp-user") -> str:
+    def create_link_token(
+        self,
+        user_id: str = "friday-bp-user",
+        access_token: str | None = None,
+    ) -> str:
         """
         Create a Plaid Link token for the given *user_id*.
+
+        Parameters
+        ----------
+        user_id:
+            Stable client user ID (default: "friday-bp-user").
+        access_token:
+            Plaintext Plaid access token for an existing connection.  When
+            provided, Plaid opens Link in **Update Mode** for that specific
+            institution — the user sees their bank pre-loaded and does not
+            have to choose from the full institution list.  Omit (or pass
+            ``None``) to launch the standard new-connection flow.
 
         Returns the ``link_token`` string that the frontend passes to Plaid Link.
 
@@ -133,13 +148,19 @@ class PlaidProvider(BankProvider):
 
         # CA only — matches old working test app; US+CA causes OAuth issues with Canadian banks
         _redirect_uri = _os.environ.get("PLAID_REDIRECT_URI")
-        _kwargs = dict(
+        _kwargs: dict = dict(
             user=LinkTokenCreateRequestUser(client_user_id=user_id),
             client_name=_APP_NAME,
-            products=[Products("transactions")],
             country_codes=[CountryCode("CA")],
             language="en",
         )
+        if access_token:
+            # Update Mode: pass the existing access_token so Plaid pre-loads
+            # the specific institution (no "choose your bank" screen).
+            # When in Update Mode, `products` must be omitted per Plaid docs.
+            _kwargs["access_token"] = access_token
+        else:
+            _kwargs["products"] = [Products("transactions")]
         if _redirect_uri:
             _kwargs["redirect_uri"] = _redirect_uri
         request = LinkTokenCreateRequest(**_kwargs)

@@ -672,16 +672,39 @@ def get_connections_needing_attention() -> dict:
 def refresh_connection(id: str) -> dict:
     """Trigger an Update Mode Plaid Link for an existing connection.
 
-    Generates a new Plaid Link token for Update Mode.  The plaid-python SDK
-    supports passing an access_token to create_link_token() for proper Update
-    Mode, but our wrapper does not yet expose that parameter — see TODO below.
-
-    TODO: Pass the decrypted access_token to create_link_token() for a true
-    Update Mode link token (requires plaid_client.create_link_token to accept
-    an optional access_token kwarg).  Tracked in issue #34.
+    Looks up the connection's encrypted access token, decrypts it, and passes
+    it to ``create_link_token()`` so Plaid opens Link in **Update Mode** for
+    that specific institution — the user sees their bank pre-loaded and does
+    not have to select from the full institution list.
     """
-    # For now, generate a fresh link token (same as start_link)
-    link_token = _plaid.create_link_token()
+    db = get_db(server.paths.DB_PATH)
+    try:
+        row = db.execute(
+            "SELECT plaid_access_token_encrypted, plaid_env FROM bank_connections WHERE id = ?",
+            (id,),
+        ).fetchone()
+    finally:
+        db.close()
+
+    if row is None:
+        raise ValueError(f"No bank connection found with id={id!r}")
+
+    try:
+        access_token = server.crypto.decrypt(row["plaid_access_token_encrypted"])
+        plaid_env = row["plaid_env"] or os.environ.get("PLAID_ENV", "sandbox")
+        provider = PlaidProvider(env=plaid_env)
+        link_token = provider.create_link_token(access_token=access_token)
+    except Exception:
+        # Fall back to fresh link token if decryption or Plaid call fails
+        import logging as _logging
+        _logging.getLogger(__name__).warning(
+            "refresh_connection: failed to get Update Mode token for id=%s, "
+            "falling back to fresh link token",
+            id,
+            exc_info=True,
+        )
+        link_token = _plaid.create_link_token()
+
     return {"url": f"{_get_ui_base_url()}/link?token={link_token}"}
 
 
