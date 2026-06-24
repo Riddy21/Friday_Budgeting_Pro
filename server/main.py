@@ -712,16 +712,16 @@ def refresh_connection(id: str) -> dict:
     finally:
         db.close()
 
-    if row is None:
-        raise ValueError(f"No bank connection found with id={id!r}")
-
     try:
+        if row is None:
+            raise ValueError(f"No bank connection found with id={id!r}")
         access_token = server.crypto.decrypt(row["plaid_access_token_encrypted"])
         plaid_env = row["plaid_env"] or os.environ.get("PLAID_ENV", "sandbox")
         provider = PlaidProvider(env=plaid_env)
         link_token = provider.create_link_token(access_token=access_token)
     except Exception:
-        # Fall back to fresh link token if decryption or Plaid call fails
+        # Fall back to fresh link token if connection not found, decryption,
+        # or Plaid call fails
         import logging as _logging
         _logging.getLogger(__name__).warning(
             "refresh_connection: failed to get Update Mode token for id=%s, "

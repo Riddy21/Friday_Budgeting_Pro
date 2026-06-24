@@ -56,7 +56,7 @@ def _seed_personal(monkeypatch):
     """Call apply_initial_setup with a mocked _register_openclaw_cron."""
     from server.main import apply_initial_setup
 
-    monkeypatch.setattr("server.main._register_openclaw_cron", lambda: False)
+    monkeypatch.setattr("server.main._register_openclaw_cron_file", lambda: False)
     apply_initial_setup(banks_to_link=[], extra_ledgers=[], hints=[])
 
 
