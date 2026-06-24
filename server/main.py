@@ -505,19 +505,45 @@ def complete_link(public_token: str, plaid_env: str | None = None) -> dict:
         )
 
     encrypted_token = server.crypto.encrypt(access_token)
-    connection_id = str(uuid.uuid4())
 
     conn = get_db(server.paths.DB_PATH)
     try:
-        conn.execute(
-            """
-            INSERT INTO bank_connections
-                (id, plaid_item_id, plaid_access_token_encrypted, institution_name,
-                 status, user_id, plaid_env)
-            VALUES (?, ?, ?, ?, 'active', ?, ?)
-            """,
-            (connection_id, item_id, encrypted_token, institution_name, uid, provider.env),
-        )
+        # Check whether this item_id already exists (Update Mode re-auth).
+        existing = conn.execute(
+            "SELECT id FROM bank_connections WHERE plaid_item_id = ?",
+            (item_id,),
+        ).fetchone()
+
+        if existing:
+            # Update Mode: refresh the stored token and clear the reauth flag
+            # on the existing row rather than inserting a duplicate.  This
+            # keeps bank_accounts, transaction history, and ledger routing
+            # intact across a re-auth.
+            connection_id = existing["id"]
+            conn.execute(
+                """
+                UPDATE bank_connections
+                   SET plaid_access_token_encrypted = ?,
+                       status = 'active',
+                       institution_name = COALESCE(?, institution_name),
+                       plaid_env = ?
+                 WHERE id = ?
+                """,
+                (encrypted_token, institution_name, provider.env, connection_id),
+            )
+        else:
+            # Fresh link: insert a new connection row.
+            connection_id = str(uuid.uuid4())
+            conn.execute(
+                """
+                INSERT INTO bank_connections
+                    (id, plaid_item_id, plaid_access_token_encrypted, institution_name,
+                     status, user_id, plaid_env)
+                VALUES (?, ?, ?, ?, 'active', ?, ?)
+                """,
+                (connection_id, item_id, encrypted_token, institution_name, uid, provider.env),
+            )
+
         # Mirror the token into the revocation log so wipe.py and
         # retry_pending_revocations() can revoke it even after the
         # bank_connections row is gone.  (#265)
@@ -2896,8 +2922,170 @@ def get_needs_review_summary() -> dict:
 
 @mcp.tool
 def route(transaction_id: str, allocations: List) -> dict:
-    """Manually route a transaction to one or more line items."""
-    return {"status": "not_implemented"}
+    """Manually route a transaction to one or more line items.
+
+    When *allocations* is an empty list the transaction is marked as
+    **skip** — it will be excluded from all totals (useful for internal
+    transfers and duplicate Plaid entries that should not be counted).
+
+    When *allocations* is non-empty each entry must be a dict with:
+      - ``line_item_id`` (str, required)
+      - ``amount`` (float, optional — defaults to the full transaction amount)
+
+    Parameters
+    ----------
+    transaction_id : str
+        ID of the transaction to route.
+    allocations : list
+        List of allocation dicts, or an empty list to skip the transaction.
+
+    Returns
+    -------
+    dict
+        ``{"status": "ok", "entry_type": "skip" | "spending" | ...}``
+        or ``{"status": "error", "error": "..."}``
+    """
+    uid = get_active_user_id(server.paths.DB_PATH)
+    if not uid:
+        return {"status": "error", "error": "not_authenticated"}
+
+    conn = get_db(server.paths.DB_PATH)
+    try:
+        # Verify the transaction belongs to this user.
+        tx_row = conn.execute(
+            """
+            SELECT t.id, t.amount
+            FROM transactions t
+            JOIN bank_accounts ba    ON ba.id = t.bank_account_id
+            JOIN bank_connections bc ON bc.id = ba.connection_id
+            WHERE t.id = ? AND bc.user_id = ?
+            """,
+            (transaction_id, uid),
+        ).fetchone()
+        if not tx_row:
+            return {"status": "error", "error": f"transaction {transaction_id!r} not found"}
+
+        tx_amount = tx_row["amount"]
+        now = int(_time.time())
+
+        if not allocations:
+            # ----------------------------------------------------------------
+            # Empty allocations → mark as skip.
+            # We upsert so calling route([], ...) is idempotent.
+            # ----------------------------------------------------------------
+            existing = conn.execute(
+                "SELECT id FROM transaction_entries WHERE transaction_id = ?",
+                (transaction_id,),
+            ).fetchone()
+            if existing:
+                conn.execute(
+                    """
+                    UPDATE transaction_entries
+                    SET ledger_id     = NULL,
+                        line_item_id  = NULL,
+                        entry_type    = 'skip',
+                        source        = 'manual',
+                        reviewed      = 1,
+                        corrected_at  = ?
+                    WHERE transaction_id = ?
+                    """,
+                    (now, transaction_id),
+                )
+            else:
+                entry_id = str(uuid.uuid4())
+                conn.execute(
+                    """
+                    INSERT INTO transaction_entries
+                        (id, transaction_id, ledger_id, line_item_id,
+                         amount, entry_type, source, reviewed, corrected_at)
+                    VALUES (?, ?, NULL, NULL, ?, 'skip', 'manual', 1, ?)
+                    """,
+                    (entry_id, transaction_id, abs(tx_amount), now),
+                )
+            conn.commit()
+            return {"status": "ok", "entry_type": "skip", "transaction_id": transaction_id}
+
+        # --------------------------------------------------------------------
+        # Non-empty allocations → route to line items.
+        # Only single-allocation is fully supported in v1 (no splits).
+        # --------------------------------------------------------------------
+        if len(allocations) > 1:
+            return {
+                "status": "error",
+                "error": "split allocations are not yet supported — provide exactly one allocation",
+            }
+
+        alloc = allocations[0]
+        if isinstance(alloc, dict):
+            line_item_id = alloc.get("line_item_id")
+            alloc_amount = alloc.get("amount")
+        else:
+            return {"status": "error", "error": "each allocation must be a dict with line_item_id"}
+
+        if not line_item_id:
+            return {"status": "error", "error": "allocation missing required field: line_item_id"}
+
+        # Validate line item exists and get its ledger.
+        li_row = conn.execute(
+            "SELECT ledger_id, item_type FROM line_items WHERE id = ?",
+            (line_item_id,),
+        ).fetchone()
+        if li_row is None:
+            return {"status": "error", "error": f"line_item_id {line_item_id!r} does not exist"}
+
+        ledger_id = li_row["ledger_id"]
+        item_type = li_row["item_type"]
+        amount = alloc_amount if alloc_amount is not None else abs(tx_amount)
+
+        # Determine entry_type from line item type.
+        entry_type = {
+            "expense": "spending",
+            "income": "income",
+        }.get(item_type, item_type)  # savings / transfer pass through as-is
+
+        existing = conn.execute(
+            "SELECT id, line_item_id FROM transaction_entries WHERE transaction_id = ?",
+            (transaction_id,),
+        ).fetchone()
+        if existing:
+            conn.execute(
+                """
+                UPDATE transaction_entries
+                SET ledger_id                  = ?,
+                    line_item_id               = ?,
+                    amount                     = ?,
+                    entry_type                 = ?,
+                    source                     = 'manual',
+                    reviewed                   = 1,
+                    corrected_from_line_item_id = ?,
+                    corrected_at               = ?
+                WHERE transaction_id = ?
+                """,
+                (ledger_id, line_item_id, amount, entry_type,
+                 existing["line_item_id"], now, transaction_id),
+            )
+        else:
+            entry_id = str(uuid.uuid4())
+            conn.execute(
+                """
+                INSERT INTO transaction_entries
+                    (id, transaction_id, ledger_id, line_item_id,
+                     amount, entry_type, source, reviewed, corrected_at)
+                VALUES (?, ?, ?, ?, ?, ?, 'manual', 1, ?)
+                """,
+                (entry_id, transaction_id, ledger_id, line_item_id,
+                 amount, entry_type, now),
+            )
+        conn.commit()
+        return {
+            "status": "ok",
+            "entry_type": entry_type,
+            "transaction_id": transaction_id,
+            "line_item_id": line_item_id,
+            "ledger_id": ledger_id,
+        }
+    finally:
+        conn.close()
 
 
 @mcp.tool
@@ -4440,9 +4628,10 @@ def find_transactions(
 @mcp.tool
 def correct_transaction(
     transaction_id: str,
-    line_item_id: str,
+    line_item_id: str = None,
     create_rule: bool = False,
     rule_description: str = None,
+    skip: bool = False,
 ) -> dict:
     """Reclassify a transaction and optionally create a matching rule.
 
@@ -4450,14 +4639,18 @@ def correct_transaction(
     ----------
     transaction_id : str
         ID of the transaction to reclassify.
-    line_item_id : str
-        New line item ID to assign.
+    line_item_id : str, optional
+        New line item ID to assign.  Required unless ``skip=True``.
     create_rule : bool, optional
         When ``True``, also call :func:`add_rule` so future transactions
         from the same merchant are automatically classified the same way.
     rule_description : str, optional
         Custom description for the new rule.  If omitted an auto-generated
         description based on the merchant name is used.
+    skip : bool, optional
+        When ``True``, mark the transaction as *skip* (excluded from all
+        totals).  Equivalent to calling ``route`` with empty allocations.
+        ``line_item_id`` is ignored when ``skip=True``.
 
     Returns
     -------
@@ -4465,6 +4658,13 @@ def correct_transaction(
         ``{"status": "ok", "transaction_id": ..., "new_line_item_id": ...,
         "rule_created": bool}``
     """
+    # Delegate skip requests to route() which handles the full upsert logic.
+    if skip:
+        return route(transaction_id=transaction_id, allocations=[])
+
+    if not line_item_id:
+        return {"status": "error", "error": "line_item_id is required unless skip=True"}
+
     uid = get_active_user_id(server.paths.DB_PATH)
     if not uid:
         return {"status": "error", "error": "not_authenticated"}
