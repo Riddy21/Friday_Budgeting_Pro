@@ -70,19 +70,19 @@
               {% if item.transactions %}
               <tr class="txn-detail-row" data-parent-item-id="{{ item.id }}" style="display:none;">
                 <td colspan="5" class="txn-detail-cell">
-                  <div class="table-scroll">
-                  <table class="txn-table">
+                  <ul class="txn-card-list">
                     {% for tx in item.transactions %}
-                    <tr class="{% if tx.pending %}txn-pending{% endif %}">
-                      <td class="txn-tree">{% if loop.last %}&#9492;&#9472;&#9472;{% else %}&#9500;&#9472;&#9472;{% endif %}</td>
-                      <td class="txn-date">{{ tx.date }}</td>
-                      <td class="txn-merchant">{{ tx.merchant or '(unknown)' }}</td>
-                      <td class="txn-account">{{ tx.account_name or '' }}</td>
-                      <td class="txn-amount">C${{ "%.2f"|format(tx.amount) }}</td>
-                    </tr>
+                    <li class="txn-card{% if tx.pending %} txn-card-pending{% endif %}">
+                      <span class="txn-card-merchant">{{ tx.merchant or '(unknown)' }}</span>
+                      <span class="txn-card-meta">
+                        <span class="txn-card-date">{{ tx.date }}</span>
+                        {% if tx.account_name %}<span class="txn-card-account">{{ tx.account_name }}</span>{% endif %}
+                        {% if tx.pending %}<span class="txn-card-pending-badge">Pending</span>{% endif %}
+                      </span>
+                      <span class="txn-card-amount">C${{ "%.2f"|format(tx.amount) }}</span>
+                    </li>
                     {% endfor %}
-                  </table>
-                  </div>
+                  </ul>
                 </td>
               </tr>
               {% endif %}
@@ -127,19 +127,19 @@
               {% if item.transactions %}
               <tr class="txn-detail-row" data-parent-item-id="{{ item.id }}" style="display:none;">
                 <td colspan="5" class="txn-detail-cell">
-                  <div class="table-scroll">
-                  <table class="txn-table">
+                  <ul class="txn-card-list">
                     {% for tx in item.transactions %}
-                    <tr class="{% if tx.pending %}txn-pending{% endif %}">
-                      <td class="txn-tree">{% if loop.last %}&#9492;&#9472;&#9472;{% else %}&#9500;&#9472;&#9472;{% endif %}</td>
-                      <td class="txn-date">{{ tx.date }}</td>
-                      <td class="txn-merchant">{{ tx.merchant or '(unknown)' }}</td>
-                      <td class="txn-account">{{ tx.account_name or '' }}</td>
-                      <td class="txn-amount">C${{ "%.2f"|format(tx.amount) }}</td>
-                    </tr>
+                    <li class="txn-card{% if tx.pending %} txn-card-pending{% endif %}">
+                      <span class="txn-card-merchant">{{ tx.merchant or '(unknown)' }}</span>
+                      <span class="txn-card-meta">
+                        <span class="txn-card-date">{{ tx.date }}</span>
+                        {% if tx.account_name %}<span class="txn-card-account">{{ tx.account_name }}</span>{% endif %}
+                        {% if tx.pending %}<span class="txn-card-pending-badge">Pending</span>{% endif %}
+                      </span>
+                      <span class="txn-card-amount">C${{ "%.2f"|format(tx.amount) }}</span>
+                    </li>
                     {% endfor %}
-                  </table>
-                  </div>
+                  </ul>
                 </td>
               </tr>
               {% endif %}
@@ -184,19 +184,19 @@
               {% if item.transactions %}
               <tr class="txn-detail-row" data-parent-item-id="{{ item.id }}" style="display:none;">
                 <td colspan="5" class="txn-detail-cell">
-                  <div class="table-scroll">
-                  <table class="txn-table">
+                  <ul class="txn-card-list">
                     {% for tx in item.transactions %}
-                    <tr class="{% if tx.pending %}txn-pending{% endif %}">
-                      <td class="txn-tree">{% if loop.last %}&#9492;&#9472;&#9472;{% else %}&#9500;&#9472;&#9472;{% endif %}</td>
-                      <td class="txn-date">{{ tx.date }}</td>
-                      <td class="txn-merchant">{{ tx.merchant or '(unknown)' }}</td>
-                      <td class="txn-account">{{ tx.account_name or '' }}</td>
-                      <td class="txn-amount savings-amount">C${{ "%.2f"|format(tx.amount) }}</td>
-                    </tr>
+                    <li class="txn-card{% if tx.pending %} txn-card-pending{% endif %}">
+                      <span class="txn-card-merchant">{{ tx.merchant or '(unknown)' }}</span>
+                      <span class="txn-card-meta">
+                        <span class="txn-card-date">{{ tx.date }}</span>
+                        {% if tx.account_name %}<span class="txn-card-account">{{ tx.account_name }}</span>{% endif %}
+                        {% if tx.pending %}<span class="txn-card-pending-badge">Pending</span>{% endif %}
+                      </span>
+                      <span class="txn-card-amount savings-amount">C${{ "%.2f"|format(tx.amount) }}</span>
+                    </li>
                     {% endfor %}
-                  </table>
-                  </div>
+                  </ul>
                 </td>
               </tr>
               {% endif %}
