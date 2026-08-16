@@ -79,59 +79,43 @@
     {% if data.syncing and not data.accounts %}
     <p class="hint">⏳ Accounts will appear here once the initial sync completes…</p>
     {% else %}
-    <div class="table-scroll">
-      <table class="account-table">
-        <thead>
-          <tr>
-            <th>Account</th>
-            <th class="responsive-hide-sm">Type</th>
-            <th style="text-align:right">Balance</th>
-            <th></th>
-          </tr>
-        </thead>
-        <tbody>
-          {% for acct in data.accounts %}
-          <tr data-account-id="{{ acct.id }}">
-            <td>
-              <span class="acct-name" data-original="{{ acct.name or '' }}">{{ acct.name or '(unnamed)' }}</span>
-              {% if acct.mask %}
-              <span class="acct-mask">···{{ acct.mask }}</span>
-              {% endif %}
-            </td>
-            <td class="acct-type responsive-hide-sm">
-              {{ acct.subtype or acct.type or '—' }}
-            </td>
-            <td class="acct-balance">
+    {# Compact account list — each row clicks to reveal actions (#329) #}
+    <ul class="acct-list" role="list">
+      {% for acct in data.accounts %}
+      <li class="acct-list-item" data-account-id="{{ acct.id }}">
+        <button class="acct-row" aria-expanded="false" data-id="{{ acct.id }}" type="button">
+          <span class="acct-row-main">
+            <span class="acct-name" data-original="{{ acct.name or '' }}">{{ acct.name or '(unnamed)' }}</span>
+            {% if acct.mask %}<span class="acct-mask">···{{ acct.mask }}</span>{% endif %}
+            <span class="acct-type-pill">{{ acct.subtype or acct.type or '—' }}</span>
+          </span>
+          <span class="acct-row-right">
+            <span class="acct-balance">
               {% set balance = acct.balance_current if acct.balance_current is not none else acct.balance_available %}
               {% if balance is not none %}
                 {% set currency = acct.currency or 'CAD' %}
                 {# Credit cards: Plaid returns amount owed as positive — negate for display #}
                 {% set display_balance = -balance if acct.type == 'credit' else balance %}
-                {% if currency == 'CAD' %}C$
-                {% elif currency == 'USD' %}US$
-                {% elif currency == 'GBP' %}£
-                {% elif currency == 'EUR' %}€
-                {% else %}{{ currency }} {% endif %}{{ "%.2f"|format(display_balance) }}
+                {% if currency == 'CAD' %}C${% elif currency == 'USD' %}US${% elif currency == 'GBP' %}£{% elif currency == 'EUR' %}€{% else %}{{ currency }} {% endif %}{{ "%.2f"|format(display_balance) }}
               {% else %}
                 <span class="muted">—</span>
               {% endif %}
-            </td>
-            <td class="acct-actions">
-              <button class="btn-secondary btn-sm rename-btn" data-id="{{ acct.id }}">rename</button>
-              <button class="btn-secondary btn-sm txn-toggle-btn" data-id="{{ acct.id }}">transactions</button>
-            </td>
-          </tr>
-          <tr class="txn-expand-row" id="txn-expand-{{ acct.id }}" style="display:none">
-            <td colspan="4">
-              <div class="txn-expand-inner" id="txn-content-{{ acct.id }}">
-                <span class="muted text-sm">Loading…</span>
-              </div>
-            </td>
-          </tr>
-          {% endfor %}
-        </tbody>
-      </table>
-    </div>
+            </span>
+            <span class="acct-chevron" aria-hidden="true">›</span>
+          </span>
+        </button>
+        <div class="acct-expand-panel" id="acct-expand-{{ acct.id }}" hidden>
+          <div class="acct-expand-inner">
+            <div class="acct-expand-actions">
+              <button class="btn-secondary btn-sm rename-btn" data-id="{{ acct.id }}" type="button">✎ Rename</button>
+              <button class="btn-secondary btn-sm txn-toggle-btn" data-id="{{ acct.id }}" type="button">↓ Transactions</button>
+            </div>
+            <div class="txn-expand-inner" id="txn-content-{{ acct.id }}" style="display:none"></div>
+          </div>
+        </div>
+      </li>
+      {% endfor %}
+    </ul>
     {% endif %}
     {% if data.hidden_count %}
     <p class="hint">
@@ -199,20 +183,43 @@ function buildTxnTable(txns) {
   </table></div>`;
 }
 
+// ── Account row expand/collapse (#329) ────────────────────────────────────
+document.querySelectorAll('.acct-row').forEach(rowBtn => {
+  rowBtn.addEventListener('click', function() {
+    const id      = rowBtn.dataset.id;
+    const panel   = document.getElementById('acct-expand-' + id);
+    const isOpen  = rowBtn.getAttribute('aria-expanded') === 'true';
+    // Close all other panels first
+    document.querySelectorAll('.acct-row[aria-expanded="true"]').forEach(other => {
+      if (other !== rowBtn) {
+        other.setAttribute('aria-expanded', 'false');
+        const otherId = other.dataset.id;
+        const otherPanel = document.getElementById('acct-expand-' + otherId);
+        if (otherPanel) otherPanel.hidden = true;
+      }
+    });
+    rowBtn.setAttribute('aria-expanded', !isOpen);
+    panel.hidden = isOpen;
+  });
+});
+
+// ── Transaction list toggle ───────────────────────────────────────────────
 document.querySelectorAll('.txn-toggle-btn').forEach(btn => {
   let loaded = false;
-  btn.addEventListener('click', async function() {
+  btn.addEventListener('click', async function(e) {
+    e.stopPropagation();
     const id      = btn.dataset.id;
-    const expRow  = document.getElementById('txn-expand-' + id);
     const content = document.getElementById('txn-content-' + id);
-    if (expRow.style.display !== 'none') {
-      expRow.style.display = 'none';
-      btn.textContent = 'transactions';
+    const isVisible = content.style.display !== 'none';
+    if (isVisible) {
+      content.style.display = 'none';
+      btn.textContent = '↓ Transactions';
       return;
     }
-    expRow.style.display = '';
-    btn.textContent = 'hide';
+    content.style.display = '';
+    btn.textContent = '↑ Hide';
     if (loaded) return;
+    content.innerHTML = '<span class="muted text-sm">Loading…</span>';
     try {
       const resp = await fetch('/accounts/' + id + '/transactions');
       const data = await resp.json();
@@ -226,10 +233,12 @@ document.querySelectorAll('.txn-toggle-btn').forEach(btn => {
 
 // ── Rename ───────────────────────────────────────────────────────────────
 document.querySelectorAll('.rename-btn').forEach(btn => {
-  btn.addEventListener('click', function handleRename() {
+  btn.addEventListener('click', function(e) {
+    e.stopPropagation();
     const id = btn.dataset.id;
-    const row = btn.closest('tr');
-    const nameSpan = row.querySelector('.acct-name');
+    const listItem = btn.closest('.acct-list-item');
+    const rowBtn   = listItem.querySelector('.acct-row');
+    const nameSpan = rowBtn.querySelector('.acct-name');
     const currentName = nameSpan.dataset.original || nameSpan.textContent.trim();
 
     if (btn.dataset.editing === '1') return;
@@ -241,7 +250,7 @@ document.querySelectorAll('.rename-btn').forEach(btn => {
     input.setAttribute('aria-label', 'Account name');
 
     nameSpan.replaceWith(input);
-    btn.textContent = 'cancel';
+    btn.textContent = '✕ Cancel';
     btn.dataset.editing = '1';
     input.focus();
     input.select();
@@ -254,7 +263,7 @@ document.querySelectorAll('.rename-btn').forEach(btn => {
       nameSpan.textContent = newName || currentName;
       nameSpan.dataset.original = newName || currentName;
       input.replaceWith(nameSpan);
-      btn.textContent = 'rename';
+      btn.textContent = '✎ Rename';
       delete btn.dataset.editing;
     };
 
@@ -268,22 +277,23 @@ document.querySelectorAll('.rename-btn').forEach(btn => {
           body: JSON.stringify({ name: newName })
         });
         if (resp.ok) restore(newName); else restore(currentName);
-      } catch (e) {
+      } catch (err) {
         restore(currentName);
       }
     };
 
-    input.addEventListener('keydown', e => {
-      if (e.key === 'Enter') { e.preventDefault(); save(); }
-      if (e.key === 'Escape') { restore(currentName); }
+    input.addEventListener('keydown', ev => {
+      if (ev.key === 'Enter') { ev.preventDefault(); save(); }
+      if (ev.key === 'Escape') { restore(currentName); }
     });
     input.addEventListener('blur', () => { if (!saved) save(); });
 
-    btn.addEventListener('click', () => {
+    btn.addEventListener('click', (ev) => {
+      ev.stopPropagation();
       if (btn.dataset.editing === '1') {
         saved = true;
         input.replaceWith(nameSpan);
-        btn.textContent = 'rename';
+        btn.textContent = '✎ Rename';
         delete btn.dataset.editing;
       }
     }, { once: true });
