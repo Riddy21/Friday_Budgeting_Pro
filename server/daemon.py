@@ -166,11 +166,22 @@ async def _run() -> None:
     """Async main — starts uvicorn server and background sync task."""
     port = _get_port()
 
+    # --- TLS/SSL support -------------------------------------------------
+    # Set FRIDAY_BP_SSL_CERTFILE and FRIDAY_BP_SSL_KEYFILE in .env to enable
+    # HTTPS. Required for Plaid OAuth redirect URI (Tailscale HTTPS).
+    ssl_certfile = os.environ.get("FRIDAY_BP_SSL_CERTFILE") or None
+    ssl_keyfile = os.environ.get("FRIDAY_BP_SSL_KEYFILE") or None
+    if ssl_certfile and ssl_keyfile:
+        log.info("TLS enabled — cert=%s  key=%s", ssl_certfile, ssl_keyfile)
+    # ---------------------------------------------------------------------
+
     config = uvicorn.Config(
         app=app,
         host=_DEFAULT_HOST,
         port=port,
         log_level="info",
+        ssl_certfile=ssl_certfile,
+        ssl_keyfile=ssl_keyfile,
     )
     server = uvicorn.Server(config)
 
