@@ -175,6 +175,34 @@ def init_db(path: str | Path) -> None:
         """)
         conn.commit()
 
+        # Migration: Flinks connector support (dual/tri connector).
+        # connection_type distinguishes plaid vs flinks connections; existing
+        # rows default to 'plaid' so the change is backward-compatible.
+        # flinks_login_id stores the permanent per-institution Flinks LoginId.
+        _add_col_if_missing(
+            conn, "bank_connections", "connection_type", "TEXT NOT NULL DEFAULT 'plaid'"
+        )
+        _add_col_if_missing(conn, "bank_connections", "flinks_login_id", "TEXT")
+        conn.commit()
+
+        # Migration: flinks_config table — per-user Flinks credentials stored in
+        # DB (parallel to plaid_config).  Used as a default when connecting a
+        # Canadian bank via Flinks without re-entering credentials.
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS flinks_config (
+                id INTEGER PRIMARY KEY,
+                user_id TEXT NOT NULL REFERENCES users(id),
+                customer_id TEXT NOT NULL,
+                secret_key TEXT NOT NULL,
+                x_api_key TEXT NOT NULL,
+                instance TEXT NOT NULL DEFAULT 'toolbox',
+                created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+                updated_at INTEGER NOT NULL DEFAULT (unixepoch()),
+                UNIQUE(user_id)
+            )
+        """)
+        conn.commit()
+
         # Migration: setup_interview (#206 — guided onboarding answers).
         # Stores answers from the personalisation interview keyed by
         # (user_id, question_key).  Idempotent on (user_id, question_key)
