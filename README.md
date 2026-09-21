@@ -98,6 +98,54 @@ Link modal and authenticate normally.
 
 ---
 
+## Connecting to Flinks (Canadian banks)
+
+Friday supports a second bank connector, **[Flinks](https://flinks.com)**, a
+Canadian open-banking aggregator with strong coverage of RBC, TD, BMO,
+Scotiabank, CIBC and dozens of credit unions. When you click **+ Connect a
+bank** you'll now see a chooser: **Plaid** or **Flinks**.
+
+Flinks uses a hosted iframe ("Flinks Connect") instead of Plaid Link. The flow:
+
+1. Friday generates a single-use *authorize token* (15-min TTL).
+2. The Flinks Connect iframe opens; you pick your bank and complete MFA.
+3. Flinks returns a permanent **LoginId** which Friday stores on the connection.
+4. Every `sync` re-authorizes with that LoginId and pulls the latest 90 days of
+   posted transactions.
+
+### Set up Flinks credentials
+
+1. Get your **CustomerId**, **secret key**, **x-api-key**, and **instance**
+   (subdomain) from your [Flinks dashboard](https://dashboard.flinks.io).
+2. Ask your OpenClaw agent:
+   `Set up my Flinks credentials — customer id is <id>, secret key is <key>, x-api-key is <xkey>, instance is <instance>`
+   (this calls the `configure_flinks` MCP tool).
+3. Click **+ Connect a bank → Flinks** and complete the Connect flow.
+
+Credentials are stored per-user in the `flinks_config` table and **merged** into
+`.env` (Plaid and Flinks keys coexist — the merge never clobbers your Plaid
+credentials).
+
+### Sandbox (toolbox) — try it with no real bank
+
+Flinks publishes a public sandbox on the `toolbox` instance. Use these values to
+exercise the full flow end-to-end:
+
+| Field | Value |
+|---|---|
+| instance | `toolbox` |
+| customer id | `43387ca6-0391-4c82-857d-70d95f087ecb` |
+| secret key | `c4569c54-e167-4d34-8de6-f4113bc82414` |
+| x-api-key | `3d5266a8-b697-48d4-8de6-52e2e2662acc` |
+
+The sandbox iframe adds `&demo=true` automatically and the only available test
+bank is **Flinks Capital**. Pick it, use any demo login, and Friday will import
+the sandbox accounts + transactions.
+
+See [`docs/flinks-setup.md`](docs/flinks-setup.md) for a step-by-step guide.
+
+---
+
 ## First Run
 
 When you visit `http://127.0.0.1:6789` for the first time, you see a

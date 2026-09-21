@@ -2295,8 +2295,24 @@ def ledger_items_delete(request: Request, ledger_id: str, item_id: str):
 # ── /link/start ──────────────────────────────────────────────────────────────
 
 
-@app.get("/link/start")
+@app.get("/link/start", response_class=HTMLResponse)
 def link_start(request: Request, back: Optional[str] = None):
+    """Show the connector chooser: Plaid (hosted Link) or Flinks (Canadian banks).
+
+    Previously this route went straight to Plaid; it now renders a chooser so
+    users can pick their connector.  The Plaid path lives at /link/plaid/start.
+    """
+    if not _is_authenticated(request):
+        return _redirect("/login")
+    return templates.TemplateResponse(
+        request,
+        "link_choose.html",
+        {"current_page": "accounts", "back_url": back or "/accounts"},
+    )
+
+
+@app.get("/link/plaid/start")
+def link_plaid_start(request: Request, back: Optional[str] = None):
     """Generate a Plaid link token and redirect to /link?token=..."""
     if not _is_authenticated(request):
         return _redirect("/login")
@@ -2310,6 +2326,91 @@ def link_start(request: Request, back: Optional[str] = None):
     token = url.split("token=", 1)[1]
     back_param = f"&back={back}" if back else ""
     return _redirect(f"/link?token={token}{back_param}")
+
+
+# ── /link/flinks ───────────────────────────────────────────────────────────────
+
+
+@app.get("/link/flinks/start", response_class=HTMLResponse)
+def link_flinks_start(request: Request, back: Optional[str] = None):
+    """Generate a Flinks authorize token and render the Connect iframe embed."""
+    if not _is_authenticated(request):
+        return _redirect("/login")
+    import logging
+
+    import server.main as _sm_flinks
+
+    try:
+        result = _sm_flinks.start_flinks_link()
+    except Exception as exc:  # noqa: BLE001
+        logging.getLogger(__name__).error("start_flinks_link failed: %s", exc)
+        return templates.TemplateResponse(
+            request,
+            "flinks_link.html",
+            {
+                "current_page": "accounts",
+                "error": f"Unexpected error starting Flinks: {exc}",
+                "back_url": back or "/accounts",
+            },
+            status_code=500,
+        )
+
+    if result.get("status") != "ok":
+        return templates.TemplateResponse(
+            request,
+            "flinks_link.html",
+            {
+                "current_page": "accounts",
+                "error": result.get("message", "Could not start Flinks Connect."),
+                "back_url": back or "/accounts",
+            },
+            status_code=400,
+        )
+
+    return templates.TemplateResponse(
+        request,
+        "flinks_link.html",
+        {
+            "current_page": "accounts",
+            "connect_url": result.get("connect_url"),
+            "instance": result.get("instance"),
+            "complete_url": "/link/flinks/complete",
+            "back_url": back or "/accounts",
+        },
+    )
+
+
+@app.post("/link/flinks/complete")
+async def link_flinks_complete(request: Request):
+    """Receive the Flinks LoginId after a successful Connect flow and store it.
+
+    Called by the Flinks Connect iframe postMessage handler via a hidden form
+    POST.  Creates the bank connection (connection_type='flinks'), which itself
+    triggers an initial background sync, then redirects to /accounts.
+    """
+    if not _is_authenticated(request):
+        return _redirect("/login")
+    import logging
+
+    form = await request.form()
+    login_id = (form.get("login_id") or form.get("loginId") or "").strip()
+    institution_name = (form.get("institution_name") or "").strip() or None
+    if not login_id:
+        return _redirect("/accounts?error=missing_login_id")
+
+    try:
+        import server.main as _sm_fc
+
+        result = _sm_fc.complete_flinks_link(
+            login_id=login_id, institution_name=institution_name
+        )
+    except Exception as exc:  # noqa: BLE001
+        logging.getLogger(__name__).error("complete_flinks_link failed: %s", exc)
+        return _redirect("/accounts?error=flinks_link_failed")
+
+    if result.get("status") != "ok":
+        return _redirect("/accounts?error=flinks_link_failed")
+    return _redirect("/accounts?linked=1")
 
 
 # ── /link ─────────────────────────────────────────────────────────────────────
