@@ -46,6 +46,11 @@ from server.providers.flinks import (
     FlinksProvider,
 )
 from server.providers.plaid import PlaidProvider
+from server.providers.simplefin import (
+    SimpleFINAuthError,
+    SimpleFINError,
+    SimpleFINProvider,
+)
 from server.sync_lock import LockBusy, sync_lock
 from server.transfer_detect import get_transfer_hint
 from ui.auth import (
@@ -2245,8 +2250,9 @@ def sync(classify: bool = True, progress_callback=None) -> dict:
                     # Dispatch to the right provider based on connection_type.
                     # ``sync_token`` is what the shared Plaid-shaped sync loop
                     # below passes as the first arg to sync_transactions():
-                    #   * Plaid  -> decrypted access_token
-                    #   * Flinks -> permanent LoginId (not a secret token)
+                    #   * Plaid     -> decrypted access_token
+                    #   * Flinks    -> permanent LoginId (not a secret token)
+                    #   * SimpleFIN -> decrypted Access URL (credentials embedded)
                     if conn_type == "flinks":
                         f_customer, f_secret, f_xapi, f_instance = _get_flinks_credentials(
                             conn_user_id
@@ -2258,6 +2264,14 @@ def sync(classify: bool = True, progress_callback=None) -> dict:
                             instance=f_instance,
                         )
                         sync_token = bc["flinks_login_id"]
+                    elif conn_type == "simplefin":
+                        # SimpleFIN Access URL is stored encrypted in the
+                        # plaid_access_token_encrypted column (re-uses the
+                        # existing NOT-NULL column; no extra column needed).
+                        conn_provider = SimpleFINProvider()
+                        sync_token = server.crypto.decrypt(
+                            bc["plaid_access_token_encrypted"]
+                        )
                     else:
                         encrypted_token = bc["plaid_access_token_encrypted"]
                         access_token = server.crypto.decrypt(encrypted_token)
@@ -4318,6 +4332,136 @@ def complete_flinks_link(
             sync()
         except Exception as exc:  # noqa: BLE001
             _logger.warning("post-flinks-link sync failed: %s", exc)
+
+    threading.Thread(target=_bg_sync, daemon=True).start()
+
+    return {
+        "status": "ok",
+        "connection_id": connection_id,
+        "institution_name": institution_name,
+    }
+
+
+# ---------------------------------------------------------------------------
+# SimpleFIN MCP tools
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool
+def complete_simplefin_link(
+    setup_token: str,
+    institution_name: str | None = None,
+) -> dict:
+    """Create a SimpleFIN bank connection from a user-supplied *setup_token*.
+
+    Parallel to ``complete_flinks_link`` / ``complete_link`` for Plaid.
+
+    The flow:
+
+    1. The user visits https://bridge.simplefin.org/simplefin/create, connects
+       their bank, and copies the Setup Token (a Base64-encoded claim URL).
+    2. The user pastes the Setup Token into the Friday Budgeting Pro UI or
+       gives it to HAL via chat.
+    3. This tool is called with that token.  It exchanges the token for a
+       permanent Access URL **once**, stores it Fernet-encrypted in
+       ``bank_connections.plaid_access_token_encrypted``, and triggers an
+       initial background sync.
+
+    Parameters
+    ----------
+    setup_token : str
+        The Setup Token from https://bridge.simplefin.org/simplefin/create
+    institution_name : str or None
+        Optional display name for the bank (auto-detected from the SimpleFIN
+        response if omitted).
+
+    Returns
+    -------
+    dict
+        ``{"status": "ok", "connection_id": ..., "institution_name": ...}``
+        or ``{"status": "error", "message": ...}``.
+    """
+    if not setup_token or not setup_token.strip():
+        return {"status": "error", "message": "setup_token must be non-empty"}
+
+    uid = get_active_user_id(server.paths.DB_PATH)
+
+    # Exchange the Setup Token for a permanent Access URL.
+    provider = SimpleFINProvider()
+    try:
+        access_url = provider.claim_setup_token(setup_token.strip())
+    except ValueError as exc:
+        return {"status": "error", "message": f"Invalid Setup Token: {exc}"}
+    except SimpleFINAuthError as exc:
+        return {
+            "status": "error",
+            "message": (
+                f"SimpleFIN rejected the Setup Token (403) — it may have already "
+                f"been claimed or may have expired.  Get a fresh token from "
+                f"https://bridge.simplefin.org/simplefin/create.  Detail: {exc}"
+            ),
+        }
+    except SimpleFINError as exc:
+        return {"status": "error", "message": f"SimpleFIN error: {exc}"}
+
+    # Try to resolve institution name from the Access URL if not provided.
+    if not institution_name:
+        try:
+            institution_name = provider.get_institution_name(access_url)
+        except Exception:  # noqa: BLE001
+            institution_name = "SimpleFIN"
+    institution_name = institution_name or "SimpleFIN"
+
+    # Encrypt the Access URL for at-rest storage.
+    encrypted_access_url = server.crypto.encrypt(access_url)
+
+    conn = get_db(server.paths.DB_PATH)
+    try:
+        # Idempotency: if this exact Access URL was already stored, update in place.
+        existing = conn.execute(
+            "SELECT id FROM bank_connections WHERE plaid_access_token_encrypted = ?",
+            (encrypted_access_url,),
+        ).fetchone()
+        if existing:
+            connection_id = existing["id"]
+            conn.execute(
+                """
+                UPDATE bank_connections
+                   SET status = 'active',
+                       institution_name = COALESCE(?, institution_name)
+                 WHERE id = ?
+                """,
+                (institution_name, connection_id),
+            )
+        else:
+            connection_id = str(uuid.uuid4())
+            conn.execute(
+                """
+                INSERT INTO bank_connections
+                    (id, plaid_item_id, plaid_access_token_encrypted, institution_name,
+                     status, user_id, plaid_env, connection_type)
+                VALUES (?, ?, ?, ?, 'active', ?, 'production', 'simplefin')
+                """,
+                (
+                    connection_id,
+                    f"simplefin-{connection_id}",  # synthetic item id
+                    encrypted_access_url,
+                    institution_name,
+                    uid,
+                ),
+            )
+        conn.commit()
+    finally:
+        conn.close()
+
+    # Trigger an initial sync in the background so bank_accounts populates.
+    import threading
+
+    def _bg_sync():
+        try:
+            sync()
+        except Exception as exc:  # noqa: BLE001
+            _logger.warning("post-simplefin-link sync failed: %s", exc)
 
     threading.Thread(target=_bg_sync, daemon=True).start()
 

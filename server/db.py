@@ -266,6 +266,25 @@ def init_db(path: str | Path) -> None:
         """)
         conn.commit()
 
+        # Migration: SimpleFIN connector support.
+        # connection_type already supports arbitrary values; 'simplefin' is valid.
+        # The Access URL (credentials embedded) is stored encrypted in
+        # plaid_access_token_encrypted (re-uses the existing NOT NULL column).
+        # No extra bank_connections column needed: unlike Flinks, SimpleFIN
+        # decrypts its credential from plaid_access_token_encrypted exactly
+        # like Plaid does — but the sync loop dispatches to SimpleFINProvider.
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS simplefin_config (
+                id         INTEGER PRIMARY KEY,
+                user_id    TEXT NOT NULL REFERENCES users(id),
+                notes      TEXT,
+                created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+                updated_at INTEGER NOT NULL DEFAULT (unixepoch()),
+                UNIQUE(user_id)
+            )
+        """)
+        conn.commit()
+
         # Migration: Investment contribution rule → savings type (#235)
         # The default rule at priority 20 was previously typed 'transfer'.
         # Update it to 'savings' so investment outflows are classified correctly.

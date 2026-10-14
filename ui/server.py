@@ -2413,6 +2413,87 @@ async def link_flinks_complete(request: Request):
     return _redirect("/accounts?linked=1")
 
 
+# ── /link/simplefin ──────────────────────────────────────────────────────────────────────────
+
+
+@app.get("/link/simplefin/start", response_class=HTMLResponse)
+def link_simplefin_start(request: Request, back: Optional[str] = None):
+    """Render the SimpleFIN Setup Token paste form.
+
+    Unlike Plaid (which redirects to a token URL) and Flinks (which embeds an
+    iframe), SimpleFIN asks the user to visit the SimpleFIN Bridge, copy their
+    Setup Token, and paste it here.  No server-side action is needed before
+    showing this page.
+    """
+    if not _is_authenticated(request):
+        return _redirect("/login")
+    return templates.TemplateResponse(
+        request,
+        "simplefin_link.html",
+        {
+            "current_page": "accounts",
+            "complete_url": "/link/simplefin/complete",
+            "back_url": back or "/accounts",
+        },
+    )
+
+
+@app.post("/link/simplefin/complete")
+async def link_simplefin_complete(request: Request):
+    """Receive the SimpleFIN Setup Token, exchange it for an Access URL, and store.
+
+    The user submits the paste form from /link/simplefin/start.  This handler
+    calls ``complete_simplefin_link`` to exchange the token and create the
+    ``bank_connections`` row, then redirects to /accounts.
+    """
+    if not _is_authenticated(request):
+        return _redirect("/login")
+
+    form = await request.form()
+    setup_token = (form.get("setup_token") or "").strip()
+    institution_name = (form.get("institution_name") or "").strip() or None
+
+    if not setup_token:
+        return _redirect("/accounts?error=missing_setup_token")
+
+    try:
+        import server.main as _sm_sf
+
+        result = _sm_sf.complete_simplefin_link(
+            setup_token=setup_token,
+            institution_name=institution_name,
+        )
+    except Exception as exc:  # noqa: BLE001
+        logging.getLogger(__name__).error("complete_simplefin_link failed: %s", exc)
+        return templates.TemplateResponse(
+            request,
+            "simplefin_link.html",
+            {
+                "current_page": "accounts",
+                "complete_url": "/link/simplefin/complete",
+                "back_url": "/accounts",
+                "error": f"Unexpected error: {exc}",
+            },
+            status_code=500,
+        )
+
+    if result.get("status") != "ok":
+        # Re-render the form with the error so the user can retry.
+        return templates.TemplateResponse(
+            request,
+            "simplefin_link.html",
+            {
+                "current_page": "accounts",
+                "complete_url": "/link/simplefin/complete",
+                "back_url": "/accounts",
+                "error": result.get("message", "Could not connect SimpleFIN account."),
+            },
+            status_code=400,
+        )
+
+    return _redirect("/accounts?linked=1")
+
+
 # ── /link ─────────────────────────────────────────────────────────────────────
 
 

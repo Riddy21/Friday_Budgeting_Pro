@@ -1,0 +1,125 @@
+{% extends "base.html" %}
+
+{% block title %}Connect via SimpleFIN — Friday Budgeting Pro{% endblock %}
+
+{% block content %}
+<div class="card card-narrow">
+  <h1>Connect a bank (SimpleFIN Bridge)</h1>
+
+  {% if error %}
+  <div class="alert alert-error" id="sfin-error">{{ error }}</div>
+  <p class="hint" style="margin-top:16px">
+    <a href="/link/start">← Back to connector choice</a> ·
+    <a href="{{ back_url or '/accounts' }}">Cancel</a>
+  </p>
+  {% else %}
+
+  <p class="hint">
+    SimpleFIN Bridge lets you securely share read-only access to your bank
+    accounts with this app.  No bank passwords are ever stored here — only
+    a temporary access token that you can revoke at any time.
+  </p>
+
+  <ol class="sfin-steps">
+    <li>
+      <strong>Get your Setup Token</strong><br>
+      <a href="https://bridge.simplefin.org/simplefin/create"
+         target="_blank" rel="noopener noreferrer"
+         class="btn-primary sfin-create-btn">
+        Connect at SimpleFIN Bridge →
+      </a>
+      <p class="hint">
+        Sign in (or create a free account), connect your bank, then copy
+        the Setup Token shown on the page.
+      </p>
+    </li>
+    <li>
+      <strong>Paste your Setup Token below</strong>
+      <form method="post" action="{{ complete_url }}" id="sfin-form">
+        <div class="field-row" style="margin-top:10px">
+          <label for="setup_token" class="visually-hidden">Setup Token</label>
+          <textarea
+            id="setup_token"
+            name="setup_token"
+            rows="4"
+            placeholder="Paste your SimpleFIN Setup Token here…"
+            required
+            autocomplete="off"
+            autocorrect="off"
+            spellcheck="false"
+            class="sfin-token-input"></textarea>
+        </div>
+        {% if institution_name_hint %}
+        <div class="field-row" style="margin-top:10px">
+          <label for="institution_name">Institution name (optional)</label>
+          <input
+            id="institution_name"
+            name="institution_name"
+            type="text"
+            placeholder="e.g. Chase, CIBC, TD Bank…"
+            value="{{ institution_name_hint or '' }}"
+            autocomplete="off" />
+        </div>
+        {% else %}
+        <input type="hidden" name="institution_name" value="" />
+        {% endif %}
+        <button type="submit" class="btn-primary" style="margin-top:16px" id="sfin-submit">
+          Connect bank
+        </button>
+      </form>
+    </li>
+  </ol>
+
+  <p class="hint" style="margin-top:24px">
+    <a href="/link/start">← Back to connector choice</a> ·
+    <a href="{{ back_url or '/accounts' }}">Cancel</a>
+  </p>
+
+  <script>
+    (function () {
+      var form = document.getElementById('sfin-form');
+      var btn  = document.getElementById('sfin-submit');
+      if (form && btn) {
+        form.addEventListener('submit', function () {
+          btn.disabled = true;
+          btn.textContent = 'Connecting…';
+        });
+      }
+    })();
+  </script>
+  {% endif %}
+</div>
+
+<style>
+.sfin-steps {
+  margin: 20px 0 0;
+  padding-left: 1.4em;
+}
+.sfin-steps li {
+  margin-bottom: 20px;
+  line-height: 1.5;
+}
+.sfin-create-btn {
+  display: inline-block;
+  margin-top: 8px;
+  text-decoration: none;
+}
+.sfin-token-input {
+  width: 100%;
+  font-family: monospace;
+  font-size: 0.85rem;
+  padding: 10px;
+  border: 1px solid var(--border-subtle, #ccc);
+  border-radius: 8px;
+  resize: vertical;
+  box-sizing: border-box;
+}
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+}
+</style>
+{% endblock %}
