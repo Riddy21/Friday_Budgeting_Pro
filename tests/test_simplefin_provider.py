@@ -15,7 +15,6 @@ import unittest
 from server.providers.simplefin import (
     SimpleFINAPIError,
     SimpleFINAuthError,
-    SimpleFINError,
     SimpleFINProvider,
     _to_float,
 )

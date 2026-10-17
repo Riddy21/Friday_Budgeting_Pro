@@ -22,14 +22,13 @@ from unittest.mock import patch
 
 import pytest
 
+from server.db import init_db
+from server.main import infer_account_type
+
 # ---------------------------------------------------------------------------
 # Import helpers
 # ---------------------------------------------------------------------------
-
 from server.providers.simplefin import SimpleFINProvider
-from server.main import infer_account_type
-from server.db import init_db
-
 
 # ---------------------------------------------------------------------------
 # Fixtures

@@ -9,8 +9,9 @@ module-scoped live-server fixtures (which manage their own DB isolation) are
 not disrupted by per-test DB-path patching.
 """
 
-import pytest
 from pathlib import Path
+
+import pytest
 
 
 @pytest.fixture(autouse=True)

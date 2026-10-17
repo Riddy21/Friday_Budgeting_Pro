@@ -33,6 +33,7 @@ Route overview
 
 from __future__ import annotations
 
+import logging
 import os
 import secrets
 import time
@@ -1103,6 +1104,7 @@ def api_summary(request: Request, period: str = "this_month"):
     if not _is_authenticated(request):
         return JSONResponse({"error": "Unauthorized"}, status_code=401)
     from datetime import date as _date
+
     from server.main import summary as _summary
 
     # Translate UI-friendly period names to the values summary() expects.

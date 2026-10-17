@@ -38,13 +38,11 @@ import base64
 import datetime as _datetime
 import json as _json
 import os
-import time as _time
 import urllib.error
 import urllib.parse
 import urllib.request
 
 from server.providers.base import BankProvider
-
 
 # ---------------------------------------------------------------------------
 # Exceptions

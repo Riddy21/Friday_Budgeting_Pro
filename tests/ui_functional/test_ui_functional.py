@@ -24,7 +24,6 @@ from __future__ import annotations
 
 import os
 import socket
-import sqlite3
 import tempfile
 import threading
 import time
@@ -32,7 +31,6 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from pathlib import Path
-from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -811,7 +809,9 @@ class TestSavingsUI:
 
     def test_api_summary_this_month(self, live_server):
         """GET /api/summary?period=this_month returns valid JSON."""
-        import urllib.request, urllib.parse, json as _json
+        import json as _json
+        import urllib.parse
+        import urllib.request
 
         base = live_server["base_url"]
 
@@ -839,8 +839,10 @@ class TestSavingsUI:
     @pytest.mark.parametrize("period", ["this_month", "last_month", "this_year", "ytd"])
     def test_api_summary_all_periods(self, live_server, period):
         """All UI period strings return valid JSON (no ValueError)."""
-        import urllib.request, urllib.parse, json as _json
         import http.cookiejar
+        import json as _json
+        import urllib.parse
+        import urllib.request
 
         base = live_server["base_url"]
         jar = http.cookiejar.CookieJar()

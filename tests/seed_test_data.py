@@ -25,7 +25,6 @@ import os
 import sys
 import uuid
 from pathlib import Path
-from datetime import date
 
 # ── Allow running from project root ──────────────────────────────────────────
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -107,7 +106,6 @@ def _uid() -> str:
 
 def seed(db_path: Path) -> None:
     """Create a fresh DB at *db_path* and populate it with test data."""
-    import importlib
     import os
 
     db_path.parent.mkdir(parents=True, exist_ok=True)
@@ -134,7 +132,7 @@ def seed(db_path: Path) -> None:
     init_db(db_path)
     create_user(db_path, "testuser", "testpass123")
 
-    from server.main import apply_initial_setup, get_active_user_id
+    from server.main import apply_initial_setup
     apply_initial_setup(banks_to_link=[], extra_ledgers=[], hints=[])
 
     conn = get_db(db_path)
@@ -263,7 +261,7 @@ def seed(db_path: Path) -> None:
 
     print(f"\n✅ Seeded {db_path}")
     print(f"   Transactions: {len(TRANSACTIONS)} ({inserted} with entries, {skipped_transfers} transfers)")
-    print(f"\n   Expected totals for 2026-05:")
+    print("\n   Expected totals for 2026-05:")
     print(f"     income   = ${EXPECTED['income']:,.2f}")
     print(f"     expenses = ${EXPECTED['expenses']:,.2f}")
     print(f"     savings  = ${EXPECTED['savings']:,.2f}")

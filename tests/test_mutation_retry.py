@@ -10,11 +10,8 @@ from __future__ import annotations
 
 import json
 import sqlite3
-import tempfile
 from pathlib import Path
-from types import SimpleNamespace
-from unittest.mock import MagicMock, call, patch
-
+from unittest.mock import MagicMock, patch
 
 # ---------------------------------------------------------------------------
 # Helper: build an exception that mimics a Plaid ApiException
@@ -35,7 +32,6 @@ class TestIsMutationDuringPaginationError:
     """Unit tests for the _is_mutation_during_pagination_error helper."""
 
     def _call(self, exc: Exception) -> bool:
-        from server.main import sync  # triggers inner-function definitions
         # Access the nested helper via a sync() call is not straightforward;
         # we define a thin wrapper that mirrors the logic so we can test it
         # independently — this is also a regression guard.

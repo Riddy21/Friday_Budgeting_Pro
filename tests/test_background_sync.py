@@ -8,7 +8,7 @@ Covers:
 from __future__ import annotations
 
 import asyncio
-from unittest.mock import AsyncMock, MagicMock, patch, call
+from unittest.mock import MagicMock, patch
 
 
 async def _run_loop_n_iterations(n: int, interval: float = 0.0) -> MagicMock:
