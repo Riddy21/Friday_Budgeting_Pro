@@ -2055,6 +2055,52 @@ def _deduplicate_accounts(conn, user_id: str) -> None:  # conn: sqlite3.Connecti
                 if overlap_ratio >= 0.5:
                     _flag_dup(smaller, larger)
 
+    # ------------------------------------------------------------------
+    # Pass 5: identical empty siblings that share an account-number suffix.
+    # Same (connection, name, type, subtype) where EVERY sibling has zero
+    # transactions AND the name carries a parenthesised account-number suffix
+    # such as "RBC High Interest eSavings (1822)".  Two accounts sharing the
+    # same trailing number in the same bank are a re-link/re-import artefact,
+    # not two distinct accounts.  Passes 3/4 can't compare them (no dates, no
+    # fingerprints), so this pass handles them.
+    #
+    # We deliberately require the (NNNN) suffix: two same-named accounts WITHOUT
+    # an identifying number (e.g. "Mystery Account") could be genuinely
+    # different, so those are left alone (see test_null_mask_same_connection).
+    # Only triggers when ALL siblings are empty, so an account holding data is
+    # never hidden.
+    # ------------------------------------------------------------------
+    import re as _re
+
+    def _acct_suffix(name: str | None) -> str | None:
+        """Return the parenthesised account-number suffix, e.g. '(1822)' -> '1822'."""
+        if not name:
+            return None
+        matches = _re.findall(r"\(([^)]+)\)", name)
+        return matches[-1].strip() if matches else None
+
+    pass5_groups: dict[tuple, list[str]] = {}
+    for r in sibling_rows:
+        suffix = _acct_suffix(r["name"])
+        if not suffix:
+            continue  # no account-number signal -> too risky to auto-dedup
+        key = (r["connection_id"], r["name"], r["type"], r["subtype"], suffix)
+        pass5_groups.setdefault(key, []).append(r["id"])
+
+    for key, acct_ids in pass5_groups.items():
+        if len(acct_ids) < 2:
+            continue
+        live_ids = [aid for aid in acct_ids if not _already_dup(aid)]
+        if len(live_ids) < 2:
+            continue
+        # Only act when every remaining sibling is transaction-less.
+        if any(_txn_count(aid) > 0 for aid in live_ids):
+            continue
+        primary = sorted(live_ids)[0]  # deterministic primary
+        for aid in live_ids:
+            if aid != primary:
+                _flag_dup(aid, primary)
+
 
 # ---------------------------------------------------------------------------
 # Suspicious transaction detection (#273)
