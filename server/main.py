@@ -1814,6 +1814,89 @@ def classify_pending_transactions(
     }
 
 
+def infer_account_type(name: str, current_type: str | None = None) -> str:
+    """Infer the correct account type from the account name when the provider
+    returns a generic type (e.g. SimpleFIN hardcodes ``"depository"`` for
+    everything because it doesn\'t expose type metadata).
+
+    This is needed because SimpleFIN cannot distinguish credit cards, mortgages,
+    and investment accounts from ordinary chequing/savings accounts.  We use
+    name-matching heuristics to fill the gap.
+
+    Rules (applied in order — first match wins):
+
+    1. If the provider already gave a non-generic type (i.e. not ``depository``
+       and not ``None``), trust it and return as-is.  This preserves Plaid\'s
+       richer type metadata.
+    2. Credit-card keywords in the name → ``"credit"``.
+       ("Visa", "Mastercard", "Credit Card", "Amex", "American Express", "MC")
+    3. Mortgage/loan keywords → ``"loan"``.
+       ("Mortgage", "Loan", "Credit Line", "Line of Credit", "LOC", "HELOC")
+    4. Investment keywords in the name → ``"investment"``.
+       ("Wealthsimple", "Questrade", "RRSP", "TFSA", "FHSA", "RRIF",
+        "Invest", "Brokerage", "Portfolio")
+    5. Fall back to ``current_type`` (e.g. ``"depository"``) if set, else
+       ``"depository"``.
+
+    Returns
+    -------
+    str
+        One of ``"credit"``, ``"loan"``, ``"investment"``, or ``"depository"``.
+    """
+    # Rule 1: trust non-generic provider types (Plaid gives real types).
+    if current_type and current_type not in ("depository", ""):
+        return current_type
+
+    name_lower = (name or "").lower()
+
+    # Rule 2: credit card detection.
+    # Common card brand names and generic "credit card" phrasing.
+    _CREDIT_KEYWORDS = (
+        "visa",
+        "mastercard",
+        "amex",
+        "american express",
+        " mc ",
+        "credit card",
+    )
+    if any(kw in name_lower for kw in _CREDIT_KEYWORDS):
+        return "credit"
+
+    # Rule 3: mortgage / loan detection.
+    # Mortgage and loan accounts are LIABILITIES — their balances represent
+    # money OWED.  We negate them for net-worth calculations.
+    _LOAN_KEYWORDS = (
+        "mortgage",
+        " loan",
+        "credit line",
+        "line of credit",
+        " loc ",
+        "heloc",
+    )
+    if any(kw in name_lower for kw in _LOAN_KEYWORDS):
+        return "loan"
+
+    # Rule 4: investment account detection.
+    # These accounts hold securities whose balance changes without transactions.
+    _INVESTMENT_KEYWORDS = (
+        "wealthsimple",
+        "questrade",
+        "rrsp",
+        "tfsa",
+        "fhsa",
+        "rrif",
+        "invest",
+        "brokerage",
+        "portfolio",
+        "rbc direct",
+    )
+    if any(kw in name_lower for kw in _INVESTMENT_KEYWORDS):
+        return "investment"
+
+    # Rule 5: fall back to current_type or generic depository.
+    return current_type or "depository"
+
+
 def _deduplicate_accounts(conn, user_id: str) -> None:  # conn: sqlite3.Connection
     """Mark duplicate bank_accounts for a user (issue #269).
 
@@ -2590,7 +2673,8 @@ def sync(
                     next_cursor = result.get("next_cursor") if isinstance(result, dict) else None
                     accounts_list = result.get("accounts", []) if isinstance(result, dict) else []
 
-                    # Build a lookup map: plaid_account_id -> {name, type, currency}
+                    # Build a lookup map: plaid_account_id -> {name, type, currency,
+                    # balance_current, balance_available, owner_label}
                     # Use official_name if present, else fall back to name.
                     account_meta: dict[str, dict] = {}
                     for acct in accounts_list:
@@ -2604,12 +2688,24 @@ def sync(
                             # iso_currency_code from balances; fall back to 'CAD'
                             balances = _get(acct, "balances") or {}
                             acct_currency = _get(balances, "iso_currency_code") or "CAD"
+                            # owner_label: carried from SimpleFIN _normalise_account
+                            # (org.name or org.domain).  Plaid accounts set this to
+                            # None; the DB default of NULL is correct for Plaid.
+                            owner_label = _get(acct, "owner_label")
+                            # Infer the real account type from the account name when
+                            # the provider returns a generic "depository" type.
+                            # SimpleFIN hardcodes "depository" for everything — this
+                            # fixes credit cards, mortgages, and investment accounts.
+                            # (See infer_account_type() for the matching rules.)
+                            inferred_type = infer_account_type(acct_name, acct_type)
                             account_meta[acct_id] = {
                                 "name": acct_name,
                                 "type": acct_type,
+                                "inferred_type": inferred_type,
                                 "currency": acct_currency,
                                 "balance_current": _get(balances, "current"),
                                 "balance_available": _get(balances, "available"),
+                                "owner_label": owner_label,
                             }
 
                     now = int(_time.time())
@@ -2619,10 +2715,14 @@ def sync(
                     conn_classified = 0
 
                     # Always upsert account rows and update names, types,
-                    # currencies, and balances from the accounts list — even
-                    # when no new transactions came back.  This ensures that
-                    # bank_accounts is populated on the very first sync for
-                    # accounts with no transaction history yet.
+                    # currencies, balances, owner_label, and inferred_type from
+                    # the accounts list — even when no new transactions came back.
+                    # This is critical for:
+                    # (a) accounts with no transaction history (investment, mortgage)
+                    # (b) balance-only sync: investment/mortgage balances drift
+                    #     without any transactions, so we must update them on every
+                    #     sync regardless of whether added/modified/removed is empty.
+                    # (see RIDVAN_REQUESTS.md item 7 — routine balance sync)
                     with db_txn(db_conn):
                         for plaid_acct_id, meta in account_meta.items():
                             # INSERT the row if it doesn't exist yet (first sync
@@ -2632,20 +2732,29 @@ def sync(
                                 "(id, connection_id, plaid_account_id) VALUES (?, ?, ?)",
                                 (str(uuid.uuid4()), connection_id, plaid_acct_id),
                             )
+                            # Always update balance_current and balance_available
+                            # (unconditionally, not COALESCE) so that investment
+                            # and mortgage balances drift correctly with each sync.
+                            # owner_label: only set when the provider supplies one
+                            # (SimpleFIN), don\'t clobber existing value with NULL.
                             db_conn.execute(
                                 "UPDATE bank_accounts SET "
                                 "name = COALESCE(NULLIF(name, ''), ?), "
                                 "type = COALESCE(NULLIF(type, ''), ?), "
+                                "inferred_type = ?, "
                                 "currency = ?, "
                                 "balance_current = ?, "
-                                "balance_available = ? "
+                                "balance_available = ?, "
+                                "owner_label = COALESCE(?, owner_label) "
                                 "WHERE plaid_account_id = ?",
                                 (
                                     meta.get("name"),
                                     meta.get("type"),
+                                    meta.get("inferred_type"),
                                     meta.get("currency") or "CAD",
                                     meta.get("balance_current"),
                                     meta.get("balance_available"),
+                                    meta.get("owner_label"),  # NULL-safe: COALESCE keeps old value
                                     plaid_acct_id,
                                 ),
                             )
@@ -2723,9 +2832,11 @@ def sync(
                             ).fetchone()
                             bank_account_id = ba_row["id"]
 
-                            # Populate name/type/currency from account metadata (idempotent —
-                            # only overwrites when the incoming value is non-null so
-                            # a second sync won't blank out rows with good data).
+                            # Populate name/type/currency/owner_label from account
+                            # metadata (idempotent — only overwrites when the incoming
+                            # value is non-null so a second sync won\'t blank out rows
+                            # with good data).  inferred_type and owner_label are only
+                            # written when the provider supplies them (SimpleFIN path).
                             acct_currency = "CAD"  # default
                             if plaid_account_id in account_meta:
                                 meta = account_meta[plaid_account_id]
@@ -2741,16 +2852,23 @@ def sync(
                                         "WHERE plaid_account_id = ? AND (type IS NULL OR type = '')",
                                         (meta["type"], plaid_account_id),
                                     )
-                                # Always update currency + balances from Plaid (authoritative)
+                                # Always update inferred_type, currency, and balances.
+                                # inferred_type is computed on every sync from the
+                                # account name so it\'s always current even if the name
+                                # was renamed by the user between syncs.
                                 acct_currency = meta.get("currency") or "CAD"
                                 db_conn.execute(
                                     "UPDATE bank_accounts SET currency = ?, "
-                                    "balance_current = ?, balance_available = ? "
+                                    "balance_current = ?, balance_available = ?, "
+                                    "inferred_type = ?, "
+                                    "owner_label = COALESCE(?, owner_label) "
                                     "WHERE plaid_account_id = ?",
                                     (
                                         acct_currency,
                                         meta.get("balance_current"),
                                         meta.get("balance_available"),
+                                        meta.get("inferred_type"),
+                                        meta.get("owner_label"),
                                         plaid_account_id,
                                     ),
                                 )
