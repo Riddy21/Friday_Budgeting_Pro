@@ -5,7 +5,7 @@ Tests:
   - Migrations: fresh DB has type/description on ledgers, default_ledger_id
     on bank_accounts, item_type on line_items
   - list_ledgers() returns type and description fields
-  - create_property_ledger() creates ledger with type=property and 6 line items
+  - create_property_ledger() creates ledger with type=property and 9 line items
   - create_investment_ledger() creates ledger with type=investment and 2 line items
   - set_account_ledger() links account to ledger correctly
   - Invalid account or ledger → error response
@@ -128,7 +128,8 @@ def test_list_ledgers_returns_type_and_description(db_path: Path, authed_user, m
 
 
 def test_create_property_ledger(db_path: Path, authed_user):
-    """create_property_ledger creates a ledger with type=property and 6 line items."""
+    """create_property_ledger creates a type=property ledger with the mortgage
+    split into its own sub-category group (#271)."""
     from server.main import create_property_ledger
 
     result = create_property_ledger("Test Property", description="123 Main St")
@@ -150,13 +151,17 @@ def test_create_property_ledger(db_path: Path, authed_user):
     finally:
         conn.close()
 
-    assert len(items) == 6, f"Expected 6 line items, got {len(items)}: {[i['name'] for i in items]}"
+    assert len(items) == 9, f"Expected 9 line items, got {len(items)}: {[i['name'] for i in items]}"
 
     names = [i["name"] for i in items]
     item_types = {i["name"]: i["item_type"] for i in items}
 
     assert "Rent income" in names
-    assert "Mortgage" in names
+    # Mortgage is now a sub-category group (#271), not a single flat line.
+    assert "Mortgage – Principal" in names
+    assert "Mortgage – Interest" in names
+    assert "Mortgage – Property tax (escrow)" in names
+    assert "Mortgage – Insurance (escrow)" in names
     assert "Property tax" in names
     assert "Maintenance & repairs" in names
     assert "Insurance" in names
@@ -164,7 +169,10 @@ def test_create_property_ledger(db_path: Path, authed_user):
 
     assert item_types["Rent income"] == "income"
     for expense_name in (
-        "Mortgage",
+        "Mortgage – Principal",
+        "Mortgage – Interest",
+        "Mortgage – Property tax (escrow)",
+        "Mortgage – Insurance (escrow)",
         "Property tax",
         "Maintenance & repairs",
         "Insurance",

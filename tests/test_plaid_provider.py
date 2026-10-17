@@ -399,5 +399,82 @@ class TestCompleteLinkReadsEnvFromEnvironment(unittest.TestCase):
                     _paths.DB_PATH = orig_db
 
 
+# ---------------------------------------------------------------------------
+# get_liabilities (#271)
+# ---------------------------------------------------------------------------
+
+
+class TestGetLiabilities(unittest.TestCase):
+    @patch("server.providers.plaid.plaid_api.PlaidApi")
+    def test_normalises_mortgage_fields(self, mock_api_cls):
+        api = _mock_plaid_api(mock_api_cls)
+        api.liabilities_get.return_value = {
+            "liabilities": {
+                "mortgage": [
+                    {
+                        "account_id": "plaid-acct-1",
+                        "origination_principal_amount": 420000.0,
+                        "interest_rate": {"percentage": 4.75, "type": "fixed"},
+                        "loan_term": "30 year",
+                        "loan_type_description": "conventional",
+                        "next_monthly_payment": 2300.0,
+                        "next_payment_due_date": "2026-11-01",
+                        "last_payment_amount": 2300.0,
+                        "last_payment_date": "2026-10-01",
+                        "escrow_balance": 3100.0,
+                        "origination_date": "2020-06-01",
+                        "maturity_date": "2050-06-01",
+                        "ytd_interest_paid": 9000.0,
+                        "ytd_principal_paid": 3000.0,
+                        "property_address": {
+                            "street": "123 Main St",
+                            "city": "Toronto",
+                            "region": "ON",
+                            "postal_code": "M1A1A1",
+                        },
+                    }
+                ]
+            }
+        }
+        with patch.dict(os.environ, _env(), clear=False):
+            from server.providers.plaid import PlaidProvider
+
+            out = PlaidProvider().get_liabilities("access-token")
+        self.assertEqual(len(out), 1)
+        m = out[0]
+        self.assertEqual(m["account_id"], "plaid-acct-1")
+        self.assertEqual(m["interest_rate"], 4.75)
+        self.assertEqual(m["origination_principal"], 420000.0)
+        self.assertEqual(m["loan_type"], "conventional")
+        self.assertEqual(m["maturity_date"], "2050-06-01")
+        self.assertEqual(m["ytd_interest_paid"], 9000.0)
+        self.assertIn("123 Main St", m["property_address"])
+        self.assertIn("Toronto", m["property_address"])
+
+    @patch("server.providers.plaid.plaid_api.PlaidApi")
+    def test_empty_when_no_mortgages(self, mock_api_cls):
+        api = _mock_plaid_api(mock_api_cls)
+        api.liabilities_get.return_value = {"liabilities": {"mortgage": []}}
+        with patch.dict(os.environ, _env(), clear=False):
+            from server.providers.plaid import PlaidProvider
+
+            out = PlaidProvider().get_liabilities("access-token")
+        self.assertEqual(out, [])
+
+    @patch("server.providers.plaid.plaid_api.PlaidApi")
+    def test_product_not_supported_swallowed(self, mock_api_cls):
+        from plaid.exceptions import ApiException
+
+        api = _mock_plaid_api(mock_api_cls)
+        exc = ApiException(status=400)
+        exc.body = '{"error_code": "PRODUCTS_NOT_SUPPORTED"}'
+        api.liabilities_get.side_effect = exc
+        with patch.dict(os.environ, _env(), clear=False):
+            from server.providers.plaid import PlaidProvider
+
+            out = PlaidProvider().get_liabilities("access-token")
+        self.assertEqual(out, [])
+
+
 if __name__ == "__main__":
     unittest.main()

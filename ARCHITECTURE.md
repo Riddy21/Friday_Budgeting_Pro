@@ -209,6 +209,7 @@ Full schema lives in `db/schema.sql` (source of truth). Summary:
 | `routing_rules` | Legacy substring rules — kept for compat, no new writes |
 | `fx_rates` | Exchange rate cache (base/quote/rate, refresh if >24h old) |
 | `sync_cursors` | Plaid incremental sync cursors per connection |
+| `mortgage_accounts` | Per-mortgage loan detail (balance, rate, escrow, YTD principal/interest, maturity) used to split payments (#271) |
 | `app_config` | Single-row: home_currency, timezone, password hash, notification channel |
 | `notifications` | In-app notification log |
 | `auto_promoted_rules_log` | Audit trail for auto-promoted routing rules |
@@ -294,7 +295,8 @@ tool calls; nothing new is required from the UI.
 - `list_ledgers()` — returns `id`, `name`, `type`, `description`, and `items` for each ledger
 - `get_ledger(ledger_id, period?)` — returns full ledger tree: metadata, all line items with per-item totals, and the transactions classified to each item; `period` is `"this_month"` (default), `"last_month"`, `"this_year"`, or `None` for all time
 - `add_ledger(name)` — creates a generic personal ledger
-- `create_property_ledger(name, description?)` — creates a `property` ledger seeded with 6 default line items (Rent income, Mortgage, Property tax, Maintenance & repairs, Insurance, Utilities)
+- `create_property_ledger(name, description?)` — creates a `property` ledger seeded with 9 default line items.  The mortgage is broken into its own **sub-category group** (#271) so payments split into principal/interest/escrow instead of a single flat line: Rent income, Mortgage – Principal, Mortgage – Interest, Mortgage – Property tax (escrow), Mortgage – Insurance (escrow), Property tax, Maintenance & repairs, Insurance, Utilities
+- `get_mortgage_details(account_id)` / `preview_mortgage_split(account_id, payment_amount)` — surface stored mortgage detail and preview how a payment splits (method: `ytd_ratio` → `amortization` → `fallback`) (#271)
 - `create_investment_ledger(name)` — creates an `investment` ledger seeded with 2 default line items (Contributions, Dividends & Returns)
 - `add_line_item(ledger_id, name, item_type)` — `item_type` is `income`, `expense`, or `savings`
 - `remove_line_item(id)`
@@ -545,6 +547,40 @@ so it can run as a pre-pass without touching `classifier.py`.
   Fidelity, Schwab.
 - Used by callers that want to tag investment outflows as `savings` rather than
   `spending`.
+
+### Mortgage Detail & Payment Splitting (#271)
+
+Mortgages are modelled as a **sub-category group inside each property ledger**
+(not a standalone Debts ledger) so a payment splits into principal / interest /
+escrow instead of a single flat "Mortgage" line.
+
+**Data pull.** On each sync, Plaid connections call
+`PlaidProvider.get_liabilities(access_token)` (`/liabilities/get`). This is
+best-effort: a liabilities failure (`PRODUCTS_NOT_SUPPORTED`, `PRODUCT_NOT_READY`,
+etc.) is swallowed and never breaks a transaction sync. Each mortgage is
+normalised into internal field names and persisted to `mortgage_accounts` via
+`upsert_mortgage_account(account_id, detail, ledger_id)`. Partial updates (e.g. a
+SimpleFIN balance-only refresh) only overwrite the keys present, so richer Plaid
+detail is preserved. `outstanding_principal` is taken from the account's current
+balance; the rest (rate, origination/maturity dates, next/last payment, escrow,
+YTD principal/interest, property address, loan term/type) come from Plaid.
+
+**Payment split.** `split_mortgage_payment(payment_amount, mortgage)` returns
+`{principal, interest, escrow_tax, escrow_insurance, method}` using the best
+available signal, in priority order:
+1. **`ytd_ratio`** — apportion by Plaid's `ytd_interest_paid` / `ytd_principal_paid`
+   ratio (most accurate; reflects the lender's own accounting).
+2. **`amortization`** — interest = `outstanding_principal × (rate/12)`;
+   principal = payment − interest.
+3. **`fallback`** — everything to principal when no rate/YTD data exists, so no
+   money is lost or invented.
+Escrow is only apportioned when a clear escrow signal exists (escrow balance +
+scheduled payment materially above implied P+I); otherwise escrow is 0.
+
+**Tools.** `get_mortgage_details(account_id)` returns the stored row;
+`preview_mortgage_split(account_id, payment_amount)` previews a split without
+writing. Both are MCP tools so chat and the UI can display a mortgage's full
+picture.
 
 ---
 

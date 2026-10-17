@@ -262,3 +262,32 @@ CREATE TABLE IF NOT EXISTS plaid_revocation_log (
   revoked_at             INTEGER,
   revoked                INTEGER NOT NULL DEFAULT 0
 );
+
+-- ---------------------------------------------------------------------------
+-- Mortgage accounts (#271)
+-- One row per mortgage/loan account, holding the extra loan detail pulled
+-- from the provider (Plaid /liabilities/get, SimpleFIN loan balance).  Used to
+-- split each mortgage payment into principal / interest / escrow on the owning
+-- property ledger instead of a single flat "Mortgage" line.
+-- ---------------------------------------------------------------------------
+
+CREATE TABLE IF NOT EXISTS mortgage_accounts (
+  account_id               TEXT PRIMARY KEY REFERENCES bank_accounts(id) ON DELETE CASCADE,
+  ledger_id                TEXT REFERENCES ledgers(id),  -- property ledger this mortgage belongs to
+  outstanding_principal    REAL,                         -- current balance owed
+  origination_principal    REAL,                         -- original loan amount
+  interest_rate            REAL,                         -- annual rate as a percentage (e.g. 4.75)
+  loan_term                TEXT,                          -- e.g. "30 year"
+  loan_type                TEXT,                          -- loan_type_description
+  next_payment_amount      REAL,
+  next_payment_due         TEXT,                          -- ISO date
+  last_payment_amount      REAL,
+  last_payment_date        TEXT,                          -- ISO date
+  escrow_balance           REAL,
+  origination_date         TEXT,                          -- ISO date
+  maturity_date            TEXT,                          -- ISO date
+  ytd_interest_paid        REAL,
+  ytd_principal_paid       REAL,
+  property_address         TEXT,
+  updated_at               INTEGER NOT NULL DEFAULT (unixepoch())
+);

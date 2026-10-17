@@ -1351,10 +1351,14 @@ def set_account_ledger(account_id: str, ledger_id: str) -> dict:
 def create_property_ledger(name: str, description: str = None) -> dict:
     """Create a ledger for a rental/investment property with default line items.
 
-    Seeds 6 standard line items:
+    Seeds the standard property line items.  The mortgage is broken into its own
+    sub-category group (#271) so each payment splits into principal / interest /
+    escrow rather than a single flat "Mortgage" line:
       Income: ``Rent income``
-      Expenses: ``Mortgage``, ``Property tax``, ``Maintenance & repairs``,
-                ``Insurance``, ``Utilities``
+      Expenses: ``Mortgage – Principal``, ``Mortgage – Interest``,
+                ``Mortgage – Property tax (escrow)``,
+                ``Mortgage – Insurance (escrow)``, ``Property tax``,
+                ``Maintenance & repairs``, ``Insurance``, ``Utilities``
 
     Parameters
     ----------
@@ -1378,7 +1382,12 @@ def create_property_ledger(name: str, description: str = None) -> dict:
 
     _PROPERTY_LINE_ITEMS = [
         ("Rent income", "income"),
-        ("Mortgage", "expense"),
+        # Mortgage sub-category group (#271): payments auto-split across these.
+        ("Mortgage – Principal", "expense"),
+        ("Mortgage – Interest", "expense"),
+        ("Mortgage – Property tax (escrow)", "expense"),
+        ("Mortgage – Insurance (escrow)", "expense"),
+        # Non-escrow property costs.
         ("Property tax", "expense"),
         ("Maintenance & repairs", "expense"),
         ("Insurance", "expense"),
@@ -2824,6 +2833,43 @@ def sync(
                             "UPDATE bank_connections SET last_synced_at=? WHERE id=?",
                             (now, connection_id),
                         )
+
+                    # Mortgage liabilities pull (#271): for Plaid connections,
+                    # fetch per-mortgage detail and persist it so payments can be
+                    # split into principal/interest/escrow.  Best-effort — a
+                    # liabilities failure must never break a transaction sync.
+                    if conn_type == "plaid" and hasattr(conn_provider, "get_liabilities"):
+                        try:
+                            mortgages = conn_provider.get_liabilities(sync_token)
+                            for mort in mortgages:
+                                plaid_acct_id = mort.get("account_id")
+                                if not plaid_acct_id:
+                                    continue
+                                acct_row = db_conn.execute(
+                                    "SELECT id, balance_current, default_ledger_id "
+                                    "FROM bank_accounts WHERE plaid_account_id = ?",
+                                    (plaid_acct_id,),
+                                ).fetchone()
+                                if not acct_row:
+                                    continue
+                                # outstanding principal = |current balance| (loans
+                                # report a balance owed; sign varies by provider).
+                                bal = acct_row["balance_current"]
+                                if bal is not None:
+                                    mort["outstanding_principal"] = abs(float(bal))
+                                else:
+                                    mort.pop("outstanding_principal", None)
+                                upsert_mortgage_account(
+                                    acct_row["id"],
+                                    mort,
+                                    ledger_id=acct_row["default_ledger_id"],
+                                )
+                        except Exception as _mort_exc:  # noqa: BLE001
+                            _logger.warning(
+                                "Liabilities pull failed for connection %s: %s",
+                                connection_id,
+                                _mort_exc,
+                            )
 
                     connections_synced += 1
                     total_added += conn_added
@@ -4933,6 +4979,216 @@ def _get_sync_settings(user_id: str) -> dict:
         "classify_batch_size": batch,
         "classifier_model": model,
     }
+
+
+# ---------------------------------------------------------------------------
+# Mortgage accounts (#271)
+# ---------------------------------------------------------------------------
+
+_MORTGAGE_FIELDS = (
+    "outstanding_principal",
+    "origination_principal",
+    "interest_rate",
+    "loan_term",
+    "loan_type",
+    "next_payment_amount",
+    "next_payment_due",
+    "last_payment_amount",
+    "last_payment_date",
+    "escrow_balance",
+    "origination_date",
+    "maturity_date",
+    "ytd_interest_paid",
+    "ytd_principal_paid",
+    "property_address",
+)
+
+
+def upsert_mortgage_account(account_id: str, detail: dict, ledger_id: str | None = None) -> None:
+    """Insert or update the ``mortgage_accounts`` row for *account_id* (#271).
+
+    *detail* is a dict using the internal field names in ``_MORTGAGE_FIELDS``
+    (as produced by ``PlaidProvider.get_liabilities`` or SimpleFIN loan
+    handling).  Only keys present in *detail* are written; missing keys are left
+    untouched on an update, so a partial SimpleFIN pull (balance only) does not
+    wipe richer Plaid detail.  *ledger_id*, when provided, links the mortgage to
+    its property ledger.
+    """
+    if not account_id:
+        return
+    import time as _time
+
+    conn = get_db(server.paths.DB_PATH)
+    try:
+        with db_txn(conn):
+            exists = conn.execute(
+                "SELECT 1 FROM mortgage_accounts WHERE account_id = ?", (account_id,)
+            ).fetchone()
+            cols = [k for k in _MORTGAGE_FIELDS if k in detail]
+            if exists:
+                sets = ", ".join(f"{c} = ?" for c in cols)
+                params = [detail[c] for c in cols]
+                if ledger_id is not None:
+                    sets += (", " if sets else "") + "ledger_id = ?"
+                    params.append(ledger_id)
+                sets += (", " if sets else "") + "updated_at = ?"
+                params.append(int(_time.time()))
+                params.append(account_id)
+                conn.execute(
+                    f"UPDATE mortgage_accounts SET {sets} WHERE account_id = ?", params
+                )
+            else:
+                insert_cols = ["account_id", "ledger_id", *cols, "updated_at"]
+                placeholders = ", ".join("?" for _ in insert_cols)
+                values = [
+                    account_id,
+                    ledger_id,
+                    *[detail[c] for c in cols],
+                    int(_time.time()),
+                ]
+                conn.execute(
+                    f"INSERT INTO mortgage_accounts ({', '.join(insert_cols)}) "
+                    f"VALUES ({placeholders})",
+                    values,
+                )
+    finally:
+        conn.close()
+
+
+def get_mortgage_for_account(account_id: str) -> dict | None:
+    """Return the ``mortgage_accounts`` row for *account_id* as a dict, or None."""
+    if not account_id:
+        return None
+    conn = get_db(server.paths.DB_PATH)
+    try:
+        row = conn.execute(
+            "SELECT * FROM mortgage_accounts WHERE account_id = ?", (account_id,)
+        ).fetchone()
+    finally:
+        conn.close()
+    return dict(row) if row else None
+
+
+def split_mortgage_payment(payment_amount: float, mortgage: dict) -> dict:
+    """Split a mortgage *payment_amount* into principal / interest / escrow (#271).
+
+    Uses the best available signal, in priority order:
+
+    1. **YTD actuals** — if Plaid reports ``ytd_interest_paid`` and
+       ``ytd_principal_paid``, use their ratio to apportion this payment.  This
+       is the most accurate because it reflects the lender's own accounting.
+    2. **Amortisation math** — interest = outstanding_principal * (rate/12);
+       principal = payment - interest.  Used when a rate + balance are known.
+    3. **Fallback** — everything to principal (no split) when we have no rate
+       data, so no money is lost or invented.
+
+    Escrow (property tax + insurance) is apportioned from
+    ``next_payment_amount`` vs the principal+interest implied payment when an
+    escrow signal exists; otherwise escrow is 0.
+
+    All amounts are positive floats rounded to cents.  Returns::
+
+        {"principal": float, "interest": float,
+         "escrow_tax": float, "escrow_insurance": float, "method": str}
+    """
+    amt = round(abs(float(payment_amount or 0.0)), 2)
+    result = {
+        "principal": amt,
+        "interest": 0.0,
+        "escrow_tax": 0.0,
+        "escrow_insurance": 0.0,
+        "method": "fallback",
+    }
+    if amt <= 0 or not mortgage:
+        return result
+
+    def _f(key):
+        v = mortgage.get(key)
+        try:
+            return float(v) if v is not None else None
+        except (TypeError, ValueError):
+            return None
+
+    rate = _f("interest_rate")
+    balance = _f("outstanding_principal")
+    ytd_i = _f("ytd_interest_paid")
+    ytd_p = _f("ytd_principal_paid")
+    escrow_bal = _f("escrow_balance")
+
+    # Determine the non-escrow (P+I) portion of the payment first.
+    # If next_payment_amount is known and larger than implied P+I, treat the
+    # remainder as escrow.  Otherwise assume the whole payment is P+I.
+    pi_amount = amt
+    escrow_total = 0.0
+    next_pay = _f("next_payment_amount")
+    if escrow_bal and escrow_bal > 0 and next_pay and next_pay > 0 and rate and balance:
+        monthly_interest = balance * (rate / 100.0) / 12.0
+        # crude: if the scheduled payment exceeds interest, the rest beyond a
+        # typical P+I may include escrow; cap escrow at 40% of payment to avoid
+        # runaway splits on noisy data.
+        implied_escrow = max(0.0, amt - (monthly_interest * 2))
+        escrow_total = round(min(implied_escrow, amt * 0.4), 2)
+        pi_amount = round(amt - escrow_total, 2)
+
+    # Priority 1: YTD actuals ratio.
+    if ytd_i is not None and ytd_p is not None and (ytd_i + ytd_p) > 0:
+        ratio_i = ytd_i / (ytd_i + ytd_p)
+        interest = round(pi_amount * ratio_i, 2)
+        principal = round(pi_amount - interest, 2)
+        result.update(
+            principal=principal, interest=interest, method="ytd_ratio"
+        )
+    # Priority 2: amortisation math.
+    elif rate is not None and balance is not None and balance > 0:
+        monthly_interest = round(balance * (rate / 100.0) / 12.0, 2)
+        interest = min(monthly_interest, pi_amount)
+        principal = round(pi_amount - interest, 2)
+        result.update(
+            principal=principal, interest=round(interest, 2), method="amortization"
+        )
+    else:
+        result.update(principal=pi_amount, interest=0.0, method="fallback")
+
+    # Escrow split: half tax / half insurance when we only have a lump escrow.
+    if escrow_total > 0:
+        result["escrow_tax"] = round(escrow_total / 2.0, 2)
+        result["escrow_insurance"] = round(escrow_total - result["escrow_tax"], 2)
+
+    return result
+
+
+@mcp.tool
+def get_mortgage_details(account_id: str) -> dict:
+    """Return stored mortgage detail for *account_id* (#271).
+
+    Surfaces the extra loan information pulled from the provider (outstanding
+    principal, interest rate, next/last payment, origination & maturity dates,
+    escrow, YTD principal/interest, property address) so the UI and chat can
+    display a mortgage's full picture.
+
+    Returns ``{"status": "ok", "mortgage": {...}}`` or
+    ``{"status": "not_found"}`` when the account has no mortgage row.
+    """
+    m = get_mortgage_for_account(account_id)
+    if not m:
+        return {"status": "not_found", "account_id": account_id}
+    return {"status": "ok", "mortgage": m}
+
+
+@mcp.tool
+def preview_mortgage_split(account_id: str, payment_amount: float) -> dict:
+    """Preview how a *payment_amount* would split for a mortgage account (#271).
+
+    Returns the principal / interest / escrow breakdown and the method used
+    (``ytd_ratio``, ``amortization``, or ``fallback``) without writing anything.
+    Useful for the UI to show "this $2,100 payment ≈ $480 interest / $1,620
+    principal" before committing entries.
+    """
+    m = get_mortgage_for_account(account_id)
+    if not m:
+        return {"status": "not_found", "account_id": account_id}
+    split = split_mortgage_payment(payment_amount, m)
+    return {"status": "ok", "account_id": account_id, "split": split}
 
 
 # ---------------------------------------------------------------------------

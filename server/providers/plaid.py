@@ -317,3 +317,100 @@ class PlaidProvider(BankProvider):
             )
         )
         return inst["institution"]["name"]
+
+    def get_liabilities(self, access_token: str) -> list[dict]:
+        """Return mortgage liability detail for an item via /liabilities/get (#271).
+
+        Calls Plaid ``/liabilities/get`` and returns a normalised list of
+        mortgage dicts, one per mortgage account on the item.  Non-mortgage
+        liabilities (credit, student) are ignored here.  Returns an empty list
+        when the item exposes no mortgage liabilities or the product is not
+        available for the institution (``PRODUCT_NOT_READY`` /
+        ``PRODUCTS_NOT_SUPPORTED`` are swallowed to a no-op so a sync never fails
+        just because liabilities aren't offered).
+
+        Each dict uses our internal field names so callers don't depend on the
+        Plaid SDK shape:
+          account_id, outstanding_principal, origination_principal,
+          interest_rate, loan_term, loan_type, next_payment_amount,
+          next_payment_due, last_payment_amount, last_payment_date,
+          escrow_balance, origination_date, maturity_date, ytd_interest_paid,
+          ytd_principal_paid, property_address
+        """
+        from plaid.exceptions import ApiException
+        from plaid.model.liabilities_get_request import LiabilitiesGetRequest
+
+        client = self._build_client()
+        try:
+            resp = client.liabilities_get(
+                LiabilitiesGetRequest(access_token=access_token)
+            )
+        except ApiException as exc:  # product not available / not ready
+            body = getattr(exc, "body", "") or ""
+            if any(
+                code in str(body)
+                for code in (
+                    "PRODUCT_NOT_READY",
+                    "PRODUCTS_NOT_SUPPORTED",
+                    "NO_LIABILITY_ACCOUNTS",
+                    "PRODUCT_NOT_ENABLED",
+                )
+            ):
+                return []
+            raise
+
+        liabilities = resp.get("liabilities") or {}
+        mortgages = liabilities.get("mortgage") or []
+        out: list[dict] = []
+        for m in mortgages:
+            def _g(key, default=None):
+                try:
+                    val = m[key]
+                except (KeyError, TypeError):
+                    return default
+                return val if val is not None else default
+
+            # interest_rate is a nested {percentage, type} object.
+            rate_obj = _g("interest_rate")
+            rate_pct = None
+            if rate_obj is not None:
+                try:
+                    rate_pct = rate_obj["percentage"]
+                except (KeyError, TypeError):
+                    rate_pct = None
+
+            addr_obj = _g("property_address")
+            addr_str = None
+            if addr_obj is not None:
+                try:
+                    parts = [
+                        addr_obj.get("street"),
+                        addr_obj.get("city"),
+                        addr_obj.get("region"),
+                        addr_obj.get("postal_code"),
+                    ]
+                    addr_str = ", ".join(p for p in parts if p)
+                except (AttributeError, TypeError):
+                    addr_str = None
+
+            out.append(
+                {
+                    "account_id": _g("account_id"),
+                    "outstanding_principal": None,  # filled from account balance
+                    "origination_principal": _g("origination_principal_amount"),
+                    "interest_rate": rate_pct,
+                    "loan_term": _g("loan_term"),
+                    "loan_type": _g("loan_type_description"),
+                    "next_payment_amount": _g("next_monthly_payment"),
+                    "next_payment_due": _g("next_payment_due_date"),
+                    "last_payment_amount": _g("last_payment_amount"),
+                    "last_payment_date": _g("last_payment_date"),
+                    "escrow_balance": _g("escrow_balance"),
+                    "origination_date": _g("origination_date"),
+                    "maturity_date": _g("maturity_date"),
+                    "ytd_interest_paid": _g("ytd_interest_paid"),
+                    "ytd_principal_paid": _g("ytd_principal_paid"),
+                    "property_address": addr_str,
+                }
+            )
+        return out

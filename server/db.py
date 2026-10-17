@@ -232,6 +232,31 @@ def init_db(path: str | Path) -> None:
         """)
         conn.commit()
 
+        # Migration: mortgage_accounts (#271 — mortgage detail + payment split).
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS mortgage_accounts (
+                account_id               TEXT PRIMARY KEY REFERENCES bank_accounts(id) ON DELETE CASCADE,
+                ledger_id                TEXT REFERENCES ledgers(id),
+                outstanding_principal    REAL,
+                origination_principal    REAL,
+                interest_rate            REAL,
+                loan_term                TEXT,
+                loan_type                TEXT,
+                next_payment_amount      REAL,
+                next_payment_due         TEXT,
+                last_payment_amount      REAL,
+                last_payment_date        TEXT,
+                escrow_balance           REAL,
+                origination_date         TEXT,
+                maturity_date            TEXT,
+                ytd_interest_paid        REAL,
+                ytd_principal_paid       REAL,
+                property_address         TEXT,
+                updated_at               INTEGER NOT NULL DEFAULT (unixepoch())
+            )
+        """)
+        conn.commit()
+
         # Migration: plaid_revocation_log (#265 — durable revocation audit log).
         # Mirrors every access token inserted via complete_link so that
         # wipe.py and retry_pending_revocations() can revoke tokens even
