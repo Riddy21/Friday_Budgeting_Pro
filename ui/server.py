@@ -1303,11 +1303,16 @@ def dashboard_get(request: Request):
 
 
 def _get_accounts_grouped(user_id: Optional[str] = None) -> dict:
-    """Return bank accounts grouped by institution, with balances.
+    """Return bank accounts grouped by institution, with balances and owner info.
 
     Returns a dict of {institution_name: {connection_id, accounts, hidden_count,
-    syncing}}.  Connections with no bank_accounts yet are included with
+    syncing, owners}}.  Connections with no bank_accounts yet are included with
     syncing=True so the UI can show a placeholder immediately after linking.
+
+    Each account row now includes ``owner_label`` (SimpleFIN org name) and
+    ``inferred_type`` (type inferred from account name, e.g. "credit" for Visas)
+    so the UI can separate accounts by owner and display correct liability signs.
+    (See RIDVAN_REQUESTS.md items 2, 3, 5 and 6.)
     """
     conn = get_db(_db_path())
     try:
@@ -1336,17 +1341,20 @@ def _get_accounts_grouped(user_id: Optional[str] = None) -> dict:
             }
 
         # --- Accounts (populated after first sync) ---
+        # Pull owner_label and inferred_type so the UI can display accurate
+        # account types and separate by owner (RIDVAN_REQUESTS.md items 2, 3, 5).
         if user_id:
             rows = conn.execute(
                 "SELECT ba.id, ba.name, ba.mask, ba.type, ba.subtype,"
                 "       ba.balance_current, ba.balance_available, ba.description,"
                 "       COALESCE(ba.currency, 'CAD') AS currency,"
                 "       COALESCE(ba.is_duplicate, 0) AS is_duplicate,"
+                "       ba.owner_label, ba.inferred_type,"
                 "       bc.id AS connection_id, bc.institution_name"
                 "  FROM bank_accounts ba"
                 "  JOIN bank_connections bc ON bc.id = ba.connection_id"
                 " WHERE bc.user_id = ?"
-                " ORDER BY bc.institution_name, ba.name",
+                " ORDER BY bc.institution_name, ba.owner_label, ba.name",
                 (user_id,),
             ).fetchall()
         else:
@@ -1355,11 +1363,17 @@ def _get_accounts_grouped(user_id: Optional[str] = None) -> dict:
                 "       ba.balance_current, ba.balance_available, ba.description,"
                 "       COALESCE(ba.currency, 'CAD') AS currency,"
                 "       COALESCE(ba.is_duplicate, 0) AS is_duplicate,"
+                "       ba.owner_label, ba.inferred_type,"
                 "       bc.id AS connection_id, bc.institution_name"
                 "  FROM bank_accounts ba"
                 "  JOIN bank_connections bc ON bc.id = ba.connection_id"
-                " ORDER BY bc.institution_name, ba.name"
+                " ORDER BY bc.institution_name, ba.owner_label, ba.name"
             ).fetchall()
+
+        # Track seen account IDs per institution to prevent double-render.
+        # An account can only appear in one institution group; if it somehow
+        # ends up in two query rows (schema bug), we suppress the duplicate here.
+        seen_account_ids: set[str] = set()
 
         for r in rows:
             inst = r["institution_name"] or "Unknown Institution"
@@ -1369,12 +1383,27 @@ def _get_accounts_grouped(user_id: Optional[str] = None) -> dict:
                     "accounts": [],
                     "hidden_count": 0,
                     "syncing": False,
+                    "owners": [],  # distinct owner_labels seen in this institution group
                 }
             grouped[inst]["syncing"] = False  # has accounts → not syncing
             if r["is_duplicate"]:
                 grouped[inst]["hidden_count"] += 1
             else:
-                grouped[inst]["accounts"].append(dict(r))
+                acct_id = r["id"]
+                # Guard: skip if this account was already added (prevents double-render
+                # if a schema/join quirk returns the same account_id twice).
+                if acct_id in seen_account_ids:
+                    continue
+                seen_account_ids.add(acct_id)
+                acct_dict = dict(r)
+                grouped[inst]["accounts"].append(acct_dict)
+                # Collect distinct owner_labels for the institution group so the
+                # template can render a per-owner sub-heading when multiple owners
+                # share the same bank connection.
+                owner = r["owner_label"]
+                owners_list = grouped[inst].setdefault("owners", [])
+                if owner and owner not in owners_list:
+                    owners_list.append(owner)
         return grouped
     except Exception:
         return {}
@@ -1385,11 +1414,20 @@ def _get_accounts_grouped(user_id: Optional[str] = None) -> dict:
 def _compute_net_worth(grouped: dict, home_currency: str = "CAD") -> dict:
     """Compute a net-worth summary across the supplied grouped accounts (#322).
 
-    Plaid balance convention used here:
-      * depository / investment / loan account balances are taken as-is
-        (positive numbers represent money the user owns).
-      * credit-card balances are returned as positive amounts owed; we
-        negate them so they reduce net worth.
+    Liability detection (RIDVAN_REQUESTS.md items 5 & 6):
+      We check ``inferred_type`` first (populated by infer_account_type() in
+      server.main from account names), then fall back to the provider ``type``.
+      This fixes SimpleFIN accounts which are all typed ``"depository"`` by the
+      provider even when they are credit cards or mortgages.
+
+    Balance sign conventions:
+      * depository → positive (asset)
+      * credit / loan → NEGATIVE liability (balance represents amount owed)
+      * investment → positive (asset, but in its own category)
+
+    Investment detection (RIDVAN_REQUESTS.md item 6):
+      Accounts with ``inferred_type == "investment"`` or provider
+      ``type == "investment"`` go into the Investments bucket.
 
     Returns::
 
@@ -1415,9 +1453,29 @@ def _compute_net_worth(grouped: dict, home_currency: str = "CAD") -> dict:
         "money market": "Savings",
     }
 
+    def _effective_type(acct: dict) -> str:
+        """Return the effective account type, preferring inferred_type over type.
+
+        SimpleFIN hardcodes type=\"depository\" for all accounts.  inferred_type
+        is populated by infer_account_type() in server.main from the account name
+        (e.g. \"RBC Rewards+ Visa\" → \"credit\").  We prefer inferred_type when it
+        exists and differs from the generic \"depository\" fallback.
+        (See RIDVAN_REQUESTS.md items 5 & 6.)
+        """
+        inferred = (acct.get("inferred_type") or "").lower()
+        provider = (acct.get("type") or "").lower()
+        # Use inferred only when it resolved to something more specific.
+        if inferred and inferred != "depository":
+            return inferred
+        return provider or "depository"
+
     def categorise(acct: dict) -> str:
-        """Return a coarse bucket label for a single bank_account row."""
-        t = (acct.get("type") or "").lower()
+        """Return a coarse bucket label for a single bank_account row.
+
+        Uses the effective type (inferred_type preferred over provider type) so
+        SimpleFIN credit cards and mortgages land in the correct buckets.
+        """
+        t = _effective_type(acct)
         s = (acct.get("subtype") or "").lower()
         if t == "credit":
             return "Credit Cards"
@@ -1440,8 +1498,12 @@ def _compute_net_worth(grouped: dict, home_currency: str = "CAD") -> dict:
                 continue  # never synced — skip
             has_data = True
             currency = (acct.get("currency") or home_currency).upper()
-            is_liability = (acct.get("type") or "").lower() == "credit"
-            # Net-worth sign: credit cards reduce net worth.
+            # Liability detection: credit cards and loans have NEGATIVE net worth.
+            # We use _effective_type() which respects inferred_type from account
+            # names — this fixes SimpleFIN accounts typed as generic "depository".
+            effective_t = _effective_type(acct)
+            is_liability = effective_t in ("credit", "loan")
+            # Net-worth sign: liabilities reduce net worth.
             value = -float(balance) if is_liability else float(balance)
             label = categorise(acct)
 
