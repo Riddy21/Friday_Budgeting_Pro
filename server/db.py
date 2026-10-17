@@ -358,6 +358,19 @@ def init_db(path: str | Path) -> None:
                 savings_entry_count,
             )
 
+        # Migration: account overhaul — owner_label on bank_accounts (account-overhaul)
+        # Stores the SimpleFIN org.name (or org.domain) so the UI can separate
+        # accounts by owner/institution label (see RIDVAN_REQUESTS.md items 2 & 3).
+        _add_col_if_missing(conn, "bank_accounts", "owner_label", "TEXT")
+        conn.commit()
+
+        # Migration: account overhaul — inferred_type on bank_accounts
+        # Stores the type inferred from account name (e.g. "credit", "loan",
+        # "investment") when the provider only returns the generic "depository".
+        # See infer_account_type() in server.main (RIDVAN_REQUESTS.md items 5 & 6).
+        _add_col_if_missing(conn, "bank_accounts", "inferred_type", "TEXT")
+        conn.commit()
+
         # Migration: create default user only when there is existing data to migrate
         # (i.e. rows exist that need a user_id) but no users have been created yet.
         # On truly fresh DBs, we leave users empty so the setup wizard can create

@@ -331,16 +331,39 @@ class SimpleFINProvider(BankProvider):
 
         SimpleFIN does not expose account type/subtype or last-4 digits, so
         those fields default to generic values.
+
+        The ``org`` sub-object on each SimpleFIN account (``org.name``,
+        ``org.domain``) identifies which institution/bank owns the account.
+        We surface this as ``owner_label`` so the sync loop can store it in
+        ``bank_accounts.owner_label`` and the UI can separate accounts by
+        owner (e.g. "Ridvan" vs "Dollar" — see RIDVAN_REQUESTS.md item 3).
+        Fallback chain: org.name → org.domain → conn_name → None.
         """
         currency = acct.get("currency", "USD")
         balance_str = acct.get("balance") or "0"
         avail_str = acct.get("available-balance") or acct.get("balance") or "0"
         acct_name = acct.get("name") or "SimpleFIN Account"
+
+        # --- Owner label: derived from the per-account ``org`` object ---
+        # SimpleFIN spec: each account carries an ``org`` dict with fields
+        # ``name`` (display name of the org/institution) and ``domain``
+        # (canonical domain, e.g. "rbcroyalbank.com").  We prefer the
+        # human-readable ``name``; fall back to ``domain`` then ``conn_name``.
+        org = acct.get("org") or {}
+        owner_label = (
+            org.get("name")
+            or org.get("domain")
+            or conn_name
+            or None
+        )
+
         return {
             "account_id": acct.get("id"),
             "name": acct_name,
             "official_name": acct_name,
-            "type": "depository",  # SimpleFIN doesn't expose account type
+            "type": "depository",  # SimpleFIN doesn't expose account type; we
+                                    # infer the real type later via infer_account_type()
+                                    # in server.main (see RIDVAN_REQUESTS.md item 5).
             "subtype": None,
             "mask": None,          # SimpleFIN doesn't expose last-4 digits
             "balances": {
@@ -348,8 +371,9 @@ class SimpleFINProvider(BankProvider):
                 "available": _to_float(avail_str),
                 "iso_currency_code": currency,
             },
-            # Non-Plaid extra: connection name for institution_name resolution.
-            "_conn_name": conn_name,
+            # Non-Plaid extras: used by the sync loop in server.main.
+            "_conn_name": conn_name,     # institution/connection display name
+            "owner_label": owner_label,  # org-level owner label for UI separation
         }
 
     @staticmethod

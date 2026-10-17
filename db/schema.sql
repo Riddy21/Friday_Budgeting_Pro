@@ -57,7 +57,11 @@ CREATE TABLE IF NOT EXISTS bank_accounts (
   description TEXT,                            -- user-set context for classifier
   default_ledger_id TEXT REFERENCES ledgers(id), -- transactions from this account route here by default
   is_duplicate INTEGER NOT NULL DEFAULT 0,     -- 1 = this account is a duplicate of primary_account_id (#269)
-  primary_account_id TEXT                      -- ID of the canonical account when is_duplicate=1
+  primary_account_id TEXT,                     -- ID of the canonical account when is_duplicate=1
+  owner_label TEXT,                            -- org/institution label from SimpleFIN org.name (account overhaul)
+                                               -- used to separate accounts by owner in UI (e.g. "Ridvan" vs "Dollar")
+  inferred_type TEXT                           -- type inferred from account name when provider returns generic "depository"
+                                               -- values: credit | loan | investment | depository (see infer_account_type() in server.main)
   -- INVARIANT: transactions from is_duplicate=1 accounts are NEVER classified or shown in reports
 );
 
