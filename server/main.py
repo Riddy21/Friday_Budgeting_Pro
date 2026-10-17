@@ -1833,6 +1833,9 @@ def infer_account_type(name: str, current_type: str | None = None) -> str:
        ("Visa", "Mastercard", "Credit Card", "Amex", "American Express", "MC")
     3. Mortgage/loan keywords → ``"loan"``.
        ("Mortgage", "Loan", "Credit Line", "Line of Credit", "LOC", "HELOC")
+    3b. Property-address mortgages (RBC pattern) → ``"loan"``.
+       Names that start with a street number AND carry an RBC loan-account
+       suffix like "(-001)" (e.g. "103 Ardsley (-001)") are mortgages/loans.
     4. Investment keywords in the name → ``"investment"``.
        ("Wealthsimple", "Questrade", "RRSP", "TFSA", "FHSA", "RRIF",
         "Invest", "Brokerage", "Portfolio")
@@ -1875,6 +1878,27 @@ def infer_account_type(name: str, current_type: str | None = None) -> str:
         "heloc",
     )
     if any(kw in name_lower for kw in _LOAN_KEYWORDS):
+        return "loan"
+
+    # Rule 3b: property-address mortgage detection (RBC pattern).
+    # RBC exposes mortgages via SimpleFIN named after the PROPERTY ADDRESS
+    # (e.g. "103 Ardsley (-001)", "90 Glen Everest (-001)") with no explicit
+    # "mortgage"/"loan" keyword.  These are LIABILITIES (money owed), confirmed
+    # by the account owner (RIDVAN_REQUESTS.md item 5).  We detect them by two
+    # structural signals that are characteristic of RBC loan/mortgage accounts:
+    #
+    #   * the name starts with a street number (one or more digits followed by
+    #     a space and a word), AND
+    #   * the name carries the RBC loan-account suffix "(-001)" (or similar
+    #     "-NNN" segment-account marker).
+    #
+    # Using BOTH signals avoids mis-classifying ordinary accounts whose names
+    # merely happen to start with a number.
+    import re as _re
+
+    _starts_with_street_number = bool(_re.match(r"^\s*\d+\s+\w", name or ""))
+    _has_rbc_loan_suffix = bool(_re.search(r"\(-\d{3}\)", name or ""))
+    if _starts_with_street_number and _has_rbc_loan_suffix:
         return "loan"
 
     # Rule 4: investment account detection.

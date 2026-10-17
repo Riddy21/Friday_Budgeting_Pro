@@ -249,9 +249,30 @@ class TestInferAccountType:
         assert infer_account_type("", "depository") == "depository"
 
     def test_property_name_no_keywords_stays_depository(self):
-        """'103 Ardsley' alone (without 'mortgage') stays depository."""
-        # The property VALUE account (not mortgage debt) has no loan keyword.
+        """'103 Ardsley' alone (no suffix, no keyword) stays depository."""
+        # A plain street-number name without the RBC loan suffix is NOT treated
+        # as a loan (avoids false positives on oddly-named deposit accounts).
         assert infer_account_type("103 Ardsley", "depository") == "depository"
+
+    def test_rbc_property_mortgage_suffix_is_loan(self):
+        """RBC mortgage pattern: street number + '(-001)' suffix -> loan.
+
+        Confirmed by the account owner that '103 Ardsley (-001)' and
+        '90 Glen Everest (-001)' are MORTGAGE balances (money owed), so they
+        must classify as loans (liabilities).  (RIDVAN_REQUESTS.md item 5.)
+        """
+        assert infer_account_type("103 Ardsley (-001)", "depository") == "loan"
+        assert infer_account_type("90 Glen Everest (-001)", "depository") == "loan"
+
+    def test_rbc_suffix_without_street_number_not_loan(self):
+        """The '(-001)' suffix alone (no leading street number) is not a loan."""
+        # Requires BOTH signals, so a non-address account keeps its type.
+        assert infer_account_type("Savings (-001)", "depository") == "depository"
+
+    def test_normal_rbc_account_number_suffix_not_loan(self):
+        """Ordinary RBC accounts use '(NNNN)' not '(-NNN)' and stay depository."""
+        assert infer_account_type("RBC Day to Day Banking (7077)", "depository") == "depository"
+        assert infer_account_type("RBC Advantage Banking (3861)", "depository") == "depository"
 
 
 # ---------------------------------------------------------------------------
@@ -684,3 +705,112 @@ class TestEdgeCases:
         acct = {"id": "q", "name": "Q", "currency": "USD", "balance": "1.00"}
         out = SimpleFINProvider._normalise_account(acct)
         assert "owner_label" in out
+
+
+# ---------------------------------------------------------------------------
+# 5. Category grouping: _account_category() buckets (RIDVAN_REQUESTS.md items 2, 6)
+# ---------------------------------------------------------------------------
+
+
+class TestAccountCategory:
+    """Feature: coarse display categories (Cash / Savings / Investments / Debts)."""
+
+    def _acct(self, **kw):
+        base = {
+            "id": "a", "name": "Acct", "type": "depository", "inferred_type": None,
+            "subtype": None, "balance_current": 100.0, "balance_available": 100.0,
+            "currency": "CAD",
+        }
+        base.update(kw)
+        return base
+
+    def test_credit_card_is_debts(self):
+        from ui.server import _account_category
+        assert _account_category(self._acct(inferred_type="credit")) == "Debts"
+
+    def test_loan_is_debts(self):
+        from ui.server import _account_category
+        assert _account_category(self._acct(inferred_type="loan")) == "Debts"
+
+    def test_mortgage_by_name_is_debts(self):
+        """A property-address mortgage (inferred_type=loan) lands in Debts."""
+        from ui.server import _account_category
+        acct = self._acct(name="103 Ardsley (-001)", inferred_type="loan",
+                          balance_current=357329.04)
+        assert _account_category(acct) == "Debts"
+
+    def test_investment_type_is_investments(self):
+        from ui.server import _account_category
+        assert _account_category(self._acct(inferred_type="investment")) == "Investments"
+
+    def test_investment_subtype_is_investments(self):
+        from ui.server import _account_category
+        assert _account_category(self._acct(subtype="tfsa")) == "Investments"
+
+    def test_balance_driven_investment_heuristic(self):
+        """Funded account with ZERO transactions -> Investments (balance drifts)."""
+        from ui.server import _account_category
+        acct = self._acct(name="Holdings", balance_current=5000.0)
+        assert _account_category(acct, txn_count=0) == "Investments"
+
+    def test_funded_account_with_txns_not_investment(self):
+        """Same account but WITH transactions is normal cash, not investment."""
+        from ui.server import _account_category
+        acct = self._acct(name="Chequing", balance_current=5000.0)
+        assert _account_category(acct, txn_count=12) == "Cash"
+
+    def test_low_balance_no_txn_not_investment(self):
+        """A near-empty no-txn account is NOT swept into Investments."""
+        from ui.server import _account_category
+        acct = self._acct(name="Dormant", balance_current=5.0)
+        assert _account_category(acct, txn_count=0) == "Cash"
+
+    def test_savings_by_name(self):
+        from ui.server import _account_category
+        assert _account_category(self._acct(name="RBC High Interest eSavings")) == "Savings"
+        assert _account_category(self._acct(name="Premium Rate Savings")) == "Savings"
+
+    def test_savings_by_subtype(self):
+        from ui.server import _account_category
+        assert _account_category(self._acct(subtype="savings")) == "Savings"
+
+    def test_plain_chequing_is_cash(self):
+        from ui.server import _account_category
+        assert _account_category(self._acct(name="Primary Chequing Account", txn_count=3)) == "Cash"
+
+
+class TestGetAccountsByCategory:
+    """Feature: _get_accounts_by_category returns category->owner->accounts."""
+
+    def test_category_order_and_owner_subgroups(self, monkeypatch):
+        """Categories come back in canonical order with owner sub-grouping."""
+        import ui.server as u
+
+        fake_grouped = {
+            "Royal Bank of Canada (RBC)": {
+                "connection_id": "c1",
+                "accounts": [
+                    {"id": "m1", "name": "103 Ardsley (-001)", "type": "depository",
+                     "inferred_type": "loan", "subtype": None, "balance_current": 357329.04,
+                     "balance_available": 0.0, "currency": "CAD", "owner_label": "Ridvan"},
+                    {"id": "ch", "name": "RBC Day to Day Banking (7077)", "type": "depository",
+                     "inferred_type": "depository", "subtype": None, "balance_current": 5399.12,
+                     "balance_available": 5399.12, "currency": "CAD", "owner_label": "Dollar"},
+                ],
+                "hidden_count": 0, "syncing": False, "owners": ["Ridvan", "Dollar"],
+            }
+        }
+        monkeypatch.setattr(u, "_get_accounts_grouped", lambda user_id=None: fake_grouped)
+        # No DB txns -> but Day-to-Day has txn_count 0; give it a balance under the
+        # investment threshold handling by stubbing txn counts via DB is complex, so
+        # we rely on _account_category: 5399 with 0 txns would be Investments.
+        # To keep this deterministic we assert on the loan -> Debts placement.
+        cats = u._get_accounts_by_category()
+        assert "Debts" in cats
+        # The mortgage is under Debts, owner Ridvan.
+        assert "Ridvan" in cats["Debts"]["owners"]
+        assert any(a["id"] == "m1" for a in cats["Debts"]["owners"]["Ridvan"])
+        # Canonical ordering: Debts must come after any asset categories present.
+        labels = list(cats.keys())
+        assert labels == sorted(labels, key=lambda x: ["Cash", "Savings", "Investments", "Debts"].index(x)
+                                if x in ["Cash", "Savings", "Investments", "Debts"] else 99)

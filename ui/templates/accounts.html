@@ -57,10 +57,44 @@
   {% if not grouped_accounts %}
   <p class="hint">No bank accounts connected yet. <a href="/link/start">Connect a bank</a> to get started.</p>
   {% else %}
+
+  {# ── Primary view: accounts grouped by CATEGORY → OWNER ──────────────────
+     (RIDVAN_REQUESTS.md items 2 & 3.)  Categories: Cash, Savings, Investments,
+     Debts.  Within each category, accounts are sub-grouped by owner (SimpleFIN
+     org label, falling back to institution name).  Debts (credit cards +
+     mortgages/loans) show negative balances. #}
+  {% set category_icons = {'Cash':'💵','Savings':'🏦','Investments':'📈','Debts':'💳'} %}
+  {% if categorized_accounts %}
+  {% for category, cdata in categorized_accounts.items() %}
+  <section class="category-group">
+    <h2 class="category-header">{{ category_icons.get(category, '•') }} {{ category }}
+      <span class="muted text-sm">· {{ cdata.count }} account{{ 's' if cdata.count != 1 else '' }}</span>
+    </h2>
+    {% for owner, accts in cdata.owners.items() %}
+    <div class="owner-group">
+      <h3 class="owner-label">💼 {{ owner }}</h3>
+      {% include '_account_table.html' %}
+    </div>
+    {% endfor %}
+  </section>
+  {% endfor %}
+  {% else %}
+  {# No categorized accounts yet (all syncing / none populated). #}
   {% for institution, data in grouped_accounts.items() %}
-  <section class="institution-group">
+  {% if data.syncing and not data.accounts %}
+  <p class="hint">⏳ {{ institution }}: accounts will appear here once the initial sync completes…</p>
+  {% endif %}
+  {% endfor %}
+  {% endif %}
+
+  {# ── Manage connections: per-bank actions (Copy token / Disconnect) ──────── #}
+  <section class="manage-connections">
+    <h2 class="category-header">🔗 Manage connections</h2>
+    {% for institution, data in grouped_accounts.items() %}
     <div class="institution-header">
-      <h2>── {{ institution }}{% if data.syncing %} <span class="institution-syncing">⏳ syncing…</span>{% endif %}</h2>
+      <h3>{{ institution }}{% if data.syncing %} <span class="institution-syncing">⏳ syncing…</span>{% endif %}
+        {% if data.hidden_count %}<span class="muted text-sm">· {{ data.hidden_count }} duplicate account{{ 's' if data.hidden_count != 1 else '' }} hidden</span>{% endif %}
+      </h3>
       <div class="institution-actions">
         <button type="button" class="btn-secondary btn-sm copy-token-btn"
           data-connection-id="{{ data.connection_id }}">
@@ -76,67 +110,13 @@
         </form>
       </div>
     </div>
-    {% if data.owners and data.owners | length > 1 %}
-    {# Multiple owners share this bank connection — sub-group by owner label #}
-    {# (e.g. SimpleFIN org.name differentiates "Ridvan" vs "Dollar" accounts) #}
-    {% for owner in data.owners %}
-    {% set owner_accounts = data.accounts | selectattr('owner_label', 'equalto', owner) | list %}
-    {% if owner_accounts %}
-    <div class="owner-group">
-      <h3 class="owner-label">💼 {{ owner }}</h3>
-      {% include '_account_table.html' ignore missing %}
-      {# Inline the table since Jinja include with variables is tricky #}
-      <div class="table-scroll">
-        <table class="account-table">
-          <thead><tr>
-            <th>Account</th>
-            <th class="responsive-hide-sm">Type</th>
-            <th style="text-align:right">Balance</th>
-            <th></th>
-          </tr></thead>
-          <tbody>
-          {% for acct in owner_accounts %}
-          {% set eff_type = acct.inferred_type or acct.type or '' %}
-          {% set is_liability = eff_type in ('credit', 'loan') %}
-          <tr data-account-id="{{ acct.id }}"{% if is_liability %} class="acct-liability"{% endif %}>
-            <td>
-              <span class="acct-name" data-original="{{ acct.name or '' }}">{{ acct.name or '(unnamed)' }}</span>
-              {% if acct.mask %}<span class="acct-mask">···{{ acct.mask }}</span>{% endif %}
-              {% if is_liability %}<span class="acct-liability-badge">debt</span>{% endif %}
-              {% if eff_type == 'investment' %}<span class="acct-investment-badge">invest</span>{% endif %}
-            </td>
-            <td class="acct-type responsive-hide-sm">{{ acct.subtype or eff_type or '—' }}</td>
-            <td class="acct-balance{% if is_liability %} balance-negative{% endif %}">
-              {% set balance = acct.balance_current if acct.balance_current is not none else acct.balance_available %}
-              {% if balance is not none %}
-                {% set currency = acct.currency or 'CAD' %}
-                {# Liabilities: negate balance for display (amount owed shown as negative) #}
-                {% set display_balance = -balance if is_liability else balance %}
-                {% if currency == 'CAD' %}C${% elif currency == 'USD' %}US${% elif currency == 'GBP' %}£{% elif currency == 'EUR' %}€{% else %}{{ currency }} {% endif %}{{ "%.2f"|format(display_balance) }}
-              {% else %}
-                <span class="muted">—</span>
-              {% endif %}
-            </td>
-            <td class="acct-actions">
-              <button class="btn-secondary btn-sm rename-btn" data-id="{{ acct.id }}">rename</button>
-              <button class="btn-secondary btn-sm txn-toggle-btn" data-id="{{ acct.id }}">transactions</button>
-            </td>
-          </tr>
-          <tr class="txn-expand-row" id="txn-expand-{{ acct.id }}" style="display:none">
-            <td colspan="4"><div class="txn-expand-inner" id="txn-content-{{ acct.id }}"><span class="muted text-sm">Loading…</span></div></td>
-          </tr>
-          {% endfor %}
-          </tbody>
-        </table>
-      </div>
-    </div>
-    {% endif %}
     {% endfor %}
-    {% if data.syncing and not data.accounts %}
-    <p class="hint">⏳ Accounts will appear here once the initial sync completes…</p>
-    {% endif %}
-    {% else %}
-    {# Single owner (or no owner_label set) — render all accounts in one table #}
+  </section>
+
+  {# ── Legacy per-institution block retained but disabled (kept for reference). #}
+  {% if False %}
+  {% for institution, data in grouped_accounts.items() %}
+  <section class="institution-group">
     {% if data.syncing and not data.accounts %}
     <p class="hint">⏳ Accounts will appear here once the initial sync completes…</p>
     {% else %}
@@ -199,7 +179,6 @@
       </table>
     </div>
     {% endif %}
-    {% endif %}
     {% if data.hidden_count %}
     <p class="hint">
       {{ data.hidden_count }} shared account{{ 's' if data.hidden_count != 1 else '' }} hidden (duplicate of another connected bank).
@@ -207,7 +186,9 @@
     {% endif %}
   </section>
   {% endfor %}
-  {% endif %}
+  {% endif %}{# end legacy if False block #}
+
+  {% endif %}{# end: if not grouped_accounts / else #}
 </div>
 
 <script>

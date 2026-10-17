@@ -1413,6 +1413,131 @@ def _get_accounts_grouped(user_id: Optional[str] = None) -> dict:
         conn.close()
 
 
+# Category ordering for the account list (RIDVAN_REQUESTS.md items 2, 3, 5, 6).
+# Assets first (Cash → Savings → Investments), then liabilities (Debts).
+_CATEGORY_ORDER = ["Cash", "Savings", "Investments", "Debts"]
+
+
+def _account_category(acct: dict, txn_count: int = 0) -> str:
+    """Map a single account row to a top-level display category.
+
+    Categories (RIDVAN_REQUESTS.md items 2, 5, 6):
+      * "Debts"       — credit cards + loans/mortgages (liabilities, shown negative)
+      * "Investments" — investment accounts, incl. the balance-driven heuristic:
+                        an account whose balance is non-trivial but which has NO
+                        transactions behaves like an investment/holding account
+                        (balance drifts without transactions).
+      * "Savings"     — savings/CD/money-market accounts
+      * "Cash"        — everything else (chequing / day-to-day)
+
+    ``txn_count`` enables the balance-driven investment heuristic; pass the
+    number of transactions recorded for this account over the sync window.
+    """
+    inferred = (acct.get("inferred_type") or "").lower()
+    provider = (acct.get("type") or "").lower()
+    effective = inferred if inferred and inferred != "depository" else (provider or "depository")
+    subtype = (acct.get("subtype") or "").lower()
+
+    # Liabilities → Debts.
+    if effective in ("credit", "loan"):
+        return "Debts"
+
+    # Explicit investment type/subtype.
+    if effective == "investment" or subtype in (
+        "401k", "403b", "ira", "roth", "tfsa", "rrsp", "fhsa", "rrif", "brokerage",
+    ):
+        return "Investments"
+
+    # Balance-driven investment heuristic (RIDVAN_REQUESTS.md item 6):
+    # a funded account with zero transactions is treated as an investment/holding
+    # account (its balance changes without transactions).  We require a
+    # meaningful balance so that empty/dormant chequing accounts aren't swept in.
+    balance = acct.get("balance_current")
+    if balance is None:
+        balance = acct.get("balance_available")
+    try:
+        balance_val = abs(float(balance)) if balance is not None else 0.0
+    except (TypeError, ValueError):
+        balance_val = 0.0
+    if txn_count == 0 and balance_val >= 1000.0:
+        return "Investments"
+
+    # Savings-type subtypes, or a savings-style account NAME (SimpleFIN exposes
+    # no subtype, so we also match common savings keywords in the name).
+    name_lower = (acct.get("name") or "").lower()
+    _SAVINGS_KEYWORDS = ("saving", "esaving", "premium rate", "high interest", "find & save")
+    if subtype in ("savings", "cd", "money market") or any(
+        kw in name_lower for kw in _SAVINGS_KEYWORDS
+    ):
+        return "Savings"
+
+    return "Cash"
+
+
+def _get_accounts_by_category(user_id: Optional[str] = None) -> dict:
+    """Return non-duplicate bank accounts grouped by CATEGORY then OWNER.
+
+    Shape::
+
+        {
+          "Cash": {
+             "accounts": [...],            # flat list (all owners)
+             "owners": {"Ridvan": [...], "Dollar": [...]},  # owner → accounts
+             "count": int,
+          },
+          "Debts": {...},
+          ...
+        }
+
+    Categories are ordered Cash → Savings → Investments → Debts and only
+    non-empty categories are returned.  Owner sub-grouping uses ``owner_label``
+    (SimpleFIN org name); accounts with no owner label are grouped under the
+    connection's institution name as a sensible fallback.
+    (Implements RIDVAN_REQUESTS.md items 2 — group by account/category — and
+    3 — owner separation.)
+    """
+    grouped = _get_accounts_grouped(user_id)
+
+    # Pre-compute per-account transaction counts for the investment heuristic.
+    txn_counts: dict = {}
+    conn = get_db(_db_path())
+    try:
+        for row in conn.execute(
+            "SELECT bank_account_id AS id, COUNT(*) AS n"
+            "  FROM transactions GROUP BY bank_account_id"
+        ).fetchall():
+            txn_counts[row["id"]] = row["n"]
+    except Exception:
+        txn_counts = {}
+    finally:
+        conn.close()
+
+    categories: dict = {}
+    for inst_name, data in (grouped or {}).items():
+        for acct in data.get("accounts", []):
+            txn_count = txn_counts.get(acct.get("id"), 0)
+            cat = _account_category(acct, txn_count=txn_count)
+            # Owner fallback: SimpleFIN org label → else institution name.
+            owner = acct.get("owner_label") or inst_name or "Other"
+
+            bucket = categories.setdefault(
+                cat, {"accounts": [], "owners": {}, "count": 0}
+            )
+            bucket["accounts"].append(acct)
+            bucket["owners"].setdefault(owner, []).append(acct)
+            bucket["count"] += 1
+
+    # Return categories in the canonical order, dropping empty ones.
+    ordered: dict = {}
+    for label in _CATEGORY_ORDER:
+        if label in categories:
+            ordered[label] = categories.pop(label)
+    # Any unexpected categories trail at the end (defensive).
+    for label, bucket in categories.items():
+        ordered[label] = bucket
+    return ordered
+
+
 def _compute_net_worth(grouped: dict, home_currency: str = "CAD") -> dict:
     """Compute a net-worth summary across the supplied grouped accounts (#322).
 
@@ -1593,11 +1718,22 @@ def _get_home_currency(uid: Optional[str]) -> str:
 
 @app.get("/accounts", response_class=HTMLResponse)
 def accounts_get(request: Request):
-    """Accounts page — bank accounts grouped by institution with balances (#158)."""
+    """Accounts page — bank accounts grouped by CATEGORY then OWNER.
+
+    Primary layout (RIDVAN_REQUESTS.md items 2 & 3): accounts are grouped into
+    top-level categories (Cash / Savings / Investments / Debts) and, within each
+    category, sub-grouped by owner (SimpleFIN org label, falling back to the
+    institution name).  Liabilities (credit cards + mortgages/loans) land in the
+    Debts category and are shown with negative balances.
+
+    ``grouped_accounts`` (by institution) is still passed for the per-connection
+    actions (Copy token / Disconnect) and the syncing placeholders.
+    """
     if not _is_authenticated(request):
         return _redirect("/login")
     uid = _current_user_id(request)
     grouped = _get_accounts_grouped(uid)
+    categorized = _get_accounts_by_category(uid)
     home_currency = _get_home_currency(uid)
     try:
         net_worth = _compute_net_worth(grouped, home_currency=home_currency)
@@ -1609,6 +1745,7 @@ def accounts_get(request: Request):
         {
             "current_page": "accounts",
             "grouped_accounts": grouped,
+            "categorized_accounts": categorized,
             "net_worth": net_worth,
             "reauth_connections": _get_reauth_connections(uid),
         },
