@@ -1865,13 +1865,146 @@ def _deduplicate_accounts(conn, user_id: str) -> None:  # conn: sqlite3.Connecti
             # Spans multiple connections → genuine cross-connection duplicate
             groups2[key] = [e["id"] for e in entries]
         else:
-            # All in same connection → reset each to non-duplicate
-            for e in entries:
-                conn.execute(
-                    "UPDATE bank_accounts SET is_duplicate=0, primary_account_id=NULL WHERE id=?",
-                    (e["id"],),
-                )
+            # All in same connection → leave for Pass 3/4 (don't reset here,
+            # since a later pass may still flag them; Pass 1 already reset any
+            # untouched rows implicitly via their own group handling).
+            pass
     _apply_groups(groups2)
+
+    # ------------------------------------------------------------------
+    # Helpers for Passes 3 & 4 (same-connection, mask-less siblings that
+    # Passes 1-2 intentionally skip).
+    # ------------------------------------------------------------------
+    def _already_dup(acct_id: str) -> bool:
+        row = conn.execute(
+            "SELECT is_duplicate FROM bank_accounts WHERE id=?", (acct_id,)
+        ).fetchone()
+        return bool(row and row["is_duplicate"])
+
+    def _latest_txn_date(acct_id: str):
+        row = conn.execute(
+            "SELECT MAX(date) AS d FROM transactions WHERE bank_account_id=?",
+            (acct_id,),
+        ).fetchone()
+        return row["d"] if row else None
+
+    def _txn_count(acct_id: str) -> int:
+        row = conn.execute(
+            "SELECT COUNT(*) AS c FROM transactions WHERE bank_account_id=?",
+            (acct_id,),
+        ).fetchone()
+        return int(row["c"]) if row else 0
+
+    def _txn_fingerprints(acct_id: str) -> set:
+        rows = conn.execute(
+            "SELECT date, amount, merchant FROM transactions WHERE bank_account_id=?",
+            (acct_id,),
+        ).fetchall()
+        return {(r["date"], r["amount"], r["merchant"]) for r in rows}
+
+    def _flag_dup(dup_id: str, primary_id: str) -> None:
+        conn.execute(
+            "UPDATE bank_accounts SET is_duplicate=1, primary_account_id=? WHERE id=?",
+            (primary_id, dup_id),
+        )
+        conn.execute(
+            "UPDATE bank_accounts SET is_duplicate=0, primary_account_id=NULL WHERE id=?",
+            (primary_id,),
+        )
+
+    _STALE_DAYS = 30
+
+    def _days_between(d1: str, d2: str):
+        """Absolute whole-day gap between two 'YYYY-MM-DD' dates, or None."""
+        from datetime import date as _date
+
+        try:
+            a = _date.fromisoformat(d1)
+            b = _date.fromisoformat(d2)
+        except (TypeError, ValueError):
+            return None
+        return abs((a - b).days)
+
+    # All same-connection, mask-less accounts for this user (candidates for 3/4).
+    sibling_rows = conn.execute(
+        """
+        SELECT ba.id, ba.name, ba.type, ba.subtype, ba.connection_id
+          FROM bank_accounts ba
+          JOIN bank_connections bc ON bc.id = ba.connection_id
+         WHERE bc.user_id = ?
+           AND (ba.mask IS NULL OR ba.mask = '')
+         ORDER BY ba.id
+        """,
+        (user_id,),
+    ).fetchall()
+
+    # ------------------------------------------------------------------
+    # Pass 3: stale-reissue within a single connection.
+    # Same (connection, name, type, subtype); if one sibling's latest txn is
+    # >= _STALE_DAYS older than another's, the stale one is a reissued dup and
+    # the live (most-recent) one is primary.
+    # ------------------------------------------------------------------
+    pass3_groups: dict[tuple, list[dict]] = {}
+    for r in sibling_rows:
+        key = (r["connection_id"], r["name"], r["type"], r["subtype"])
+        pass3_groups.setdefault(key, []).append({"id": r["id"]})
+
+    for entries in pass3_groups.values():
+        if len(entries) < 2:
+            continue
+        # Attach latest txn date to each.
+        enriched = []
+        for e in entries:
+            if _already_dup(e["id"]):
+                continue
+            enriched.append({"id": e["id"], "latest": _latest_txn_date(e["id"])})
+        if len(enriched) < 2:
+            continue
+        # Determine the live (most recent) account.
+        dated = [e for e in enriched if e["latest"]]
+        if len(dated) < 2:
+            continue
+        live = max(dated, key=lambda e: e["latest"])
+        for e in dated:
+            if e["id"] == live["id"]:
+                continue
+            gap = _days_between(live["latest"], e["latest"])
+            if gap is not None and gap >= _STALE_DAYS:
+                _flag_dup(e["id"], live["id"])
+
+    # ------------------------------------------------------------------
+    # Pass 4: name-independent transaction overlap within one connection.
+    # Different names, same connection, but sharing identical
+    # (date, amount, merchant) transactions => same account imported twice.
+    # Primary = account with more transactions.
+    # ------------------------------------------------------------------
+    by_conn: dict[str, list[str]] = {}
+    for r in sibling_rows:
+        by_conn.setdefault(r["connection_id"], []).append(r["id"])
+
+    for acct_ids in by_conn.values():
+        if len(acct_ids) < 2:
+            continue
+        fps = {aid: _txn_fingerprints(aid) for aid in acct_ids}
+        counts = {aid: _txn_count(aid) for aid in acct_ids}
+        for i in range(len(acct_ids)):
+            for j in range(i + 1, len(acct_ids)):
+                a, b = acct_ids[i], acct_ids[j]
+                if _already_dup(a) or _already_dup(b):
+                    continue
+                shared = fps[a] & fps[b]
+                if not shared:
+                    continue
+                # Require meaningful overlap: the smaller account's txns are
+                # (nearly) a subset of the larger account's txns.
+                smaller = a if counts[a] <= counts[b] else b
+                larger = b if smaller == a else a
+                smaller_fps = fps[smaller]
+                if not smaller_fps:
+                    continue
+                overlap_ratio = len(shared) / len(smaller_fps)
+                if overlap_ratio >= 0.5:
+                    _flag_dup(smaller, larger)
 
 
 # ---------------------------------------------------------------------------
@@ -2230,7 +2363,7 @@ def sync(classify: bool = True, progress_callback=None) -> dict:
                 active_conns = db_conn.execute(
                     "SELECT id, plaid_access_token_encrypted, plaid_env, user_id, "
                     "institution_name, "
-                    "COALESCE(connection_type, 'plaid') AS connection_type, "
+                    "COALESCE(connection_type, 'plaid') AS connection_type "
                     "FROM bank_connections WHERE status = 'active'"
                 ).fetchall()
 
