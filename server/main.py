@@ -1459,8 +1459,16 @@ def create_investment_ledger(name: str) -> dict:
 # ---------------------------------------------------------------------------
 
 
-def classify_pending_transactions(user_id: str, limit: int | None = None) -> dict:
-    """Classify all unclassified transactions for *user_id* and write entries.
+def classify_pending_transactions(
+    user_id: str, limit: int | None = None, model: str | None = None
+) -> dict:
+    """Classify unclassified transactions for *user_id* and write entries.
+
+    Batched for safety (#270): when *limit* is None the per-user
+    ``classify_batch_size`` setting (default 50) is applied so a single call
+    never fires an unbounded number of serial LLM calls.  Remaining pending
+    transactions are reported via ``pending_remaining`` so callers / the UI can
+    offer "Classify more".
 
     Finds transactions owned by *user_id* that have no row in
     ``transaction_entries``, then for each one:
@@ -1486,16 +1494,35 @@ def classify_pending_transactions(user_id: str, limit: int | None = None) -> dic
 
     Args:
         user_id: The user whose transactions to classify.
+        limit: Max transactions to classify this call.  None => use the
+            per-user ``classify_batch_size`` setting.  Pass 0 to disable the
+            cap entirely (classify everything — use with care).
+        model: Classifier model override.  None => use the per-user
+            ``classifier_model`` setting (a cheap/dumber model).
 
     Returns:
-        ``{"classified": N, "skipped": M, "uncertain": K}``
+        ``{"classified": N, "skipped": M, "uncertain": K,
+           "pending_remaining": R, "batch_size": B}``
     """
     classified = 0
     skipped = 0
     uncertain = 0
 
     if not user_id:
-        return {"classified": classified, "skipped": skipped, "uncertain": uncertain}
+        return {
+            "classified": classified,
+            "skipped": skipped,
+            "uncertain": uncertain,
+            "pending_remaining": 0,
+            "batch_size": 0,
+        }
+
+    # Resolve batch size + model from settings when not explicitly overridden.
+    _settings = _get_sync_settings(user_id)
+    if model is None:
+        model = _settings["classifier_model"]
+    if limit is None:
+        limit = _settings["classify_batch_size"]
 
     conn = get_db(server.paths.DB_PATH)
     try:
@@ -1531,8 +1558,12 @@ def classify_pending_transactions(user_id: str, limit: int | None = None) -> dic
             """,
             (user_id,),
         ).fetchall()
-        if limit:
-            unclassified = unclassified[: int(limit)]
+        # total pending BEFORE applying the batch cap, so we can report how many
+        # still need classification after this run (#270).
+        total_pending = len(unclassified)
+        batch_cap = int(limit) if limit else 0  # 0 => no cap (classify all)
+        if batch_cap:
+            unclassified = unclassified[:batch_cap]
 
         for row in unclassified:
             tx_id = row["id"]
@@ -1580,6 +1611,7 @@ def classify_pending_transactions(user_id: str, limit: int | None = None) -> dic
                     ledger_tree=ledger_tree_text,
                     hints=hints_list,
                     context=context,
+                    model=model,
                 )
             except Exception as exc:
                 _logger.warning(
@@ -1762,7 +1794,15 @@ def classify_pending_transactions(user_id: str, limit: int | None = None) -> dic
     finally:
         conn.close()
 
-    return {"classified": classified, "skipped": skipped, "uncertain": uncertain}
+    processed = classified + skipped + uncertain
+    pending_remaining = max(0, total_pending - processed)
+    return {
+        "classified": classified,
+        "skipped": skipped,
+        "uncertain": uncertain,
+        "pending_remaining": pending_remaining,
+        "batch_size": batch_cap,
+    }
 
 
 def _deduplicate_accounts(conn, user_id: str) -> None:  # conn: sqlite3.Connection
@@ -2296,16 +2336,52 @@ def _detect_suspicious_transactions(conn, user_id: str) -> list[dict]:
 
 
 @mcp.tool
-def sync(classify: bool = True, progress_callback=None) -> dict:
+def sync(
+    classify: bool = True,
+    progress_callback=None,
+    window_days: int | None = None,
+    big_pull_threshold: int = 200,
+) -> dict:
     """Pull new transactions from Plaid and return a summary.
 
     Args:
         classify: If True (default), run LLM auto-classification on newly synced
             transactions before returning.  Pass ``False`` when the caller wants
             to run classification separately (e.g. the UI background flow).
+            Classification is always batched to ``classify_batch_size`` (#270),
+            so a sync never fires an unbounded number of serial LLM calls.
         progress_callback: Optional callable that receives a dict at each key
             sync phase.  Not exposed via MCP — internal use only.
+        window_days: Max age (in days) of transactions to ingest.  Transactions
+            older than ``today - window_days`` are skipped (counted in
+            ``windowed_out``).  None => use the active user's ``sync_window_days``
+            setting (default 90).  Pass 0 to disable the window (ingest all).
+        big_pull_threshold: When the number of newly-added transactions meets or
+            exceeds this value, the result includes ``big_pull=True`` and a
+            human-readable ``warning`` so the UI/caller can warn the user (#270).
+
+    Returns a summary dict including ``added``, ``windowed_out``, ``big_pull``,
+    ``warning``, and classification counts / ``pending_remaining``.
     """
+    # Resolve the ingest window from settings when not explicitly overridden.
+    # When there is no active user (fresh installs / mechanics tests) default to
+    # 0 (no window) so sync is not silently empty; real users always have an
+    # active user whose sync_window_days setting (default 90) applies.
+    try:
+        _active_uid_for_window = get_active_user_id(server.paths.DB_PATH)
+    except Exception:  # noqa: BLE001
+        _active_uid_for_window = None
+    if window_days is None:
+        if _active_uid_for_window:
+            window_days = _get_sync_settings(_active_uid_for_window)["sync_window_days"]
+        else:
+            window_days = 0
+    _window_cutoff = None  # ISO date string 'YYYY-MM-DD' or None (no window)
+    if window_days and int(window_days) > 0:
+        from datetime import date as _date
+        from datetime import timedelta as _timedelta
+
+        _window_cutoff = (_date.today() - _timedelta(days=int(window_days))).isoformat()
 
     def _get(obj, key, default=None):
         """Get a field from a dict or an SDK object."""
@@ -2340,6 +2416,7 @@ def sync(classify: bool = True, progress_callback=None) -> dict:
     total_modified = 0
     total_removed = 0
     total_classified = 0
+    total_windowed_out = 0  # transactions skipped for being older than the window (#270)
 
     health_check_result: dict = {}
 
@@ -2556,6 +2633,18 @@ def sync(classify: bool = True, progress_callback=None) -> dict:
 
                             plaid_txn_id = _get(txn, "transaction_id")
                             date = _get(txn, "date")
+
+                            # Window filter (#270): skip transactions older than
+                            # today - window_days.  Plaid/SimpleFIN dates are
+                            # 'YYYY-MM-DD' strings so lexical compare is correct.
+                            if _window_cutoff is not None and date is not None:
+                                try:
+                                    if str(date) < _window_cutoff:
+                                        total_windowed_out += 1
+                                        continue
+                                except Exception:
+                                    pass
+
                             # authorized_datetime is an ISO-8601 string with time (e.g.
                             # "2024-01-15T14:23:00Z"); fall back to datetime then None.
                             authorized_datetime = (
@@ -2752,7 +2841,13 @@ def sync(classify: bool = True, progress_callback=None) -> dict:
                 # auto-classification on any newly inserted (unclassified)
                 # transactions.  Errors are caught so a classification failure
                 # never blocks sync.
-                auto_classify_result = {"classified": 0, "skipped": 0, "uncertain": 0}
+                auto_classify_result = {
+                    "classified": 0,
+                    "skipped": 0,
+                    "uncertain": 0,
+                    "pending_remaining": 0,
+                    "batch_size": 0,
+                }
                 suspicious_flags: list[dict] = []
                 if classify:
                     try:
@@ -2800,6 +2895,25 @@ def sync(classify: bool = True, progress_callback=None) -> dict:
         "auto_classified": auto_classify_result.get("classified", 0),
         "auto_skipped": auto_classify_result.get("skipped", 0),
         "auto_uncertain": auto_classify_result.get("uncertain", 0),
+        "pending_remaining": auto_classify_result.get("pending_remaining", 0),
+        "classify_batch_size": auto_classify_result.get("batch_size", 0),
+        "windowed_out": total_windowed_out,
+        "window_days": int(window_days) if window_days else 0,
+        "big_pull": total_added >= int(big_pull_threshold),
+        "warning": (
+            (
+                f"Large pull: {total_added} new transactions. "
+                + (
+                    f"Classified {auto_classify_result.get('classified', 0)}; "
+                    f"{auto_classify_result.get('pending_remaining', 0)} still pending "
+                    "— run classify again to finish."
+                    if classify
+                    else "Classification was skipped."
+                )
+            )
+            if total_added >= int(big_pull_threshold)
+            else ""
+        ),
         "health_check": health_check_result,
         "suspicious_count": len(suspicious_flags),
         "suspicious": top_suspicious,
@@ -4655,18 +4769,38 @@ def delete_rule(id: str) -> dict:
 # Settings tools (#159)
 # ---------------------------------------------------------------------------
 
-_SETTING_KEYS = {"home_currency", "timezone"}
+_SETTING_KEYS = {
+    "home_currency",
+    "timezone",
+    "sync_window_days",
+    "classify_batch_size",
+    "classifier_model",
+}
 _SETTING_VALID_VALUES: dict[str, list[str]] = {
     "home_currency": ["CAD", "USD", "EUR", "GBP"],
     # timezone: any non-empty IANA string is valid; we enumerate common ones here
     # but do NOT restrict to this list (open-ended for power users).
     "timezone": [],  # empty = accept any non-empty value (validated in set_setting)
+    # sync_window_days / classify_batch_size: validated as bounded ints below.
+    "sync_window_days": [],
+    "classify_batch_size": [],
+    # classifier_model: open-ended model string.
+    "classifier_model": [],
+}
+
+# Integer settings: (min, max) inclusive bounds enforced in set_setting.
+_SETTING_INT_BOUNDS: dict[str, tuple[int, int]] = {
+    "sync_window_days": (1, 3650),       # 1 day .. 10 years
+    "classify_batch_size": (1, 1000),    # 1 .. 1000 txns per sync
 }
 
 
 _SETTING_DEFAULTS = {
     "home_currency": "CAD",
     "timezone": "America/Toronto",
+    "sync_window_days": "90",
+    "classify_batch_size": "50",
+    "classifier_model": "claude-3-5-haiku-20241022",
 }
 
 
@@ -4730,6 +4864,22 @@ def set_setting(key: str, value: str) -> dict:
             "status": "error",
             "message": f"Value for {key!r} must not be empty.",
         }
+    # Integer settings: validate numeric + bounds.
+    if key in _SETTING_INT_BOUNDS:
+        lo, hi = _SETTING_INT_BOUNDS[key]
+        try:
+            ival = int(str(value).strip())
+        except (TypeError, ValueError):
+            return {
+                "status": "error",
+                "message": f"Value for {key!r} must be an integer between {lo} and {hi}.",
+            }
+        if ival < lo or ival > hi:
+            return {
+                "status": "error",
+                "message": f"Value for {key!r} must be between {lo} and {hi} (got {ival}).",
+            }
+        value = str(ival)
     uid = get_active_user_id(server.paths.DB_PATH)
     if uid is None:
         return {"status": "error", "message": "No active user found"}
@@ -4740,6 +4890,49 @@ def set_setting(key: str, value: str) -> dict:
     finally:
         conn.close()
     return {"status": "ok", "key": key, "value": value}
+
+
+def _get_sync_settings(user_id: str) -> dict:
+    """Return the sync-safety settings for *user_id* with defaults applied.
+
+    Reads ``sync_window_days``, ``classify_batch_size`` and ``classifier_model``
+    from the ``users`` row, falling back to module defaults when columns are
+    NULL or the row is missing.  Used by :func:`sync` and
+    :func:`classify_pending_transactions` to bound work per run.
+
+    Returns
+    -------
+    dict
+        ``{"sync_window_days": int, "classify_batch_size": int,
+           "classifier_model": str}``
+    """
+    window = int(_SETTING_DEFAULTS["sync_window_days"])
+    batch = int(_SETTING_DEFAULTS["classify_batch_size"])
+    model = _SETTING_DEFAULTS["classifier_model"]
+    try:
+        conn = get_db(server.paths.DB_PATH)
+        try:
+            row = conn.execute(
+                "SELECT sync_window_days, classify_batch_size, classifier_model "
+                "FROM users WHERE id = ?",
+                (user_id,),
+            ).fetchone()
+        finally:
+            conn.close()
+        if row:
+            if row["sync_window_days"] is not None:
+                window = int(row["sync_window_days"])
+            if row["classify_batch_size"] is not None:
+                batch = int(row["classify_batch_size"])
+            if row["classifier_model"]:
+                model = row["classifier_model"]
+    except Exception as _exc:  # noqa: BLE001
+        _logger.warning("_get_sync_settings fell back to defaults: %s", _exc)
+    return {
+        "sync_window_days": window,
+        "classify_batch_size": batch,
+        "classifier_model": model,
+    }
 
 
 # ---------------------------------------------------------------------------

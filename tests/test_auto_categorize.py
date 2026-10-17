@@ -367,7 +367,13 @@ class TestClassifyPendingTransactions:
     def test_no_active_user_graceful_noop(self, tmp_db, monkeypatch):
         """No active user → classify_pending_transactions returns all zeros."""
         result = classify_pending_transactions("")
-        assert result == {"classified": 0, "skipped": 0, "uncertain": 0}
+        assert result == {
+            "classified": 0,
+            "skipped": 0,
+            "uncertain": 0,
+            "pending_remaining": 0,
+            "batch_size": 0,
+        }
 
     def test_transfer_hint_passed_to_classifier(self, db_env):
         """Transfer hint should be included in the unified classifier context."""
@@ -384,7 +390,7 @@ class TestClassifyPendingTransactions:
 
         # New unified signature (issue #205):
         # classify_transaction(conn, tx_dict, rules, ledger_tree=..., hints=..., context=...)
-        def mock_classify(conn_arg, tx_dict, rules, ledger_tree=None, hints=None, context=None):
+        def mock_classify(conn_arg, tx_dict, rules, ledger_tree=None, hints=None, context=None, model=None):
             captured_contexts.append(context)
 
             return {

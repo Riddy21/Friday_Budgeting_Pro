@@ -145,7 +145,7 @@ def test_authorized_datetime_stored_on_sync(env, monkeypatch):
         "server.health_monitor.check_all_connections", lambda db, plaid_provider=None: _HEALTH_NOOP
     )
 
-    _main.sync()
+    _main.sync(window_days=0)
 
     conn = get_db(env["db"])
     txns = conn.execute(
@@ -171,7 +171,7 @@ def test_transactions_ordered_by_datetime_desc(env, monkeypatch):
         "server.health_monitor.check_all_connections", lambda db, plaid_provider=None: _HEALTH_NOOP
     )
 
-    _main.sync()
+    _main.sync(window_days=0)
 
     conn = get_db(env["db"])
     # Replicate the exact ORDER BY clause used in ui/server.py
@@ -201,7 +201,7 @@ def test_transactions_fallback_to_date_when_no_datetime(env, monkeypatch):
         "server.health_monitor.check_all_connections", lambda db, plaid_provider=None: _HEALTH_NOOP
     )
 
-    _main.sync()
+    _main.sync(window_days=0)
 
     conn = get_db(env["db"])
     # NULL out the late-night transaction's authorized_datetime

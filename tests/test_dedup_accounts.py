@@ -443,7 +443,7 @@ class TestSyncSkipsDuplicates:
             lambda db, plaid_provider=None: _HEALTH_NOOP,
         )
 
-        result = sync()
+        result = sync(window_days=0)
         assert result["status"] == "ok"
 
         conn = get_db(env["db"])

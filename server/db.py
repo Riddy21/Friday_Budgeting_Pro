@@ -143,6 +143,21 @@ def init_db(path: str | Path) -> None:
         conn.execute("UPDATE users SET timezone = 'America/Toronto' WHERE timezone IS NULL")
         conn.commit()
 
+        # Migration: sync safety settings (#270)
+        # sync_window_days   — max age (days) of transactions pulled per sync
+        # classify_batch_size — max transactions classified by LLM per sync
+        # classifier_model   — cheap/dumber model used only for classification
+        _add_col_if_missing(conn, "users", "sync_window_days", "INTEGER")
+        conn.execute("UPDATE users SET sync_window_days = 90 WHERE sync_window_days IS NULL")
+        _add_col_if_missing(conn, "users", "classify_batch_size", "INTEGER")
+        conn.execute("UPDATE users SET classify_batch_size = 50 WHERE classify_batch_size IS NULL")
+        _add_col_if_missing(conn, "users", "classifier_model", "TEXT")
+        conn.execute(
+            "UPDATE users SET classifier_model = 'claude-3-5-haiku-20241022' "
+            "WHERE classifier_model IS NULL"
+        )
+        conn.commit()
+
         # Migration: multi-currency (#160)
         _add_col_if_missing(conn, "bank_accounts", "currency", "TEXT")
         conn.execute("UPDATE bank_accounts SET currency = 'CAD' WHERE currency IS NULL")

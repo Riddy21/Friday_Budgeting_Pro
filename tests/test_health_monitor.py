@@ -443,7 +443,7 @@ def test_sync_passes_none_not_module_singleton_to_health_monitor(monkeypatch):
 
     monkeypatch.setattr(_sm, "get_db", lambda *a, **kw: _FakeConn())
 
-    _sm.sync()
+    _sm.sync(window_days=0)
 
     assert len(captured_provider_arg) == 1
     assert captured_provider_arg[0] is None, (

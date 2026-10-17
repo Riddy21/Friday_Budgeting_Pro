@@ -301,7 +301,21 @@ tool calls; nothing new is required from the UI.
 - `set_account_ledger(account_id, ledger_id)` — routes transactions from a bank account to a specific ledger by default
 
 ### Transactions
-- `sync()` → pull from Plaid, classify, return summary
+- `sync(classify=True, window_days=None, big_pull_threshold=200)` → pull new
+  transactions, classify, return summary.  **Sync safety (#270):**
+  - `window_days` bounds how far back transactions are ingested; `None` uses the
+    active user's `sync_window_days` setting (default **90**; `0` = no window).
+    Transactions older than `today - window_days` are skipped and counted in
+    `windowed_out`.
+  - Classification is **batched** to the per-user `classify_batch_size`
+    (default **50**) so one sync never fires an unbounded number of serial LLM
+    calls.  Remaining work is reported via `pending_remaining`; the UI loops
+    batches and the user can Sync again to finish.
+  - When `added >= big_pull_threshold` the result sets `big_pull=True` and a
+    human-readable `warning` (surfaced in the dashboard progress log).
+  - Classification runs on a cheaper model via the per-user `classifier_model`
+    setting (default `claude-3-5-haiku-20241022`), threaded through
+    `classify_transaction(..., model=)` → `llm.chat(..., model=)`.
 - `list(filters)` → query transactions
 - `get_needs_review()` → ambiguous ones HAL should ask about
 - `route(transaction_id, allocations[])` → manual or HAL-driven routing
@@ -732,10 +746,18 @@ the DB (a future operation, not a v0.1 feature).
 
 **Accounts** (`/accounts`) — stub page (#158 will implement full accounts management)
 
-**Settings** (`/settings`) — app + user settings (#159, #161)
+**Settings** (`/settings`) — app + user settings (#159, #161, #270)
 - **Home Currency** — ISO 4217 selector (CAD, USD, EUR, GBP); used for totals and reports
 - **Timezone** — IANA timezone selector (America/Toronto, UTC, etc.); used for
   date-boundary queries ("this month") and as a hint for the UI's JS renderer
+- **Sync window (days)** — `sync_window_days` (default 90, range 1–3650).  Max age
+  of transactions pulled per sync; older ones are skipped.
+- **Classify batch size** — `classify_batch_size` (default 50, range 1–1000).  Max
+  transactions auto-classified per batch; keeps big pulls from hanging.
+- **Classifier model** — `classifier_model` (default `claude-3-5-haiku-20241022`).
+  Cheaper/faster model used only for transaction classification.
+- Settings persist as columns on the `users` row and are read/written via the
+  `get_setting` / `set_setting` MCP tools and the `/settings` form.
 - All timestamps in the DB are stored as UTC Unix seconds.  The UI renders
   them client-side via `<span class="datetime-local" data-utc="<int>">` elements
   and a small JS snippet in `base.html` that calls `new Date(ts*1000).toLocaleString()`.

@@ -913,16 +913,49 @@ def api_sync(request: Request):
             # Run classification inline in this thread so progress log covers
             # both phases and running stays True until both are done.
             uid = get_active_user_id(_paths.DB_PATH)
+            # Big-pull warning surfaced from the sync summary (#270).
+            if isinstance(sync_result, dict) and sync_result.get("big_pull"):
+                _sync_emit({
+                    "phase": "warning",
+                    "msg": sync_result.get("warning")
+                    or f"Large pull: {total_added} new transactions.",
+                })
             if uid and total_added > 0:
                 _sync_emit({"phase": "classifying", "msg": "Classifying transactions\u2026"})
                 with _classify_lock:
                     _classify_state["running"] = True
                     _classify_state["result"] = None
                 try:
-                    classify_result = _sm.classify_pending_transactions(uid)
+                    # Classify in batches until nothing is pending or a safety
+                    # ceiling of passes is hit (#270).  Each pass is bounded by
+                    # the per-user classify_batch_size, so we never fire an
+                    # unbounded number of serial LLM calls in one go, and the
+                    # live progress log updates between batches.
+                    total_classified = 0
+                    classify_result = {"classified": 0, "skipped": 0, "uncertain": 0, "pending_remaining": 0}
+                    _MAX_PASSES = 40  # hard safety ceiling
+                    for _pass in range(_MAX_PASSES):
+                        classify_result = _sm.classify_pending_transactions(uid)
+                        batch_n = classify_result.get("classified", 0)
+                        total_classified += batch_n
+                        remaining = classify_result.get("pending_remaining", 0)
+                        if batch_n or remaining:
+                            _sync_emit({
+                                "phase": "classifying",
+                                "msg": f"Classified {total_classified} so far… {remaining} remaining",
+                            })
+                        # Stop when nothing left, or a pass made no progress
+                        # (avoids an infinite loop on persistently-uncertain rows).
+                        if remaining <= 0 or batch_n == 0:
+                            break
+                    classify_result = {**classify_result, "classified": total_classified}
                     _classify_state["result"] = {"status": "ok", **classify_result}
-                    n = classify_result.get("classified", 0)
-                    _sync_emit({"phase": "done", "msg": f"Done! {n} transaction{'s' if n != 1 else ''} classified", "added": total_added, "classified": n})
+                    n = total_classified
+                    remaining = classify_result.get("pending_remaining", 0)
+                    done_msg = f"Done! {n} transaction{'s' if n != 1 else ''} classified"
+                    if remaining > 0:
+                        done_msg += f" — {remaining} still pending (click Sync again to continue)"
+                    _sync_emit({"phase": "done", "msg": done_msg, "added": total_added, "classified": n, "pending_remaining": remaining})
                 except Exception as exc:
                     import logging as _cl_logging
                     _cl_logging.getLogger(__name__).error("Classification in sync thread failed: %s", exc)
@@ -1638,10 +1671,25 @@ def settings_get(request: Request):
     conn = get_db(_db_path())
     try:
         row = conn.execute(
-            "SELECT home_currency, timezone FROM users WHERE id = ?", (uid,)
+            "SELECT home_currency, timezone, sync_window_days, classify_batch_size, "
+            "classifier_model FROM users WHERE id = ?",
+            (uid,),
         ).fetchone()
         home_currency = row["home_currency"] if row and row["home_currency"] else "CAD"
         timezone = row["timezone"] if row and row["timezone"] else "America/Toronto"
+        sync_window_days = (
+            row["sync_window_days"] if row and row["sync_window_days"] is not None else 90
+        )
+        classify_batch_size = (
+            row["classify_batch_size"]
+            if row and row["classify_batch_size"] is not None
+            else 50
+        )
+        classifier_model = (
+            row["classifier_model"]
+            if row and row["classifier_model"]
+            else "claude-3-5-haiku-20241022"
+        )
     finally:
         conn.close()
     saved = request.query_params.get("saved") == "1"
@@ -1659,6 +1707,9 @@ def settings_get(request: Request):
             "currencies": _VALID_CURRENCIES,
             "timezone": timezone,
             "timezones": _VALID_TIMEZONES,
+            "sync_window_days": sync_window_days,
+            "classify_batch_size": classify_batch_size,
+            "classifier_model": classifier_model,
             "saved": saved,
             "rules": rules,
             "reauth_connections": _get_reauth_connections(uid),
@@ -1676,6 +1727,10 @@ async def settings_post(request: Request):
     home_currency = (form.get("home_currency") or "").strip().upper()
     # timezone is optional in the form: if not submitted keep the existing value
     submitted_tz = (form.get("timezone") or "").strip()
+    # Sync-safety settings (#270) — optional in the form.
+    submitted_window = (form.get("sync_window_days") or "").strip()
+    submitted_batch = (form.get("classify_batch_size") or "").strip()
+    submitted_model = (form.get("classifier_model") or "").strip()
 
     # Load current values for fallback + error re-render
     conn = get_db(_db_path())
@@ -1698,6 +1753,48 @@ async def settings_post(request: Request):
     if not timezone:
         errors.append("Timezone must not be empty.")
 
+    # Sync-safety validation: keep existing value when field not submitted.
+    sync_window_days = 90
+    classify_batch_size = 50
+    classifier_model = "claude-3-5-haiku-20241022"
+    _conn_cur = get_db(_db_path())
+    try:
+        _cur_row = _conn_cur.execute(
+            "SELECT sync_window_days, classify_batch_size, classifier_model "
+            "FROM users WHERE id = ?",
+            (uid,),
+        ).fetchone()
+        if _cur_row:
+            if _cur_row["sync_window_days"] is not None:
+                sync_window_days = int(_cur_row["sync_window_days"])
+            if _cur_row["classify_batch_size"] is not None:
+                classify_batch_size = int(_cur_row["classify_batch_size"])
+            if _cur_row["classifier_model"]:
+                classifier_model = _cur_row["classifier_model"]
+    finally:
+        _conn_cur.close()
+
+    if submitted_window:
+        try:
+            _w = int(submitted_window)
+            if _w < 1 or _w > 3650:
+                errors.append("Sync window (days) must be between 1 and 3650.")
+            else:
+                sync_window_days = _w
+        except ValueError:
+            errors.append("Sync window (days) must be a whole number.")
+    if submitted_batch:
+        try:
+            _b = int(submitted_batch)
+            if _b < 1 or _b > 1000:
+                errors.append("Classify batch size must be between 1 and 1000.")
+            else:
+                classify_batch_size = _b
+        except ValueError:
+            errors.append("Classify batch size must be a whole number.")
+    if submitted_model:
+        classifier_model = submitted_model
+
     if errors:
         return templates.TemplateResponse(
             request,
@@ -1708,6 +1805,9 @@ async def settings_post(request: Request):
                 "currencies": _VALID_CURRENCIES,
                 "timezone": current_tz,
                 "timezones": _VALID_TIMEZONES,
+                "sync_window_days": sync_window_days,
+                "classify_batch_size": classify_batch_size,
+                "classifier_model": classifier_model,
                 "saved": False,
                 "error": " ".join(errors),
                 "reauth_connections": _get_reauth_connections(uid),
@@ -1716,8 +1816,16 @@ async def settings_post(request: Request):
     conn = get_db(_db_path())
     try:
         conn.execute(
-            "UPDATE users SET home_currency = ?, timezone = ? WHERE id = ?",
-            (home_currency, timezone, uid),
+            "UPDATE users SET home_currency = ?, timezone = ?, sync_window_days = ?, "
+            "classify_batch_size = ?, classifier_model = ? WHERE id = ?",
+            (
+                home_currency,
+                timezone,
+                sync_window_days,
+                classify_batch_size,
+                classifier_model,
+                uid,
+            ),
         )
         conn.commit()
     finally:

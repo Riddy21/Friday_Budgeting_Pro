@@ -35,6 +35,29 @@
       <p class="hint">Used for date display and &ldquo;this month&rdquo; boundaries.</p>
     </div>
 
+    <h3 style="margin-top:1.5rem;">Sync &amp; Classification</h3>
+
+    <div class="form-group">
+      <label for="sync_window_days">Sync window (days)</label>
+      <input type="number" id="sync_window_days" name="sync_window_days"
+             min="1" max="3650" value="{{ sync_window_days }}">
+      <p class="hint">Only pull transactions newer than this many days. Default 90. Older transactions are skipped.</p>
+    </div>
+
+    <div class="form-group">
+      <label for="classify_batch_size">Classify batch size</label>
+      <input type="number" id="classify_batch_size" name="classify_batch_size"
+             min="1" max="1000" value="{{ classify_batch_size }}">
+      <p class="hint">Max transactions auto-classified per batch. Keeps big pulls from hanging. Default 50; remaining continue on the next Sync.</p>
+    </div>
+
+    <div class="form-group">
+      <label for="classifier_model">Classifier model</label>
+      <input type="text" id="classifier_model" name="classifier_model"
+             value="{{ classifier_model }}" placeholder="claude-3-5-haiku-20241022">
+      <p class="hint">Cheaper/faster model used only for transaction classification. Default claude-3-5-haiku.</p>
+    </div>
+
     <button type="submit" class="btn-primary">Save</button>
   </form>
 </div>
