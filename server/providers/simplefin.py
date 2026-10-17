@@ -37,6 +37,7 @@ from __future__ import annotations
 import base64
 import datetime as _datetime
 import json as _json
+import os
 import time as _time
 import urllib.error
 import urllib.parse
@@ -105,9 +106,29 @@ class SimpleFINProvider(BankProvider):
 
     name = "simplefin"
 
-    def __init__(self, timeout: float = 30.0, overlap_days: int = 5) -> None:
+    # Default max days of history to fetch on the first sync (or on a malformed
+    # cursor). 90 keeps the initial backfill small enough to classify quickly.
+    DEFAULT_MAX_DAYS = 90
+
+    def __init__(
+        self,
+        timeout: float = 30.0,
+        overlap_days: int = 5,
+        max_days: int | None = None,
+    ) -> None:
         self.timeout = timeout
         self.overlap_days = overlap_days
+        # Adjustable first-sync window. Priority: explicit arg > env var >
+        # DEFAULT_MAX_DAYS (90). Not hard-capped so a deliberate larger pull is
+        # possible, but server.main warns + batches when it exceeds the default.
+        if max_days is None:
+            try:
+                max_days = int(
+                    os.environ.get("FRIDAY_BP_SYNC_MAX_DAYS", str(self.DEFAULT_MAX_DAYS))
+                )
+            except (TypeError, ValueError):
+                max_days = self.DEFAULT_MAX_DAYS
+        self.max_days = max(1, max_days)
 
     # ------------------------------------------------------------------
     # Low-level HTTP — single seam so unit tests can patch ``_request``.
@@ -415,11 +436,15 @@ class SimpleFINProvider(BankProvider):
                 start_date = cursor_date - _datetime.timedelta(days=self.overlap_days)
                 start_date_str = start_date.isoformat()
             except ValueError:
-                # Malformed cursor: fall back to full 90-day history.
-                start_date_str = (today - _datetime.timedelta(days=90)).isoformat()
+                # Malformed cursor: fall back to the configured history window.
+                start_date_str = (
+                    today - _datetime.timedelta(days=self.max_days)
+                ).isoformat()
         else:
-            # First sync: fetch up to 90 days of history.
-            start_date_str = (today - _datetime.timedelta(days=90)).isoformat()
+            # First sync: fetch up to ``self.max_days`` of history (default 90).
+            start_date_str = (
+                today - _datetime.timedelta(days=self.max_days)
+            ).isoformat()
 
         data = self._fetch_accounts(
             access_url, start_date=start_date_str, end_date=end_date_str
