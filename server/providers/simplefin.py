@@ -135,6 +135,13 @@ class SimpleFINProvider(BankProvider):
             On any other 4xx/5xx or network failure.
         """
         req = urllib.request.Request(url, data=body, method=method)
+        # Use a browser-like User-Agent; SimpleFIN Bridge (hosted on Cloudflare)
+        # blocks the default Python-urllib agent with error 1010.
+        req.add_header(
+            "User-Agent",
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
+            "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        )
         for k, v in (headers or {}).items():
             req.add_header(k, v)
         if username is not None and password is not None:
