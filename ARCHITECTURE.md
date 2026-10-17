@@ -216,9 +216,15 @@ Full schema lives in `db/schema.sql` (source of truth). Summary:
 
 ### bank_accounts key fields
 - `currency` — native currency (from Plaid)
-- `balance_current`, `balance_available` — from last sync
+- `balance_current`, `balance_available` — from last sync (updated on EVERY sync, even balance-only)
 - `description` — user-set context for classifier
 - `default_ledger_id` — route transactions from this account to this ledger by default
+- `owner_label` — org/institution label from SimpleFIN `org.name` (or `org.domain`); used to
+  separate accounts by owner in the UI (e.g. "Ridvan" vs "Dollar" — RIDVAN_REQUESTS.md item 3)
+- `inferred_type` — account type inferred from the account name when the provider returns a generic
+  type (SimpleFIN hardcodes `depository` for everything).  Values: `credit | loan | investment | depository`.
+  See `infer_account_type()` in `server/main.py`.  Used by `_compute_net_worth()` and the accounts
+  UI to correctly sign liabilities (credit/loan → negative) and categorise investments separately.
 
 ### ledgers key fields
 - `type` — `personal | property | investment`
@@ -376,6 +382,25 @@ unchanged. Only *provider selection* branches on
 ---
 
 ## Sync Pipeline
+
+### Balance-only sync (Account Overhaul 2026-10-17)
+
+The sync loop in `server.main.sync()` **always** upserts account rows and
+updates `balance_current`, `balance_available`, `inferred_type`, and
+`owner_label` from the provider response — **even when no new transactions
+are returned** (`added == []`).  This is critical for:
+
+- **Investment accounts**: market-value balances drift daily without any
+  transaction activity.
+- **Mortgage accounts**: outstanding principal decreases with each payment,
+  but the SimpleFIN balance feed may not carry transaction detail.
+- **Routine net-worth accuracy**: `_compute_net_worth()` reads
+  `balance_current` directly, so a balance refresh immediately updates the
+  net-worth card on the accounts page.
+
+The `owner_label` column uses `COALESCE(?, owner_label)` in the UPDATE
+so an existing non-NULL value is preserved if the provider returns NULL
+(prevents Plaid syncs from erasing SimpleFIN owner labels).
 
 The `sync()` MCP tool executes the full pipeline (including classification)
 automatically. The UI `/api/sync` route runs sync and classification as two
@@ -547,6 +572,25 @@ so it can run as a pre-pass without touching `classifier.py`.
   Fidelity, Schwab.
 - Used by callers that want to tag investment outflows as `savings` rather than
   `spending`.
+
+**`infer_account_type(name, current_type)`** — Account Overhaul (2026-10-17)
+- Infers the correct account type from the account **name** when the provider
+  returns a generic type.  SimpleFIN hardcodes `"depository"` for all accounts;
+  this function uses name heuristics to detect the real type.
+- Rules (first match wins):
+  1. Trust non-generic provider type (Plaid gives real types — if `current_type`
+     is not `depository` or `None`, return it as-is).
+  2. Credit-card keywords (`visa`, `mastercard`, `amex`, `american express`,
+     `credit card`) → `"credit"`.
+  3. Mortgage/loan keywords (`mortgage`, `loan`, `credit line`, `line of credit`,
+     `heloc`) → `"loan"`.
+  4. Investment keywords (`wealthsimple`, `questrade`, `rrsp`, `tfsa`, `fhsa`,
+     `invest`, `brokerage`, `portfolio`, `rbc direct`) → `"investment"`.
+  5. Fall back to `current_type` or `"depository"`.
+- Result is stored in `bank_accounts.inferred_type` (written on every sync).
+- `_compute_net_worth()` in `ui/server.py` and the accounts template use
+  `inferred_type` so credit cards and mortgages are treated as negative liabilities
+  and investments get their own bucket.
 
 ### Mortgage Detail & Payment Splitting (#271)
 

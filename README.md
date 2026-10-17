@@ -375,6 +375,38 @@ Friday Budgeting Pro stores and displays amounts in each account's native curren
 
 ---
 
+## Account Overhaul (2026-10-17)
+
+A batch of features addressing real-data gaps with SimpleFIN:
+
+### Owner labels
+SimpleFIN accounts now capture `org.name` (or `org.domain`) from each account's
+`org` object and store it in `bank_accounts.owner_label`.  The accounts UI groups
+accounts by owner when multiple owners share a bank connection.
+
+### Accurate account types (liabilities sign)
+SimpleFIN hardcodes `type="depository"` for all accounts.  A new helper
+`infer_account_type(name, provider_type)` in `server/main.py` detects the real
+type from the account name:
+- `"RBC Rewards+ Visa"` → `credit` (liability, negative balance)
+- `"103 Ardsley Mortgage"` → `loan` (liability, negative balance)
+- `"Wealthsimple Cash"` / `"RRSP"` → `investment` (separate category)
+
+The result is stored in `bank_accounts.inferred_type` and used by
+`_compute_net_worth()` to sign liabilities correctly and put investments in
+their own breakdown bucket.
+
+### Balance-only sync
+Account balances are updated on **every sync** — even when no new transactions
+are returned.  Investment and mortgage balances drift without transactions;
+this keeps net worth current.
+
+### Double-render guard
+`_get_accounts_grouped()` in `ui/server.py` now tracks seen account IDs and
+skips any account that would appear twice (guards against schema/join quirks).
+
+---
+
 ## What This Is Not (v0.1)
 
 - Not a full web app. The UI is deliberately small: setup and profile only.
