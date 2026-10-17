@@ -15,9 +15,20 @@ from __future__ import annotations
 
 import sqlite3
 import uuid
+from datetime import date, timedelta
 from pathlib import Path
 
 import pytest
+
+
+def _recent(days_ago: int) -> str:
+    """Return an ISO date *days_ago* days before today.
+
+    get_transfer_hint() uses a fixed 7-day lookback (matching the real
+    classify-on-sync flow where transactions are recent), so hint tests must
+    seed dates relative to 'now' rather than a hardcoded month.
+    """
+    return (date.today() - timedelta(days=days_ago)).isoformat()
 
 from server.db import get_db, init_db
 from server.transfer_detect import (
@@ -266,8 +277,8 @@ def test_get_transfer_hint_match(tmp_db: Path):
     acct_a = _seed_account(conn, conn_id)
     acct_b = _seed_account(conn, conn_id)
 
-    tx_out = _seed_transaction(conn, acct_a, 500.0, "2026-05-20")
-    _seed_transaction(conn, acct_b, -500.0, "2026-05-21")
+    tx_out = _seed_transaction(conn, acct_a, 500.0, _recent(2))
+    _seed_transaction(conn, acct_b, -500.0, _recent(1))
     conn.close()
 
     hint = get_transfer_hint(tx_out, str(tmp_db))
@@ -285,8 +296,8 @@ def test_get_transfer_hint_inflow_match(tmp_db: Path):
     acct_a = _seed_account(conn, conn_id)
     acct_b = _seed_account(conn, conn_id)
 
-    _seed_transaction(conn, acct_a, 500.0, "2026-05-20")
-    tx_in = _seed_transaction(conn, acct_b, -500.0, "2026-05-21")
+    _seed_transaction(conn, acct_a, 500.0, _recent(2))
+    tx_in = _seed_transaction(conn, acct_b, -500.0, _recent(1))
     conn.close()
 
     hint = get_transfer_hint(tx_in, str(tmp_db))

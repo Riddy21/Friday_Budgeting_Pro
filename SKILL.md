@@ -131,6 +131,7 @@ Invoke for any personal finance request:
 ### Banks
 - `start_link(plaid_env?)` — generate Plaid Link URL to connect a bank
 - `complete_link(public_token, plaid_env?)` — exchange public token after user completes Plaid Link
+- `complete_simplefin_link(setup_token, institution_name?)` — create a SimpleFIN bank connection from a user-supplied Setup Token (SimpleFIN Bridge alternative to Plaid)
 - `list_connections` — list connected banks and their status (`active | needs_reauth`)
 - `get_connections_needing_attention` — list connections that need user action (reauth or expiring soon)
 - `refresh_connection(id)` — re-authenticate a broken connection (Update Mode)
@@ -145,8 +146,12 @@ Invoke for any personal finance request:
 - `add_line_item(ledger_id, name, item_type)` — add a line item (`income | expense`) to a ledger
 - `remove_line_item(id)` — remove a line item
 - `set_account_ledger(account_id, ledger_id)` — link a bank account to a default ledger for automatic routing
-- `create_property_ledger(name, description?)` — create a property ledger with default line items (Rent income, Mortgage, Property tax, Maintenance, Insurance, Utilities)
+- `create_property_ledger(name, description?)` — create a property ledger with default line items. The mortgage is a sub-category group (Mortgage – Principal, Mortgage – Interest, Mortgage – Property tax (escrow), Mortgage – Insurance (escrow)) plus Rent income, Property tax, Maintenance & repairs, Insurance, Utilities
 - `create_investment_ledger(name)` — create an investment ledger (Contributions, Dividends/Returns)
+
+### Mortgages (#271)
+- `get_mortgage_details(account_id)` — return stored mortgage detail for a loan account (outstanding/original principal, interest rate, next/last payment, origination & maturity dates, escrow balance, YTD principal/interest, property address)
+- `preview_mortgage_split(account_id, payment_amount)` — preview how a payment splits into principal/interest/escrow without writing; method is `ytd_ratio` → `amortization` → `fallback`
 
 ### Transactions
 - `sync` — pull latest transactions from all connected banks

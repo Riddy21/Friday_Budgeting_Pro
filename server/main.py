@@ -3775,7 +3775,7 @@ def summary(period: str) -> dict:
               "income": float,
               "expenses": float,
               "savings": float,           # sum of savings-type line items
-              "net": float,               # income - expenses - savings
+              "net": float,               # income - expenses (expenses excludes savings)
               "savings_contributions": float,  # same as savings
               "unspent_balance": float,    # income - expenses (may be negative)
               "total_saved": float,        # savings_contributions + unspent_balance
@@ -3885,13 +3885,20 @@ def summary(period: str) -> dict:
         else:
             expenses += total
 
-    # Compute savings metrics
-    # unspent_balance = what's left after expenses AND savings contributions
-    # total_saved     = income - expenses (= savings_contributions + unspent_balance)
+    # Compute savings metrics (#248).
+    #   net / total_saved = income - expenses (total money kept; expenses already
+    #                       excludes savings-type entries above)
+    #   savings_contributions = money explicitly routed to savings line items
+    #   unspent_balance   = net - savings_contributions (leftover after the money
+    #                       you explicitly moved into savings)
+    #   savings_rate      = savings_contributions / income (share of income you
+    #                       actively saved)
     savings_contributions = round(savings, 2)
-    unspent_balance = round(income - expenses - savings, 2)  # truly unallocated leftover
-    total_saved = round(income - expenses, 2)  # total net kept (savings + leftover)
-    savings_rate_pct = round(total_saved / income * 100, 1) if income > 0 else 0.0
+    total_saved = round(income - expenses, 2)  # total net kept
+    unspent_balance = round(total_saved - savings_contributions, 2)  # unallocated leftover
+    savings_rate_pct = (
+        round(savings_contributions / income * 100, 1) if income > 0 else 0.0
+    )
     savings_rate = f"{savings_rate_pct}%"
 
     # YTD savings rate from separate query
@@ -3912,7 +3919,7 @@ def summary(period: str) -> dict:
         "income": round(income, 2),
         "expenses": round(expenses, 2),
         "savings": savings_contributions,
-        "net": total_saved,  # income - expenses (total kept; = savings + unspent)
+        "net": total_saved,  # income - expenses (= total_saved alias; expenses excludes savings)
         "savings_contributions": savings_contributions,
         "unspent_balance": unspent_balance,
         "total_saved": total_saved,

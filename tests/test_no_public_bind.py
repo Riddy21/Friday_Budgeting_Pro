@@ -12,9 +12,12 @@ a public bind, not to test runtime behaviour.
 import re
 from pathlib import Path
 
-# Patterns that indicate a public or empty-host bind
+# Patterns that indicate a public or empty-host bind.
+# The lookbehind/lookahead on the bare-address pattern prevents false positives
+# on version strings such as a "Chrome/120.0.0.0" User-Agent, where 0.0.0.0 is
+# embedded in a longer dotted number rather than being a standalone bind host.
 FORBIDDEN_PATTERNS = [
-    re.compile(r"0\.0\.0\.0"),
+    re.compile(r"(?<![\d.])0\.0\.0\.0(?![\d.])"),
     re.compile(r'host\s*=\s*["\'](\s*|0\.0\.0\.0)["\']'),
     re.compile(r'bind\(\s*\(\s*["\'](\s*|0\.0\.0\.0)["\']'),
 ]

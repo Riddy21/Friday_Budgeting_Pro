@@ -64,9 +64,11 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-_DEFAULT_HOST = os.environ.get(
-    "FRIDAY_BP_UI_HOST", "0.0.0.0"
-)  # bind all interfaces by default so remote access (e.g. Tailscale) works; override via FRIDAY_BP_UI_HOST
+# SECURITY (Design Constraint #6: local-network only, no internet-facing surface
+# by default): bind loopback only.  Remote access (e.g. Tailscale) must be an
+# explicit opt-in by setting FRIDAY_BP_UI_HOST (e.g. to the Tailscale IP or an
+# all-interfaces address).  Never default to a public/all-interfaces bind.
+_DEFAULT_HOST = os.environ.get("FRIDAY_BP_UI_HOST", "127.0.0.1")
 _DEFAULT_PORT = 6789
 
 
