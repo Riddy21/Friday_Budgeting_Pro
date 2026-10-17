@@ -1837,8 +1837,12 @@ def infer_account_type(name: str, current_type: str | None = None) -> str:
        Names that start with a street number AND carry an RBC loan-account
        suffix like "(-001)" (e.g. "103 Ardsley (-001)") are mortgages/loans.
     4. Investment keywords in the name → ``"investment"``.
-       ("Wealthsimple", "Questrade", "RRSP", "TFSA", "FHSA", "RRIF",
-        "Invest", "Brokerage", "Portfolio")
+       Platforms (Wealthsimple, Questrade, Vanguard, Fidelity, Schwab, …),
+       Canadian registered accounts (RRSP, TFSA, FHSA, RRIF, RESP, LIRA, RDSP),
+       US registered/retirement accounts (401k, 403b, 457b, IRA, Roth, HSA, 529),
+       and generic terms (brokerage, portfolio, ETF, mutual/index fund).
+       Short/ambiguous tokens (IRA, ETF, Roth, HSA, RESP, LIRA, 529) require a
+       word boundary so they don't match inside unrelated words.
     5. Fall back to ``current_type`` (e.g. ``"depository"``) if set, else
        ``"depository"``.
 
@@ -1904,19 +1908,61 @@ def infer_account_type(name: str, current_type: str | None = None) -> str:
     # Rule 4: investment account detection.
     # These accounts hold securities whose balance changes without transactions.
     _INVESTMENT_KEYWORDS = (
+        # Platforms / brokerages
         "wealthsimple",
         "questrade",
+        "rbc direct",
+        "brokerage",
+        "portfolio",
+        "invest",
+        "securities",
+        "vanguard",
+        "fidelity",
+        "schwab",
+        "etrade",
+        "e*trade",
+        "robinhood",
+        "td direct",
+        # Canadian registered accounts
         "rrsp",
         "tfsa",
         "fhsa",
         "rrif",
-        "invest",
-        "brokerage",
-        "portfolio",
-        "rbc direct",
+        "resp",
+        "lira",
+        "lrsp",
+        "rdsp",
+        "dpsp",
+        # US registered / retirement accounts
+        "401k",
+        "401(k)",
+        "403b",
+        "403(b)",
+        "457b",
+        "ira",
+        "roth",
+        "sep-ira",
+        "simple ira",
+        "hsa",
+        "529",
+        # Generic
+        "mutual fund",
+        "index fund",
+        "etf",
     )
-    if any(kw in name_lower for kw in _INVESTMENT_KEYWORDS):
-        return "investment"
+    # Whole-word-ish match for short/ambiguous tokens to avoid false positives
+    # (e.g. "ira" must not match "Mirabel"); pad name with spaces and require the
+    # keyword to be bounded by non-alphanumeric characters for the risky ones.
+    import re as _re
+
+    _AMBIGUOUS = {"ira", "etf", "529", "roth", "hsa", "resp", "lira", "457b"}
+    for kw in _INVESTMENT_KEYWORDS:
+        if kw in _AMBIGUOUS:
+            # Require a word boundary around short/ambiguous tokens.
+            if _re.search(r"(?<![a-z0-9])" + _re.escape(kw) + r"(?![a-z0-9])", name_lower):
+                return "investment"
+        elif kw in name_lower:
+            return "investment"
 
     # Rule 5: fall back to current_type or generic depository.
     return current_type or "depository"

@@ -814,3 +814,46 @@ class TestGetAccountsByCategory:
         labels = list(cats.keys())
         assert labels == sorted(labels, key=lambda x: ["Cash", "Savings", "Investments", "Debts"].index(x)
                                 if x in ["Cash", "Savings", "Investments", "Debts"] else 99)
+
+
+class TestInvestmentAccountDetection:
+    """Expanded investment detection: TFSA/RRSP/401k/IRA/RESP/brokerage, etc.
+
+    Added at Ridvan's request (2026-10-17): make sure any investor line —
+    TFSA, RRSP, FHSA, 401(k), 403(b), IRA, Roth, RESP, LIRA, brokerage,
+    Wealthsimple/Questrade/Vanguard/Fidelity/Schwab — classifies as investment.
+    """
+
+    def test_canadian_registered_accounts(self):
+        for name in ("Wealthsimple RRSP", "My TFSA", "FHSA Account",
+                     "RRIF Payout", "RESP for kids", "LIRA Locked-In"):
+            assert infer_account_type(name, "depository") == "investment", name
+
+    def test_us_registered_accounts(self):
+        for name in ("401(k) Plan", "401k Rollover", "403(b)", "457b Deferred",
+                     "Roth IRA", "Traditional IRA", "529 College Fund"):
+            assert infer_account_type(name, "depository") == "investment", name
+
+    def test_brokerage_platforms(self):
+        for name in ("Vanguard Brokerage", "Fidelity Investments", "Schwab One",
+                     "Questrade Margin", "RBC Direct Investing", "TD Direct Investing",
+                     "My ETF Holdings"):
+            assert infer_account_type(name, "depository") == "investment", name
+
+    def test_ambiguous_token_no_false_positive(self):
+        """Short tokens like 'ira' must not match inside unrelated words."""
+        # 'Mirabel' contains 'ira' but is a place name, not an IRA account.
+        assert infer_account_type("Mirabel Chequing", "depository") == "depository"
+        assert infer_account_type("Primary Chequing Account", "depository") == "depository"
+
+    def test_loan_keyword_wins_over_investment(self):
+        """Mortgage/loan keyword takes priority (checked before investment)."""
+        assert infer_account_type("529 Main Street Mortgage", "depository") == "loan"
+
+    def test_category_places_investment_accounts(self):
+        """_account_category routes investment-typed accounts to Investments."""
+        from ui.server import _account_category
+        acct = {"id": "i", "name": "Wealthsimple RRSP", "type": "depository",
+                "inferred_type": "investment", "subtype": None,
+                "balance_current": 25000.0, "currency": "CAD"}
+        assert _account_category(acct) == "Investments"

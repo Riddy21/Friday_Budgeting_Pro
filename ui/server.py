@@ -1444,7 +1444,9 @@ def _account_category(acct: dict, txn_count: int = 0) -> str:
 
     # Explicit investment type/subtype.
     if effective == "investment" or subtype in (
-        "401k", "403b", "ira", "roth", "tfsa", "rrsp", "fhsa", "rrif", "brokerage",
+        "401k", "403b", "457b", "ira", "roth", "sep ira", "simple ira",
+        "tfsa", "rrsp", "fhsa", "rrif", "resp", "lira", "rdsp", "hsa",
+        "529", "brokerage", "mutual fund", "etf",
     ):
         return "Investments"
 
