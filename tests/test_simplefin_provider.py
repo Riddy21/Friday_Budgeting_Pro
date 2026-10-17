@@ -2,7 +2,7 @@
 Tests for server/providers/simplefin.py (SimpleFINProvider)
 
 All network calls are mocked via the ``_request`` seam — no network access
-required.  Mirrors tests/test_flinks_provider.py in spirit.
+required.
 """
 
 from __future__ import annotations

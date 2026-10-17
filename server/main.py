@@ -40,11 +40,6 @@ from server.classifier import (
 )
 from server.db import get_db
 from server.db import transaction as db_txn
-from server.providers.flinks import (
-    FlinksError,
-    FlinksNotConfiguredError,
-    FlinksProvider,
-)
 from server.providers.plaid import PlaidProvider
 from server.providers.simplefin import (
     SimpleFINAuthError,
@@ -66,7 +61,6 @@ _plaid = PlaidProvider()
 mcp = fastmcp.FastMCP("friday-budgeting-pro")
 
 
-from server.flinks_credentials import get_flinks_credentials as _get_flinks_credentials
 from server.plaid_credentials import get_plaid_credentials as _get_plaid_credentials
 
 _logger = logging.getLogger(__name__)
@@ -2237,7 +2231,6 @@ def sync(classify: bool = True, progress_callback=None) -> dict:
                     "SELECT id, plaid_access_token_encrypted, plaid_env, user_id, "
                     "institution_name, "
                     "COALESCE(connection_type, 'plaid') AS connection_type, "
-                    "flinks_login_id "
                     "FROM bank_connections WHERE status = 'active'"
                 ).fetchall()
 
@@ -2251,20 +2244,8 @@ def sync(classify: bool = True, progress_callback=None) -> dict:
                     # ``sync_token`` is what the shared Plaid-shaped sync loop
                     # below passes as the first arg to sync_transactions():
                     #   * Plaid     -> decrypted access_token
-                    #   * Flinks    -> permanent LoginId (not a secret token)
                     #   * SimpleFIN -> decrypted Access URL (credentials embedded)
-                    if conn_type == "flinks":
-                        f_customer, f_secret, f_xapi, f_instance = _get_flinks_credentials(
-                            conn_user_id
-                        )
-                        conn_provider = FlinksProvider(
-                            customer_id=f_customer,
-                            secret_key=f_secret,
-                            x_api_key=f_xapi,
-                            instance=f_instance,
-                        )
-                        sync_token = bc["flinks_login_id"]
-                    elif conn_type == "simplefin":
+                    if conn_type == "simplefin":
                         # SimpleFIN Access URL is stored encrypted in the
                         # plaid_access_token_encrypted column (re-uses the
                         # existing NOT-NULL column; no extra column needed).
@@ -4073,276 +4054,6 @@ def configure_plaid(
 
 
 # ---------------------------------------------------------------------------
-# Flinks connector MCP tools
-# ---------------------------------------------------------------------------
-
-
-def _merge_env_vars(env_path: Path, updates: dict[str, str]) -> None:
-    """Merge *updates* into the .env file at *env_path*, preserving other keys.
-
-    Unlike a full rewrite, this keeps existing lines (comments, Plaid creds,
-    URLs, etc.) intact and only replaces/adds the supplied keys.  Written
-    atomically with mode 0o600.  This lets Plaid and Flinks credentials coexist
-    in the same .env file.
-    """
-    existing_lines: list[str] = []
-    if env_path.exists():
-        existing_lines = env_path.read_text().splitlines()
-
-    remaining = dict(updates)
-    out_lines: list[str] = []
-    for line in existing_lines:
-        stripped = line.strip()
-        if stripped and not stripped.startswith("#") and "=" in stripped:
-            key = stripped.split("=", 1)[0].strip()
-            if key in remaining:
-                out_lines.append(f"{key}={remaining.pop(key)}")
-                continue
-        out_lines.append(line)
-    # Append any keys that weren't already present.
-    for key, value in remaining.items():
-        out_lines.append(f"{key}={value}")
-
-    content = "\n".join(out_lines).rstrip("\n") + "\n"
-    env_path.parent.mkdir(parents=True, exist_ok=True)
-    fd, tmp_path_str = tempfile.mkstemp(dir=env_path.parent, prefix=".env.tmp")
-    try:
-        with os.fdopen(fd, "w") as fh:
-            fh.write(content)
-    except Exception:
-        try:
-            os.unlink(tmp_path_str)
-        except OSError:
-            pass
-        raise
-    os.replace(tmp_path_str, env_path)
-    os.chmod(env_path, 0o600)
-
-
-@mcp.tool
-def configure_flinks(
-    customer_id: str,
-    secret_key: str,
-    x_api_key: str,
-    instance: str = "toolbox",
-) -> dict:
-    """Store Flinks API credentials (DB + .env).
-
-    Parallel to ``configure_plaid``.  Flinks is a Canadian open-banking
-    aggregator; credentials come from the Flinks dashboard (or the public
-    ``toolbox`` sandbox).
-
-    Parameters
-    ----------
-    customer_id : str
-        Flinks customer id / UUID (non-empty).
-    secret_key : str
-        Flinks secret key used to generate authorize tokens (non-empty).
-    x_api_key : str
-        Flinks x-api-key used for the data endpoints (non-empty).
-    instance : str
-        Flinks instance/subdomain.  Defaults to ``'toolbox'`` (public sandbox).
-
-    The credentials are saved to the per-user ``flinks_config`` table (primary)
-    and **merged** into ``.env`` (fallback for daemon startup).  The .env merge
-    preserves all other keys (Plaid creds, URLs) rather than clobbering the
-    file, so Plaid and Flinks coexist.  ``os.environ`` is updated so the next
-    sync picks them up without a restart.
-
-    Returns
-    -------
-    dict
-        ``{"ok": True, "instance": <instance>}``
-    """
-    if not customer_id:
-        raise ValueError("customer_id must be non-empty")
-    if not secret_key:
-        raise ValueError("secret_key must be non-empty")
-    if not x_api_key:
-        raise ValueError("x_api_key must be non-empty")
-
-    import time as _time
-
-    instance = (instance or "toolbox").strip()
-
-    # --- Save to DB for the active user (primary, per-user storage) ---
-    try:
-        uid = get_active_user_id(server.paths.DB_PATH)
-        if uid:
-            db_conn = get_db(server.paths.DB_PATH)
-            try:
-                now = int(_time.time())
-                db_conn.execute(
-                    """
-                    INSERT INTO flinks_config
-                        (user_id, customer_id, secret_key, x_api_key, instance,
-                         created_at, updated_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?)
-                    ON CONFLICT(user_id) DO UPDATE SET
-                        customer_id = excluded.customer_id,
-                        secret_key  = excluded.secret_key,
-                        x_api_key   = excluded.x_api_key,
-                        instance    = excluded.instance,
-                        updated_at  = excluded.updated_at
-                    """,
-                    (uid, customer_id, secret_key, x_api_key, instance, now, now),
-                )
-                db_conn.commit()
-                _logger.info("configure_flinks: saved credentials to DB for user %s", uid)
-            finally:
-                db_conn.close()
-    except Exception as _db_exc:  # noqa: BLE001
-        _logger.warning(
-            "configure_flinks: could not save to DB (DB may be uninitialised) — "
-            "credentials will only be written to .env.  Detail: %s",
-            _db_exc,
-        )
-
-    # --- Merge into .env (preserving existing keys) ---
-    env_path = project_root / ".env"
-    _merge_env_vars(
-        env_path,
-        {
-            "FLINKS_CUSTOMER_ID": customer_id,
-            "FLINKS_SECRET_KEY": secret_key,
-            "FLINKS_X_API_KEY": x_api_key,
-            "FLINKS_INSTANCE": instance,
-        },
-    )
-
-    os.environ["FLINKS_CUSTOMER_ID"] = customer_id
-    os.environ["FLINKS_SECRET_KEY"] = secret_key
-    os.environ["FLINKS_X_API_KEY"] = x_api_key
-    os.environ["FLINKS_INSTANCE"] = instance
-
-    _logger.info("configure_flinks: wrote .env (instance=%s)", instance)
-    return {"ok": True, "instance": instance}
-
-
-@mcp.tool
-def start_flinks_link() -> dict:
-    """Generate a Flinks authorize token and return the Connect iframe URL.
-
-    Parallel to ``start_link`` for Plaid.  Loads the active user's Flinks
-    credentials, generates a single-use authorize token (15-min TTL), and
-    returns the Flinks Connect iframe URL for the UI to embed.
-
-    Returns
-    -------
-    dict
-        ``{"status": "ok", "connect_url": <iframe url>, "instance": <instance>}``
-        on success, or ``{"status": "error", "message": ...}`` on failure.
-    """
-    uid = get_active_user_id(server.paths.DB_PATH)
-    customer_id, secret_key, x_api_key, instance = _get_flinks_credentials(uid)
-    provider = FlinksProvider(
-        customer_id=customer_id,
-        secret_key=secret_key,
-        x_api_key=x_api_key,
-        instance=instance,
-    )
-    try:
-        token = provider.generate_authorize_token()
-    except FlinksNotConfiguredError as exc:
-        return {"status": "error", "message": str(exc)}
-    except FlinksError as exc:  # noqa: BLE001
-        return {"status": "error", "message": f"Could not reach Flinks: {exc}"}
-
-    connect_url = provider.create_connect_url(token)
-    return {"status": "ok", "connect_url": connect_url, "instance": provider.instance}
-
-
-@mcp.tool
-def complete_flinks_link(
-    login_id: str,
-    institution_name: str | None = None,
-) -> dict:
-    """Create a Flinks bank connection from a permanent *login_id*.
-
-    Parallel to ``complete_link`` for Plaid.  The Flinks Connect iframe returns
-    a permanent ``LoginId`` (not a public_token to exchange).  We store a
-    ``bank_connections`` row with ``connection_type='flinks'`` and
-    ``flinks_login_id=login_id``, then trigger an initial sync in the background
-    so ``bank_accounts`` and transactions populate.
-
-    The login id is also Fernet-encrypted into the ``plaid_access_token_encrypted``
-    column (which is NOT NULL) for schema compatibility; the sync loop reads the
-    plaintext ``flinks_login_id`` column.
-
-    Returns
-    -------
-    dict
-        ``{"status": "ok", "connection_id": ..., "institution_name": ...}``
-        or ``{"status": "error", "message": ...}``.
-    """
-    if not login_id:
-        return {"status": "error", "message": "login_id must be non-empty"}
-
-    uid = get_active_user_id(server.paths.DB_PATH)
-    institution_name = institution_name or "Flinks"
-    encrypted_login = server.crypto.encrypt(login_id)
-
-    conn = get_db(server.paths.DB_PATH)
-    try:
-        # Idempotency: if this login was already connected, refresh it in place
-        # (re-connect / re-auth) rather than inserting a duplicate.
-        existing = conn.execute(
-            "SELECT id FROM bank_connections WHERE flinks_login_id = ?",
-            (login_id,),
-        ).fetchone()
-        if existing:
-            connection_id = existing["id"]
-            conn.execute(
-                """
-                UPDATE bank_connections
-                   SET plaid_access_token_encrypted = ?,
-                       status = 'active',
-                       institution_name = COALESCE(?, institution_name)
-                 WHERE id = ?
-                """,
-                (encrypted_login, institution_name, connection_id),
-            )
-        else:
-            connection_id = str(uuid.uuid4())
-            conn.execute(
-                """
-                INSERT INTO bank_connections
-                    (id, plaid_item_id, plaid_access_token_encrypted, institution_name,
-                     status, user_id, plaid_env, connection_type, flinks_login_id)
-                VALUES (?, ?, ?, ?, 'active', ?, 'production', 'flinks', ?)
-                """,
-                (
-                    connection_id,
-                    f"flinks-{login_id}",
-                    encrypted_login,
-                    institution_name,
-                    uid,
-                    login_id,
-                ),
-            )
-        conn.commit()
-    finally:
-        conn.close()
-
-    # Trigger an initial sync in the background so bank_accounts populates.
-    import threading
-
-    def _bg_sync():
-        try:
-            sync()
-        except Exception as exc:  # noqa: BLE001
-            _logger.warning("post-flinks-link sync failed: %s", exc)
-
-    threading.Thread(target=_bg_sync, daemon=True).start()
-
-    return {
-        "status": "ok",
-        "connection_id": connection_id,
-        "institution_name": institution_name,
-    }
-
-
-# ---------------------------------------------------------------------------
 # SimpleFIN MCP tools
 # ---------------------------------------------------------------------------
 
@@ -4354,7 +4065,7 @@ def complete_simplefin_link(
 ) -> dict:
     """Create a SimpleFIN bank connection from a user-supplied *setup_token*.
 
-    Parallel to ``complete_flinks_link`` / ``complete_link`` for Plaid.
+    Parallel to ``complete_link`` for Plaid.
 
     The flow:
 

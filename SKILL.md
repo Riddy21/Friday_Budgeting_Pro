@@ -198,9 +198,6 @@ Invoke for any personal finance request:
 - `set_ui_password(current_password, new_password)` — change the UI login password
 - `reset_ui_password` — generate a password-reset recovery token
 - `configure_plaid(client_id, secret, env)` — update Plaid API credentials
-- `configure_flinks(customer_id, secret_key, x_api_key, instance?)` — store Flinks API credentials (Canadian banks); merges into `.env` so Plaid + Flinks coexist. `instance` defaults to `toolbox` (public sandbox)
-- `start_flinks_link()` — generate a Flinks Connect authorize token and return the iframe URL to connect a Canadian bank
-- `complete_flinks_link(login_id, institution_name?)` — store a Flinks connection from the permanent LoginId returned by the Connect iframe, then run an initial sync
 
 ## Do / Don't
 

@@ -2,7 +2,7 @@
 server/providers/simplefin.py — SimpleFIN Bridge implementation of BankProvider.
 
 SimpleFIN Bridge is an open banking aggregator that lets users share read-only
-financial data with third-party apps.  Unlike Plaid or Flinks, SimpleFIN has no
+financial data with third-party apps.  Unlike Plaid, SimpleFIN has no
 per-app API keys: the "Access URL" (obtained once per user-bank connection)
 contains embedded Basic-Auth credentials.
 

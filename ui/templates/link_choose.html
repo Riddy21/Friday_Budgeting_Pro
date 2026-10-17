@@ -18,22 +18,13 @@
       <span class="btn-primary connect-choice-btn">Continue with Plaid →</span>
     </a>
 
-    <a href="/link/flinks/start" class="connect-choice-card" id="choice-flinks">
-      <div class="connect-choice-icon" aria-hidden="true">🍁</div>
-      <h2>Flinks</h2>
-      <p class="hint">
-        Canadian banks — RBC, TD, BMO, Scotiabank, CIBC and more — through the
-        Flinks Connect flow.
-      </p>
-      <span class="btn-secondary connect-choice-btn">Continue with Flinks →</span>
-    </a>
-
     <a href="/link/simplefin/start" class="connect-choice-card" id="choice-simplefin">
       <div class="connect-choice-icon" aria-hidden="true">🏦</div>
-      <h2>SimpleFIN</h2>
+      <h2>SimpleFIN Bridge</h2>
       <p class="hint">
-        Connect any bank via the open SimpleFIN Bridge protocol.  You control
-        access — revoke at any time from the SimpleFIN dashboard.
+        Canadian banks (RBC, TD, Scotiabank and more) via the open SimpleFIN
+        Bridge protocol.  You control access — revoke any time from the
+        SimpleFIN dashboard.
       </p>
       <span class="btn-secondary connect-choice-btn">Continue with SimpleFIN →</span>
     </a>
@@ -47,12 +38,9 @@
    the global stylesheet for a single page). */
 .connect-choice-grid {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: repeat(2, 1fr);
   gap: 16px;
   margin-top: 16px;
-}
-@media (max-width: 820px) {
-  .connect-choice-grid { grid-template-columns: 1fr 1fr; }
 }
 @media (max-width: 560px) {
   .connect-choice-grid { grid-template-columns: 1fr; }

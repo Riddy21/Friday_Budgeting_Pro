@@ -175,32 +175,11 @@ def init_db(path: str | Path) -> None:
         """)
         conn.commit()
 
-        # Migration: Flinks connector support (dual/tri connector).
-        # connection_type distinguishes plaid vs flinks connections; existing
+        # connection_type distinguishes plaid vs simplefin connections; existing
         # rows default to 'plaid' so the change is backward-compatible.
-        # flinks_login_id stores the permanent per-institution Flinks LoginId.
         _add_col_if_missing(
             conn, "bank_connections", "connection_type", "TEXT NOT NULL DEFAULT 'plaid'"
         )
-        _add_col_if_missing(conn, "bank_connections", "flinks_login_id", "TEXT")
-        conn.commit()
-
-        # Migration: flinks_config table — per-user Flinks credentials stored in
-        # DB (parallel to plaid_config).  Used as a default when connecting a
-        # Canadian bank via Flinks without re-entering credentials.
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS flinks_config (
-                id INTEGER PRIMARY KEY,
-                user_id TEXT NOT NULL REFERENCES users(id),
-                customer_id TEXT NOT NULL,
-                secret_key TEXT NOT NULL,
-                x_api_key TEXT NOT NULL,
-                instance TEXT NOT NULL DEFAULT 'toolbox',
-                created_at INTEGER NOT NULL DEFAULT (unixepoch()),
-                updated_at INTEGER NOT NULL DEFAULT (unixepoch()),
-                UNIQUE(user_id)
-            )
-        """)
         conn.commit()
 
         # Migration: setup_interview (#206 — guided onboarding answers).
@@ -270,7 +249,7 @@ def init_db(path: str | Path) -> None:
         # connection_type already supports arbitrary values; 'simplefin' is valid.
         # The Access URL (credentials embedded) is stored encrypted in
         # plaid_access_token_encrypted (re-uses the existing NOT NULL column).
-        # No extra bank_connections column needed: unlike Flinks, SimpleFIN
+        # No extra bank_connections column needed: SimpleFIN
         # decrypts its credential from plaid_access_token_encrypted exactly
         # like Plaid does — but the sync loop dispatches to SimpleFINProvider.
         conn.execute("""

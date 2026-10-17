@@ -286,9 +286,6 @@ tool calls; nothing new is required from the UI.
 ### Banks
 - `start_link()` → returns URL to open Plaid Link
 - `complete_link(public_token)` → exchange + store
-- `configure_flinks(customer_id, secret_key, x_api_key, instance?)` → store Flinks credentials (merged into `.env`, coexists with Plaid)
-- `start_flinks_link()` → returns the Flinks Connect iframe URL (single-use authorize token)
-- `complete_flinks_link(login_id, institution_name?)` → store a Flinks connection from the permanent LoginId + background sync
 - `list_connections()`
 - `refresh_connection(id)` → Update Mode link
 - `disconnect(id)`
@@ -345,59 +342,20 @@ All bank integrations implement the `BankProvider` ABC in
 | Provider | Module | Flow | Connect artifact |
 |---|---|---|---|
 | **Plaid** | `server/providers/plaid.py` | Hosted **Plaid Link** JS widget | `public_token` → exchanged for a per-item `access_token` |
-| **Flinks** | `server/providers/flinks.py` | Hosted **Flinks Connect** iframe | permanent `LoginId` (no token exchange) |
 
-The key design decision: **`FlinksProvider` normalises everything into
 Plaid-shaped dicts**, so the DB-upsert code in `server.main.sync()` works
 unchanged. Only *provider selection* branches on
-`bank_connections.connection_type` (`'plaid'` | `'flinks'`).
-
-### Flinks flow (v3 API, docs.flinks.com)
-
-```
-1. GenerateAuthorizeToken   (header flinks-auth-key: <secret_key>)  -> authorize token (15-min TTL)
-2. Flinks Connect iframe     ({instance}-iframe.private.fin.ag/v2/?authorizeToken=...&demo=true)
-                                                                    -> permanent LoginId
-3. Authorize                 (header flinks-auth-key: <authorize token>, body {LoginId})  -> RequestId
-4. GetAccountsDetail         (header x-api-key: <x_api_key>, body {RequestId, WithTransactions,...})
-                             -> 200 ready  OR  202 async -> poll GetAccountsDetailAsync/{RequestId}
-```
-
-### Normalisation (Flinks → Plaid shape)
-
-| Flinks field | Normalised (Plaid-shaped) field |
-|---|---|
-| `Transaction.Id` | `transaction_id` |
-| `Account.Id` | `account_id` |
-| `Debit`/`Credit` | `amount = (Debit or 0) - (Credit or 0)` (positive = outflow) |
-| `Description` | `name` and `merchant_name` |
-| `Date[:10]` | `date` (ISO date) |
-| — | `authorized_datetime = None`, `pending = False` |
-| `Account.Balance`/`Currency` | `balances{current, available, iso_currency_code}` |
-| `Account.Type` / `Account.Title` | `type` / `official_name` |
-
-A **401** from any Flinks endpoint raises `FlinksAuthError`, whose `.body`
-carries a Plaid-shaped `ITEM_LOGIN_REQUIRED` error so the existing sync/health
-re-auth detection flips the connection to `needs_reauth` with no Flinks-specific
-branching.
 
 ### Storage
 
-* Credentials → per-user `flinks_config` table (customer_id, secret_key,
   x_api_key, instance) + merged `.env` fallback.
-* Connection row → `bank_connections` with `connection_type='flinks'` and the
-  permanent `flinks_login_id`. The LoginId is also Fernet-encrypted into the
   `plaid_access_token_encrypted` column (NOT NULL) for schema compatibility.
-* `cursor` for Flinks doubles as an ISO `YYYY-MM-DD` "fetch since" date (Flinks
   has no opaque cursor); each sync returns a point-in-time snapshot so
   `modified`/`removed` are always empty.
 
 ### UI
 
 `/link/start` renders a **connector chooser** (`link_choose.html`). Plaid →
-`/link/plaid/start` (unchanged Plaid Link), Flinks → `/link/flinks/start` which
-embeds the Connect iframe (`flinks_link.html`); a `postMessage` listener captures
-the `LoginId` and POSTs it to `/link/flinks/complete`.
 
 ---
 
