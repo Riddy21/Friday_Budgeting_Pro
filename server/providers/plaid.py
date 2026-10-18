@@ -208,18 +208,43 @@ class PlaidProvider(BankProvider):
         Callers MUST encrypt tokens via server.crypto.encrypt before persisting.
         """
         client = self._build_client()
-        kwargs: dict = {"access_token": access_token}
-        if cursor is not None:
-            kwargs["cursor"] = cursor
 
-        request = TransactionsSyncRequest(**kwargs)
-        response = client.transactions_sync(request)
+        # Paginate until has_more=False — Plaid batches large datasets across
+        # multiple pages.  Without this loop, only the first page is processed
+        # and the cursor never advances past it, leaving subsequent pages
+        # permanently stuck (symptom: stale last-transaction date despite
+        # healthy connection).
+        all_added: list = []
+        all_modified: list = []
+        all_removed: list = []
+        next_cursor = cursor
+        accounts: list = []
+
+        while True:
+            kwargs: dict = {"access_token": access_token}
+            if next_cursor is not None:
+                kwargs["cursor"] = next_cursor
+
+            request = TransactionsSyncRequest(**kwargs)
+            response = client.transactions_sync(request)
+
+            all_added.extend(response["added"])
+            all_modified.extend(response["modified"])
+            all_removed.extend(response["removed"])
+            next_cursor = response["next_cursor"]
+            # accounts is only populated on the first page in practice
+            if not accounts:
+                accounts = response.get("accounts", [])
+
+            if not response.get("has_more", False):
+                break
+
         return {
-            "added": response["added"],
-            "modified": response["modified"],
-            "removed": response["removed"],
-            "next_cursor": response["next_cursor"],
-            "accounts": response.get("accounts", []),
+            "added": all_added,
+            "modified": all_modified,
+            "removed": all_removed,
+            "next_cursor": next_cursor,
+            "accounts": accounts,
         }
 
     def get_item_status(self, access_token: str) -> dict:
