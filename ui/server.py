@@ -1358,6 +1358,7 @@ def _get_accounts_grouped(user_id: Optional[str] = None) -> dict:
                 "  FROM bank_accounts ba"
                 "  JOIN bank_connections bc ON bc.id = ba.connection_id"
                 " WHERE bc.user_id = ?"
+                "   AND ba.removed_at IS NULL"
                 " ORDER BY bc.institution_name, ba.owner_label, ba.name",
                 (user_id,),
             ).fetchall()
@@ -1371,6 +1372,7 @@ def _get_accounts_grouped(user_id: Optional[str] = None) -> dict:
                 "       bc.id AS connection_id, bc.institution_name"
                 "  FROM bank_accounts ba"
                 "  JOIN bank_connections bc ON bc.id = ba.connection_id"
+                " WHERE ba.removed_at IS NULL"
                 " ORDER BY bc.institution_name, ba.owner_label, ba.name"
             ).fetchall()
 

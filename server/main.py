@@ -1559,7 +1559,7 @@ def classify_pending_transactions(
             JOIN bank_connections bc ON bc.id = ba.connection_id
             WHERE bc.user_id = ?
               AND t.pending = 0
-              AND ba.is_duplicate = 0
+              AND ba.is_duplicate = 0 AND ba.removed_at IS NULL
               AND NOT EXISTS (
                 SELECT 1 FROM transaction_entries te
                 WHERE te.transaction_id = t.id
@@ -2367,7 +2367,7 @@ def _detect_suspicious_transactions(conn, user_id: str) -> list[dict]:
          WHERE bc.user_id = ?
            AND t.pending = 0
            AND t.amount > 0
-           AND ba.is_duplicate = 0
+           AND ba.is_duplicate = 0 AND ba.removed_at IS NULL
          ORDER BY t.date DESC, t.authorized_datetime DESC
         """,
         (user_id,),
@@ -2870,6 +2870,29 @@ def sync(
                                 ),
                             )
 
+                    # Auto-removal: mark accounts that disappeared from SimpleFIN
+                    # as removed_at=now so they stop showing in the UI.  Only
+                    # applies to SimpleFIN (Plaid uses a cursor that already tracks
+                    # removals via the 'removed' list).  Skip if account_meta is
+                    # empty — an empty response likely means a transient API error,
+                    # not a real removal.
+                    if connection_type == "simplefin" and account_meta:
+                        live_plaid_ids = set(account_meta.keys())
+                        with db_txn(db_conn):
+                            db_conn.execute(
+                                """
+                                UPDATE bank_accounts
+                                   SET removed_at = ?
+                                 WHERE connection_id = ?
+                                   AND plaid_account_id NOT IN ({placeholders})
+                                   AND removed_at IS NULL
+                                   AND is_duplicate = 0
+                                """.format(
+                                    placeholders=",".join("?" * len(live_plaid_ids))
+                                ),
+                                (now, connection_id, *live_plaid_ids),
+                            )
+
                     # Deduplicate shared/joint accounts after each connection's
                     # accounts are upserted (issue #269).  This is idempotent.
                     if conn_user_id:
@@ -3261,7 +3284,7 @@ def get_suspicious_transactions(include_dismissed: bool = False) -> dict:
               JOIN transactions t ON t.id = st.transaction_id
               JOIN bank_accounts ba ON ba.id = t.bank_account_id
               JOIN bank_connections bc ON bc.id = ba.connection_id
-             WHERE bc.user_id = ? AND ba.is_duplicate = 0 {where}
+             WHERE bc.user_id = ? AND ba.is_duplicate = 0 AND ba.removed_at IS NULL {where}
              ORDER BY st.risk_level, st.flagged_at DESC
             """,
             (uid,),
@@ -3425,7 +3448,7 @@ def get_needs_review() -> dict:
             JOIN bank_connections bc ON bc.id = ba.connection_id
             WHERE bc.user_id = ?
               AND te.reviewed = 0
-              AND ba.is_duplicate = 0
+              AND ba.is_duplicate = 0 AND ba.removed_at IS NULL
               AND (
                 te.uncertain = 1
                 OR te.line_item_id IS NULL
@@ -3960,7 +3983,7 @@ def analyze_recurring_merchants(min_occurrences: int = 2, lookback_days: int = 9
                 "  JOIN bank_accounts ba ON ba.id = t.bank_account_id\n"
                 "  JOIN bank_connections bc ON bc.id = ba.connection_id\n"
                 " WHERE bc.user_id = ?\n"
-                "   AND ba.is_duplicate = 0\n"
+                "   AND ba.is_duplicate = 0 AND ba.removed_at IS NULL\n"
                 "   AND t.merchant IS NOT NULL\n"
                 "   AND TRIM(t.merchant) != ''\n"
                 "   AND t.date >= ?\n"
@@ -3969,7 +3992,7 @@ def analyze_recurring_merchants(min_occurrences: int = 2, lookback_days: int = 9
         else:
             base_filter = (
                 "  JOIN bank_accounts ba ON ba.id = t.bank_account_id\n"
-                " WHERE ba.is_duplicate = 0\n"
+                " WHERE ba.is_duplicate = 0 AND ba.removed_at IS NULL\n"
                 "   AND t.merchant IS NOT NULL\n"
                 "   AND TRIM(t.merchant) != ''\n"
                 "   AND t.date >= ?\n"
@@ -5570,6 +5593,7 @@ def find_transactions(
         "bc.user_id = ?",
         "t.pending = 0",
         "ba.is_duplicate = 0",  # exclude duplicate-account transactions (issue #269)
+        "ba.removed_at IS NULL",  # exclude removed accounts
     ]
     params: list = [uid]
 
