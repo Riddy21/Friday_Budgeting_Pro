@@ -63,7 +63,7 @@
      Debts.  Within each category, accounts are sub-grouped by owner (SimpleFIN
      org label, falling back to institution name).  Debts (credit cards +
      mortgages/loans) show negative balances. #}
-  {% set category_icons = {'Cash':'💵','Savings':'🏦','Investments':'📈','Debts':'💳'} %}
+  {% set category_icons = {'Cash':'💵','Investments':'📈','Credit Cards':'💳','Debts':'🏦'} %}
   {% if categorized_accounts %}
   {% for category, cdata in categorized_accounts.items() %}
   <section class="category-group">

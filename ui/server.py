@@ -1414,21 +1414,25 @@ def _get_accounts_grouped(user_id: Optional[str] = None) -> dict:
 
 
 # Category ordering for the account list (RIDVAN_REQUESTS.md items 2, 3, 5, 6).
-# Assets first (Cash → Savings → Investments), then liabilities (Debts).
-_CATEGORY_ORDER = ["Cash", "Savings", "Investments", "Debts"]
+# Assets first (Cash → Investments), then liabilities (Credit Cards → Debts).
+# Cash now absorbs chequing/checking AND savings (Ridvan's request 2026-10-18):
+# one liquid "Cash" tier, Investments separate, then Credit Cards and Debts
+# (loans/mortgages) as two DISTINCT liability buckets.
+_CATEGORY_ORDER = ["Cash", "Investments", "Credit Cards", "Debts"]
 
 
 def _account_category(acct: dict, txn_count: int = 0) -> str:
     """Map a single account row to a top-level display category.
 
-    Categories (RIDVAN_REQUESTS.md items 2, 5, 6):
-      * "Debts"       — credit cards + loans/mortgages (liabilities, shown negative)
-      * "Investments" — investment accounts, incl. the balance-driven heuristic:
-                        an account whose balance is non-trivial but which has NO
-                        transactions behaves like an investment/holding account
-                        (balance drifts without transactions).
-      * "Savings"     — savings/CD/money-market accounts
-      * "Cash"        — everything else (chequing / day-to-day)
+    Categories (updated 2026-10-18 per Ridvan's request):
+      * "Credit Cards" — credit-card liabilities (shown negative)
+      * "Debts"        — loans / mortgages / credit lines (shown negative)
+      * "Investments"  — investment accounts, incl. the balance-driven heuristic:
+                         an account whose balance is non-trivial but which has NO
+                         transactions behaves like an investment/holding account
+                         (balance drifts without transactions).
+      * "Cash"         — chequing/checking + savings + everyday/day-to-day cash
+                         (savings is folded into Cash as one liquid tier).
 
     ``txn_count`` enables the balance-driven investment heuristic; pass the
     number of transactions recorded for this account over the sync window.
@@ -1438,8 +1442,10 @@ def _account_category(acct: dict, txn_count: int = 0) -> str:
     effective = inferred if inferred and inferred != "depository" else (provider or "depository")
     subtype = (acct.get("subtype") or "").lower()
 
-    # Liabilities → Debts.
-    if effective in ("credit", "loan"):
+    # Liabilities: credit cards and loans/mortgages are now SEPARATE buckets.
+    if effective == "credit":
+        return "Credit Cards"
+    if effective == "loan":
         return "Debts"
 
     # Explicit investment type/subtype.
@@ -1464,15 +1470,8 @@ def _account_category(acct: dict, txn_count: int = 0) -> str:
     if txn_count == 0 and balance_val >= 1000.0:
         return "Investments"
 
-    # Savings-type subtypes, or a savings-style account NAME (SimpleFIN exposes
-    # no subtype, so we also match common savings keywords in the name).
-    name_lower = (acct.get("name") or "").lower()
-    _SAVINGS_KEYWORDS = ("saving", "esaving", "premium rate", "high interest", "find & save")
-    if subtype in ("savings", "cd", "money market") or any(
-        kw in name_lower for kw in _SAVINGS_KEYWORDS
-    ):
-        return "Savings"
-
+    # Savings is folded into Cash (Ridvan's request): chequing/checking, savings,
+    # CDs, money-market and everyday cash all live in the single "Cash" tier.
     return "Cash"
 
 
@@ -1540,7 +1539,7 @@ def _get_accounts_by_category(user_id: Optional[str] = None) -> dict:
     return ordered
 
 
-def _compute_net_worth(grouped: dict, home_currency: str = "CAD") -> dict:
+def _compute_net_worth(grouped: dict, home_currency: str = "CAD", txn_counts: Optional[dict] = None) -> dict:
     """Compute a net-worth summary across the supplied grouped accounts (#322).
 
     Liability detection (RIDVAN_REQUESTS.md items 5 & 6):
@@ -1574,13 +1573,11 @@ def _compute_net_worth(grouped: dict, home_currency: str = "CAD") -> dict:
     When accounts hold currencies other than ``home_currency`` we surface
     a per-currency breakdown rather than silently mis-summing them.
     """
-    asset_subtypes = {
-        "chequing": "Chequing",
-        "checking": "Chequing",
-        "savings":  "Savings",
-        "cd":       "Savings",
-        "money market": "Savings",
-    }
+    # Per-account transaction counts drive the balance-driven investment
+    # heuristic inside _account_category (a funded account with zero txns is
+    # treated as an investment/holding).  Passed in by the caller so the Net
+    # Worth summary and the Accounts listing below it use identical inputs.
+    _txn_counts = txn_counts or {}
 
     def _effective_type(acct: dict) -> str:
         """Return the effective account type, preferring inferred_type over type.
@@ -1601,18 +1598,16 @@ def _compute_net_worth(grouped: dict, home_currency: str = "CAD") -> dict:
     def categorise(acct: dict) -> str:
         """Return a coarse bucket label for a single bank_account row.
 
-        Uses the effective type (inferred_type preferred over provider type) so
-        SimpleFIN credit cards and mortgages land in the correct buckets.
+        Delegates to the SAME categorizer used by the Accounts listing section
+        (``_account_category``) so the Net Worth summary and the account list
+        below it always agree on which bucket an account belongs to
+        (Cash / Savings / Investments / Debts).  Previously this used a
+        divergent rule set (subtype-only savings, no name-keyword or
+        balance-driven heuristics, and split Debts into Credit Cards/Loans),
+        which made the two sections look different for the same accounts.
         """
-        t = _effective_type(acct)
-        s = (acct.get("subtype") or "").lower()
-        if t == "credit":
-            return "Credit Cards"
-        if t == "loan":
-            return "Loans"
-        if t == "investment" or s in ("401k", "403b", "ira", "roth", "tfsa", "rrsp", "brokerage"):
-            return "Investments"
-        return asset_subtypes.get(s, "Cash")
+        tc = int((_txn_counts or {}).get(acct.get("id"), 0))
+        return _account_category(acct, txn_count=tc)
 
     buckets: dict = {}              # label -> {total, count, currencies}
     by_currency: dict = {}          # currency -> {assets, liabilities, net}
@@ -1648,8 +1643,9 @@ def _compute_net_worth(grouped: dict, home_currency: str = "CAD") -> dict:
                 c["assets"] += float(balance)
             c["net"] = c["assets"] - c["liabilities"]
 
-    # Stable ordering: Cash, Savings, Investments, Credit Cards, Loans
-    order = ["Cash", "Savings", "Investments", "Credit Cards", "Loans"]
+    # Stable ordering matches the Accounts listing section: Cash, Investments,
+    # then the two separate liability buckets Credit Cards and Debts.
+    order = ["Cash", "Investments", "Credit Cards", "Debts"]
     breakdown = []
     for label in order:
         if label in buckets:
@@ -1658,7 +1654,7 @@ def _compute_net_worth(grouped: dict, home_currency: str = "CAD") -> dict:
                 "label": label,
                 "total": b["total"],
                 "count": b["count"],
-                "is_liability": label in ("Credit Cards", "Loans"),
+                "is_liability": label in ("Credit Cards", "Debts"),
             })
     # Any unknown buckets (e.g. a new Plaid subtype) trail at the end.
     for label, b in buckets.items():
@@ -1737,8 +1733,23 @@ def accounts_get(request: Request):
     grouped = _get_accounts_grouped(uid)
     categorized = _get_accounts_by_category(uid)
     home_currency = _get_home_currency(uid)
+    # Per-account txn counts so the Net Worth summary uses the same
+    # balance-driven investment heuristic as the Accounts listing below it.
+    _nw_txn_counts: dict = {}
     try:
-        net_worth = _compute_net_worth(grouped, home_currency=home_currency)
+        _nwc = get_db(_db_path())
+        try:
+            for _r in _nwc.execute(
+                "SELECT bank_account_id AS id, COUNT(*) AS n"
+                "  FROM transactions GROUP BY bank_account_id"
+            ).fetchall():
+                _nw_txn_counts[_r["id"]] = _r["n"]
+        finally:
+            _nwc.close()
+    except Exception:
+        _nw_txn_counts = {}
+    try:
+        net_worth = _compute_net_worth(grouped, home_currency=home_currency, txn_counts=_nw_txn_counts)
     except Exception:
         net_worth = None
     return templates.TemplateResponse(
