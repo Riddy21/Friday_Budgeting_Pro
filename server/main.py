@@ -2876,7 +2876,7 @@ def sync(
                     # removals via the 'removed' list).  Skip if account_meta is
                     # empty — an empty response likely means a transient API error,
                     # not a real removal.
-                    if connection_type == "simplefin" and account_meta:
+                    if conn_type == "simplefin" and account_meta:
                         live_plaid_ids = set(account_meta.keys())
                         with db_txn(db_conn):
                             db_conn.execute(
