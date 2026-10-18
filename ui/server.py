@@ -33,10 +33,12 @@ Route overview
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import secrets
 import time
+import urllib.request
 from pathlib import Path
 from typing import Optional
 
@@ -1670,18 +1672,35 @@ def _compute_net_worth(grouped: dict, home_currency: str = "CAD", txn_counts: Op
     home_currency_upper = home_currency.upper()
 
     if not mixed and (home_currency_upper in currencies or not currencies):
-        # All balances are in the user's home currency — safe to sum.
+        # All balances are in the user's home currency — safe to sum directly.
         c = by_currency.get(home_currency_upper, {"assets": 0.0, "liabilities": 0.0})
         assets = c["assets"]
         liabilities = c["liabilities"]
         net = assets - liabilities
     else:
-        # Mixed currencies — the headline number is the home-currency slice
-        # only.  The template surfaces a hint when other currencies exist.
-        c = by_currency.get(home_currency_upper, {"assets": 0.0, "liabilities": 0.0})
-        assets = c["assets"]
-        liabilities = c["liabilities"]
+        # Mixed currencies: convert every foreign currency to home currency
+        # using live FX rates (cached <24h in fx_rates table).  Fall back to
+        # home-currency-only slice if a rate cannot be fetched.
+        assets = 0.0
+        liabilities = 0.0
+        fx_ok = True
+        for cur, c in by_currency.items():
+            if cur == home_currency_upper:
+                assets += c["assets"]
+                liabilities += c["liabilities"]
+            else:
+                rate = _get_or_fetch_fx_rate(cur, home_currency_upper)
+                if rate is None:
+                    fx_ok = False  # couldn't convert — degrade gracefully
+                    logging.getLogger(__name__).warning(
+                        "_compute_net_worth: no FX rate %s→%s, skipping %s",
+                        cur, home_currency_upper, cur,
+                    )
+                else:
+                    assets += c["assets"] * rate
+                    liabilities += c["liabilities"] * rate
         net = assets - liabilities
+        mixed = mixed and not fx_ok  # hide the fx hint once we've converted
 
     return {
         "home_currency": home_currency_upper,
@@ -1693,6 +1712,55 @@ def _compute_net_worth(grouped: dict, home_currency: str = "CAD", txn_counts: Op
         "mixed_currency": mixed,
         "has_data": has_data,
     }
+
+
+def _get_or_fetch_fx_rate(base: str, quote: str) -> float | None:
+    """Return a live (or cached <24h) FX rate: 1 base = X quote.
+
+    Checks the fx_rates DB table first; if stale or missing, fetches from
+    the Frankfurter API (free, no key needed: api.frankfurter.app).
+    Returns None on any failure so callers can fall back gracefully.
+    """
+    if base == quote:
+        return 1.0
+    try:
+        db = get_db(_db_path())
+        try:
+            now = int(time.time())
+            row = db.execute(
+                "SELECT rate, fetched_at FROM fx_rates WHERE base=? AND quote=?",
+                (base, quote),
+            ).fetchone()
+            if row and (now - row["fetched_at"]) < 86400:  # <24h — reuse
+                return float(row["rate"])
+        finally:
+            db.close()
+    except Exception:
+        pass
+    # Fetch fresh rate from Frankfurter (ECB-sourced, free, no key)
+    try:
+        url = f"https://api.frankfurter.app/latest?from={base}&to={quote}"
+        req = urllib.request.Request(url, headers={"User-Agent": "friday-budgeting-pro/1.0"})
+        with urllib.request.urlopen(req, timeout=8) as resp:
+            data = json.loads(resp.read().decode())
+        rate = float(data["rates"][quote])
+        # Persist in fx_rates table
+        try:
+            db2 = get_db(_db_path())
+            try:
+                db2.execute(
+                    "INSERT OR REPLACE INTO fx_rates (base, quote, rate, fetched_at) VALUES (?,?,?,?)",
+                    (base, quote, rate, int(time.time())),
+                )
+                db2.commit()
+            finally:
+                db2.close()
+        except Exception:
+            pass
+        return rate
+    except Exception as exc:
+        logging.getLogger(__name__).warning("FX rate fetch failed %s→%s: %s", base, quote, exc)
+        return None
 
 
 def _get_home_currency(uid: Optional[str]) -> str:

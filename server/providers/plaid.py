@@ -23,6 +23,7 @@ import os
 
 import plaid
 from plaid.api import plaid_api
+from plaid.model.accounts_get_request import AccountsGetRequest
 from plaid.model.country_code import CountryCode
 from plaid.model.item_get_request import ItemGetRequest
 from plaid.model.item_public_token_exchange_request import ItemPublicTokenExchangeRequest
@@ -411,6 +412,68 @@ class PlaidProvider(BankProvider):
                     "ytd_interest_paid": _g("ytd_interest_paid"),
                     "ytd_principal_paid": _g("ytd_principal_paid"),
                     "property_address": addr_str,
+                }
+            )
+        return out
+
+    def get_accounts(self, access_token: str) -> list[dict]:
+        """Return the FULL current account list for an item via /accounts/get.
+
+        ``transactions_sync`` only reliably returns accounts that have recent
+        transaction activity, so accounts with no transactions (investments,
+        mortgages, dormant chequing) — or accounts the institution has newly
+        provisioned — can be missing from a sync.  ``/accounts/get`` returns the
+        authoritative, complete account list with current balances and the
+        account ``mask`` (last 4 digits), which ``transactions_sync`` omits.
+
+        Each returned dict is shaped like the ``accounts`` entries from
+        ``sync_transactions`` so the sync loop can treat them uniformly:
+          account_id, name, official_name, mask, type, subtype,
+          balances{current, available, iso_currency_code}
+
+        Errors are swallowed to an empty list so a sync never fails just because
+        the balance refresh could not be retrieved.
+        """
+        from plaid.exceptions import ApiException
+
+        client = self._build_client()
+        try:
+            resp = client.accounts_get(AccountsGetRequest(access_token=access_token))
+        except ApiException:
+            return []
+
+        out: list[dict] = []
+        for a in resp.get("accounts") or []:
+            def _attr(obj, key, default=None):
+                try:
+                    val = obj[key]
+                except (KeyError, TypeError):
+                    try:
+                        val = getattr(obj, key)
+                    except AttributeError:
+                        return default
+                return val if val is not None else default
+
+            bal = _attr(a, "balances") or {}
+            acct_type = _attr(a, "type")
+            if acct_type is not None and not isinstance(acct_type, str):
+                acct_type = str(acct_type)
+            subtype = _attr(a, "subtype")
+            if subtype is not None and not isinstance(subtype, str):
+                subtype = str(subtype)
+            out.append(
+                {
+                    "account_id": _attr(a, "account_id"),
+                    "name": _attr(a, "name"),
+                    "official_name": _attr(a, "official_name"),
+                    "mask": _attr(a, "mask"),
+                    "type": acct_type,
+                    "subtype": subtype,
+                    "balances": {
+                        "current": _attr(bal, "current"),
+                        "available": _attr(bal, "available"),
+                        "iso_currency_code": _attr(bal, "iso_currency_code"),
+                    },
                 }
             )
         return out

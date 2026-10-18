@@ -2744,9 +2744,35 @@ def sync(
                     next_cursor = result.get("next_cursor") if isinstance(result, dict) else None
                     accounts_list = result.get("accounts", []) if isinstance(result, dict) else []
 
-                    # Build a lookup map: plaid_account_id -> {name, type, currency,
-                    # balance_current, balance_available, owner_label}
-                    # Use official_name if present, else fall back to name.
+                    # AUTHORITATIVE ACCOUNT LIST: transactions_sync only returns
+                    # accounts with recent transaction activity, so accounts with
+                    # no transactions (investments, mortgages, dormant chequing) or
+                    # newly-provisioned accounts can be MISSING.  For Plaid we also
+                    # fetch the full account list via /accounts/get, which includes
+                    # every account plus the ``mask`` (last 4) that transactions_sync
+                    # omits.  We merge both sources (accounts_get wins on conflict).
+                    # This fixes accounts like BMO "...3560" not appearing and empty
+                    # masks.  (SimpleFIN has no accounts_get; it already returns all.)
+                    if hasattr(conn_provider, "get_accounts"):
+                        try:
+                            full_accounts = conn_provider.get_accounts(sync_token)
+                        except Exception:
+                            full_accounts = []
+                        if full_accounts:
+                            # accounts_get entries take precedence; append sync ones
+                            # that aren't already present (keyed by account_id).
+                            seen_ids = {
+                                _get(a, "account_id") for a in full_accounts
+                            }
+                            merged = list(full_accounts)
+                            for a in accounts_list:
+                                if _get(a, "account_id") not in seen_ids:
+                                    merged.append(a)
+                            accounts_list = merged
+
+                    # Build a lookup map: plaid_account_id -> {name, type, mask,
+                    # subtype, currency, balance_current, balance_available,
+                    # owner_label}.  Use official_name if present, else name.
                     account_meta: dict[str, dict] = {}
                     for acct in accounts_list:
                         acct_id = _get(acct, "account_id")
@@ -2756,6 +2782,12 @@ def sync(
                             # type may come back as an enum object; coerce to string
                             if acct_type is not None and not isinstance(acct_type, str):
                                 acct_type = str(acct_type)
+                            acct_subtype = _get(acct, "subtype")
+                            if acct_subtype is not None and not isinstance(acct_subtype, str):
+                                acct_subtype = str(acct_subtype)
+                            # mask: last 4 digits (from accounts_get; transactions_sync
+                            # does not include it).  Used for dedup + display.
+                            acct_mask = _get(acct, "mask")
                             # iso_currency_code from balances; fall back to 'CAD'
                             balances = _get(acct, "balances") or {}
                             acct_currency = _get(balances, "iso_currency_code") or "CAD"
@@ -2772,6 +2804,8 @@ def sync(
                             account_meta[acct_id] = {
                                 "name": acct_name,
                                 "type": acct_type,
+                                "subtype": acct_subtype,
+                                "mask": acct_mask,
                                 "inferred_type": inferred_type,
                                 "currency": acct_currency,
                                 "balance_current": _get(balances, "current"),
@@ -2812,6 +2846,10 @@ def sync(
                                 "UPDATE bank_accounts SET "
                                 "name = COALESCE(NULLIF(name, ''), ?), "
                                 "type = COALESCE(NULLIF(type, ''), ?), "
+                                # subtype + mask come from /accounts/get; set them
+                                # when provided, else keep any existing value.
+                                "subtype = COALESCE(?, subtype), "
+                                "mask = COALESCE(?, mask), "
                                 "inferred_type = ?, "
                                 "currency = ?, "
                                 "balance_current = ?, "
@@ -2821,6 +2859,8 @@ def sync(
                                 (
                                     meta.get("name"),
                                     meta.get("type"),
+                                    meta.get("subtype"),  # NULL-safe: COALESCE keeps old
+                                    meta.get("mask"),     # NULL-safe: COALESCE keeps old
                                     meta.get("inferred_type"),
                                     meta.get("currency") or "CAD",
                                     meta.get("balance_current"),
