@@ -1,4 +1,3 @@
-import pytest
 """
 tests/test_multi_currency.py — Tests for issue #160: multi-currency foundation.
 

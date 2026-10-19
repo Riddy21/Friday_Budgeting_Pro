@@ -67,8 +67,8 @@ def test_ledgers_shows_income_and_expense_sections(page, server_url):
     """Ledgers page shows Income and Expenses sections."""
     _login(page, server_url)
     page.goto(server_url + "/ledgers")
-    income_heading = page.locator("h3", has_text="Income")
-    expense_heading = page.locator("h3", has_text="Expenses")
+    income_heading = page.locator(".sec-hdr", has_text="Income")
+    expense_heading = page.locator(".sec-hdr", has_text="Expenses")
     assert income_heading.count() > 0, "Expected an Income section in ledgers"
     assert expense_heading.count() > 0, "Expected an Expenses section in ledgers"
 
@@ -87,7 +87,7 @@ def test_ledgers_shows_savings_section(page, server_url):
     """Ledgers page shows a Savings & Investments section for each ledger."""
     _login(page, server_url)
     page.goto(server_url + "/ledgers")
-    savings_heading = page.locator("h3", has_text="Savings")
+    savings_heading = page.locator(".sec-hdr", has_text="Savings")
     assert savings_heading.count() > 0, "Expected a Savings section in the ledger"
     # Verify it has the correct amber/gold styling
     section = page.locator(".item-section[data-section='savings']")
@@ -124,8 +124,9 @@ def test_ledgers_savings_totals_in_footer(page, server_url):
     """Ledger totals footer shows a Savings row."""
     _login(page, server_url)
     page.goto(server_url + "/ledgers")
-    totals_row = page.locator(".ledger-totals-row")
-    assert totals_row.count() > 0, "Expected .ledger-totals-row footer"
+    # Totals are now in a summary bar at the top (.ledger-summary), not a footer row
+    totals_row = page.locator(".ledger-summary")
+    assert totals_row.count() > 0, "Expected .ledger-summary totals bar"
     savings_total = page.locator("[data-total='savings']")
     assert savings_total.count() > 0, "Expected savings total value in footer"
 
@@ -140,8 +141,8 @@ def test_ledgers_can_add_savings_item_via_api(page, server_url):
     add_input.fill("TFSA Contributions")
     add_input.press("Enter")
 
-    # Wait for the new item to appear in the savings tbody
-    savings_tbody = page.locator("tbody.items-tbody[data-section='savings']").first
-    new_item = savings_tbody.locator(".item-name-display", has_text="TFSA Contributions")
+    # Wait for the new item to appear in the savings section (card layout)
+    savings_section = page.locator(".item-section[data-section='savings']").first
+    new_item = savings_section.locator(".item-name-display", has_text="TFSA Contributions")
     new_item.wait_for(timeout=5000)
     assert new_item.count() > 0, "Expected 'TFSA Contributions' to appear in savings section"
