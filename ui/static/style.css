@@ -1251,3 +1251,106 @@ html[data-theme="dark"] .net-worth-asset { color: #4ade80; }
 
 /* High-zoom / accessibility — never let nav links shrink below tap target */
 nav a, nav .btn-link { display: inline-flex; align-items: center; }
+
+/* ── 17. Ledgers page — mobile-first redesign (#stacked cards ≤480px) ───── */
+/* On phones the 5-column line-item tables previously forced horizontal
+   scrolling. Convert each line item into a self-contained tap-friendly card:
+     Row 1:  Line-item name .................... Amount
+     Row 2:  N transactions .............. [expand] [delete]
+   and restyle the transaction drill-down into a compact stacked list. */
+@media (max-width: 480px) {
+  /* Let ledger tables flow in the normal document — no sideways scroll. */
+  .ledger-block .table-scroll { overflow-x: visible; }
+  .ledger-block .item-section > .table-scroll > table,
+  .ledger-block .item-section > .table-scroll > table > tbody.items-tbody {
+    display: block;
+    width: 100%;
+    min-width: 0;
+  }
+
+  /* Each line item becomes a card. */
+  .ledger-block .line-item-row {
+    display: grid;
+    grid-template-columns: 1fr auto auto;
+    align-items: center;
+    column-gap: var(--space-2);
+    row-gap: 2px;
+    background: var(--bg-subtle);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-sm);
+    padding: var(--space-3);
+    margin-bottom: var(--space-2);
+  }
+  .ledger-block .line-item-row > td {
+    padding: 0 !important;
+    border: none !important;
+    background: transparent;
+  }
+  .ledger-block .line-item-row:hover > td { background: transparent; }
+
+  .ledger-block .item-name-cell {
+    grid-column: 1;
+    grid-row: 1;
+    font-weight: 500;
+    font-size: var(--text-md);
+    min-width: 0;
+  }
+  .ledger-block .item-name-cell .item-name-display { word-break: break-word; }
+  .ledger-block .item-name-cell .item-name-input { width: 100%; box-sizing: border-box; }
+
+  .ledger-block .item-total-cell {
+    grid-column: 2 / 4;
+    grid-row: 1;
+    text-align: right;
+    font-size: var(--text-md);
+    font-weight: 600;
+    color: var(--muted-strong);
+  }
+
+  .ledger-block .item-count-cell {
+    grid-column: 1;
+    grid-row: 2;
+    font-size: var(--text-sm);
+    color: var(--muted);
+  }
+  .ledger-block .item-expand-cell { grid-column: 2; grid-row: 2; width: auto; }
+  .ledger-block .line-item-row > td:last-child {
+    grid-column: 3;
+    grid-row: 2;
+    justify-self: end;
+  }
+
+  /* Transaction drill-down → stacked rows under the card. */
+  .ledger-block .txn-detail-row { display: block; }
+  .ledger-block .txn-detail-row > td { display: block; }
+  .ledger-block .txn-detail-cell {
+    padding: var(--space-1) var(--space-2) var(--space-2) var(--space-3) !important;
+  }
+  .ledger-block .txn-table,
+  .ledger-block .txn-table > tbody { display: block; width: 100%; }
+  .ledger-block .txn-table tr {
+    display: grid;
+    grid-template-columns: 1fr auto;
+    column-gap: var(--space-2);
+    padding: var(--space-2) 0;
+  }
+  .ledger-block .txn-table .txn-tree { display: none; }
+  .ledger-block .txn-table .txn-date   { grid-column: 1; grid-row: 1; font-size: var(--text-sm); color: var(--muted); }
+  .ledger-block .txn-table .txn-merchant { grid-column: 1; grid-row: 2; font-weight: 500; word-break: break-word; }
+  .ledger-block .txn-table .txn-account  { grid-column: 1; grid-row: 3; font-size: var(--text-sm); color: var(--muted); }
+  .ledger-block .txn-table .txn-amount {
+    grid-column: 2;
+    grid-row: 1 / span 3;
+    align-self: center;
+    text-align: right;
+    font-weight: 600;
+  }
+
+  /* Add-item input: comfortable full-width tap target. */
+  .ledger-block .add-item-row { margin-top: var(--space-3); }
+  .ledger-block .add-item-input { width: 100%; box-sizing: border-box; min-height: var(--tap); }
+
+  /* Period selector pills share the row evenly instead of ragged wrapping. */
+  .period-selector a { flex: 1 1 auto; }
+}
+
