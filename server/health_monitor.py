@@ -51,12 +51,14 @@ def check_all_connections(db_conn: "sqlite3.Connection", plaid_provider=None) ->
     # build per-connection providers (plaid_provider is None).
     if plaid_provider is None:
         rows = db_conn.execute(
-            "SELECT id, plaid_access_token_encrypted, user_id, plaid_env "
+            "SELECT id, plaid_access_token_encrypted, user_id, plaid_env, "
+            "COALESCE(connection_type, 'plaid') AS connection_type "
             "FROM bank_connections WHERE status = 'active'"
         ).fetchall()
     else:
         rows = db_conn.execute(
-            "SELECT id, plaid_access_token_encrypted "
+            "SELECT id, plaid_access_token_encrypted, "
+            "COALESCE(connection_type, 'plaid') AS connection_type "
             "FROM bank_connections WHERE status = 'active'"
         ).fetchall()
 
@@ -80,10 +82,13 @@ def check_all_connections(db_conn: "sqlite3.Connection", plaid_provider=None) ->
             )
             continue
 
-        # Resolve the provider: use the passed instance when available (test
-        # mocks / module singleton), otherwise build one per-connection from
-        # per-user DB credentials.
-        if plaid_provider is not None:
+        # Route to the correct provider based on connection_type.
+        conn_type = row["connection_type"] if "connection_type" in row.keys() else "plaid"
+
+        if conn_type == "simplefin":
+            from server.providers.simplefin import SimpleFINProvider
+            conn_provider = SimpleFINProvider()
+        elif plaid_provider is not None:
             conn_provider = plaid_provider
         else:
             conn_user_id = row["user_id"]

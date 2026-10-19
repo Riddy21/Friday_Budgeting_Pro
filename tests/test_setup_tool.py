@@ -4,7 +4,6 @@ tests/test_setup_tool.py — Tests for setup_status and apply_initial_setup MCP 
 
 from __future__ import annotations
 
-import json
 import uuid
 
 import pytest

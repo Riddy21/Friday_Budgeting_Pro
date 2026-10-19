@@ -5,8 +5,8 @@ Covers:
   - summary() returns savings_rate, savings_rate_ytd, savings_contributions,
     unspent_balance, total_saved
   - savings_rate = savings / income × 100
-  - unspent_balance = income - expenses (can be negative)
-  - total_saved = savings_contributions + unspent_balance
+  - total_saved = income - expenses (total net kept; can be negative)
+  - unspent_balance = total_saved - savings_contributions
   - savings_trend(months) returns month-by-month breakdown with cumulative
   - Gracefully returns 0% when no income
 """
@@ -127,21 +127,23 @@ def test_summary_includes_savings_contributions(seeded_db):
 
 
 def test_summary_unspent_balance(seeded_db):
-    """unspent_balance = income - expenses (not including savings)."""
+    """unspent_balance = total_saved - savings_contributions (leftover after
+    the money explicitly routed to savings)."""
     from server.main import summary
 
     result = summary("2026-05")
     assert "unspent_balance" in result
-    assert result["unspent_balance"] == 1500.0  # 4000 - 2500
+    # total_saved (1500 = 4000 - 2500) - savings (500) = 1000
+    assert result["unspent_balance"] == 1000.0
 
 
 def test_summary_total_saved(seeded_db):
-    """total_saved = savings_contributions + unspent_balance."""
+    """total_saved = income - expenses (total net kept; = savings + unspent)."""
     from server.main import summary
 
     result = summary("2026-05")
     assert "total_saved" in result
-    assert result["total_saved"] == 2000.0  # 500 + 1500
+    assert result["total_saved"] == 1500.0  # 4000 - 2500
 
 
 def test_summary_zero_savings_rate_with_no_income(tmp_path, monkeypatch):

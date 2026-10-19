@@ -98,6 +98,34 @@ Link modal and authenticate normally.
 
 ---
 
+Canadian open-banking aggregator with strong coverage of RBC, TD, BMO,
+Scotiabank, CIBC and dozens of credit unions. When you click **+ Connect a
+
+1. Friday generates a single-use *authorize token* (15-min TTL).
+4. Every `sync` re-authorizes with that LoginId and pulls the latest 90 days of
+   posted transactions.
+
+1. Get your **CustomerId**, **secret key**, **x-api-key**, and **instance**
+2. Ask your OpenClaw agent:
+
+credentials).
+
+### Sandbox (toolbox) — try it with no real bank
+
+exercise the full flow end-to-end:
+
+| Field | Value |
+|---|---|
+| instance | `toolbox` |
+| customer id | `43387ca6-0391-4c82-857d-70d95f087ecb` |
+| secret key | `c4569c54-e167-4d34-8de6-f4113bc82414` |
+| x-api-key | `3d5266a8-b697-48d4-8de6-52e2e2662acc` |
+
+The sandbox iframe adds `&demo=true` automatically and the only available test
+the sandbox accounts + transactions.
+
+---
+
 ## First Run
 
 When you visit `http://127.0.0.1:6789` for the first time, you see a
@@ -344,6 +372,38 @@ Friday Budgeting Pro stores and displays amounts in each account's native curren
 - **Currency stored at sync time** — `bank_accounts.currency` and `transactions.currency` are populated from Plaid's `iso_currency_code` during every sync
 - **Prefix on every balance** — `C$` for CAD, `US$` for USD, `£` for GBP, `€` for EUR, ISO code for others
 - **FX conversion** — coming in a follow-up PR (amount_home, frankfurter.app rates, home-currency toggle)
+
+---
+
+## Account Overhaul (2026-10-17)
+
+A batch of features addressing real-data gaps with SimpleFIN:
+
+### Owner labels
+SimpleFIN accounts now capture `org.name` (or `org.domain`) from each account's
+`org` object and store it in `bank_accounts.owner_label`.  The accounts UI groups
+accounts by owner when multiple owners share a bank connection.
+
+### Accurate account types (liabilities sign)
+SimpleFIN hardcodes `type="depository"` for all accounts.  A new helper
+`infer_account_type(name, provider_type)` in `server/main.py` detects the real
+type from the account name:
+- `"RBC Rewards+ Visa"` → `credit` (liability, negative balance)
+- `"103 Ardsley Mortgage"` → `loan` (liability, negative balance)
+- `"Wealthsimple Cash"` / `"RRSP"` → `investment` (separate category)
+
+The result is stored in `bank_accounts.inferred_type` and used by
+`_compute_net_worth()` to sign liabilities correctly and put investments in
+their own breakdown bucket.
+
+### Balance-only sync
+Account balances are updated on **every sync** — even when no new transactions
+are returned.  Investment and mortgage balances drift without transactions;
+this keeps net worth current.
+
+### Double-render guard
+`_get_accounts_grouped()` in `ui/server.py` now tracks seen account IDs and
+skips any account that would appear twice (guards against schema/join quirks).
 
 ---
 

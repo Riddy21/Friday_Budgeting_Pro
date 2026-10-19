@@ -19,7 +19,10 @@ from pathlib import Path
 # ---------------------------------------------------------------------------
 PATTERNS = [
     (
-        re.compile(r"\b0\.0\.0\.0\b"),
+        # Standalone all-interfaces bind host; the lookbehind/lookahead avoid
+        # matching version strings embedded in longer dotted numbers (e.g. a
+        # browser User-Agent).
+        re.compile(r"(?<![\d.])0\.0\.0\.0(?![\d.])"),
         "hardcoded all-interfaces bind address",
     ),
     (

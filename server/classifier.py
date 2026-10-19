@@ -22,7 +22,6 @@ from __future__ import annotations
 import json
 import sqlite3
 
-
 # ---------------------------------------------------------------------------
 # Hard guardrail: amount sign must match line item type
 # ---------------------------------------------------------------------------
@@ -439,6 +438,7 @@ def classify_transaction(
     ledger_tree: str | None = None,
     hints: list[str] | None = None,
     context: dict | None = None,
+    model: str | None = None,
 ) -> dict:
     """Classify a single transaction with ONE unified LLM call (issue #205).
 
@@ -614,7 +614,9 @@ def classify_transaction(
     # ------------------------------------------------------------------
     # 8. Call the LLM and parse
     # ------------------------------------------------------------------
-    raw = chat(messages, temperature=0.0)
+    # Use the (optionally cheaper) classifier model so bulk classification
+    # does not burn an expensive model (#270).
+    raw = chat(messages, temperature=0.0, model=model)
 
     try:
         parsed = json.loads(raw)

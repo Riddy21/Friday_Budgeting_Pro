@@ -286,6 +286,69 @@ class TestDeduplicateAccounts:
         assert rows[aid_3]["is_duplicate"] == 1
         assert rows[aid_3]["primary_account_id"] == aid_1
 
+    def test_pass5_empty_siblings_same_suffix_deduped(self, db):
+        """Pass 5: two empty, same-connection accounts sharing a name + (NNNN)
+        account-number suffix are deduped (the real-world RBC eSavings case)."""
+        uid = _mk_user(db)
+        cid = _mk_connection(db, uid)  # SAME connection
+        aid_a = "a0000000-0000-0000-0000-000000000001"
+        aid_b = "b0000000-0000-0000-0000-000000000002"
+        for aid in (aid_a, aid_b):
+            _mk_account(
+                db, cid, acct_id=aid, mask=None,  # type: ignore[arg-type]
+                name="RBC High Interest eSavings (1822)",
+                acct_type="depository", subtype=None,  # type: ignore[arg-type]
+            )
+        db.execute("UPDATE bank_accounts SET mask = NULL, subtype = NULL")
+        db.commit()
+
+        _deduplicate_accounts(db, uid)
+        db.commit()
+
+        rows = {
+            r["id"]: r
+            for r in db.execute(
+                "SELECT id, is_duplicate, primary_account_id FROM bank_accounts"
+            ).fetchall()
+        }
+        # Exactly one primary, one duplicate.
+        dups = [r for r in rows.values() if r["is_duplicate"] == 1]
+        assert len(dups) == 1, f"expected 1 duplicate, got {len(dups)}"
+        assert sorted(rows)[0] == aid_a
+        assert rows[aid_a]["is_duplicate"] == 0  # lowest id = primary
+        assert rows[aid_b]["is_duplicate"] == 1
+        assert rows[aid_b]["primary_account_id"] == aid_a
+
+    def test_pass5_skips_when_a_sibling_has_transactions(self, db):
+        """Pass 5 must NOT hide an account that holds transactions."""
+        uid = _mk_user(db)
+        cid = _mk_connection(db, uid)
+        aid_a = "a0000000-0000-0000-0000-00000000000a"
+        aid_b = "b0000000-0000-0000-0000-00000000000b"
+        for aid in (aid_a, aid_b):
+            _mk_account(
+                db, cid, acct_id=aid, mask=None,  # type: ignore[arg-type]
+                name="RBC Chequing (9999)",
+                acct_type="depository", subtype=None,  # type: ignore[arg-type]
+            )
+        db.execute("UPDATE bank_accounts SET mask = NULL, subtype = NULL")
+        # aid_b has a transaction -> not an empty-sibling case
+        db.execute(
+            "INSERT INTO transactions (id, bank_account_id, plaid_transaction_id, date, merchant, amount) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (str(uuid.uuid4()), aid_b, "ptx-1", "2026-10-01", "Test", 10.0),
+        )
+        db.commit()
+
+        _deduplicate_accounts(db, uid)
+        db.commit()
+
+        rows = {
+            r["id"]: r for r in db.execute("SELECT id, is_duplicate FROM bank_accounts").fetchall()
+        }
+        assert rows[aid_a]["is_duplicate"] == 0
+        assert rows[aid_b]["is_duplicate"] == 0
+
     def test_no_user_id_no_crash(self, db):
         """Calling with empty user_id is a safe no-op."""
         # Should not raise
@@ -443,7 +506,7 @@ class TestSyncSkipsDuplicates:
             lambda db, plaid_provider=None: _HEALTH_NOOP,
         )
 
-        result = sync()
+        result = sync(window_days=0)
         assert result["status"] == "ok"
 
         conn = get_db(env["db"])

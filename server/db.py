@@ -143,6 +143,21 @@ def init_db(path: str | Path) -> None:
         conn.execute("UPDATE users SET timezone = 'America/Toronto' WHERE timezone IS NULL")
         conn.commit()
 
+        # Migration: sync safety settings (#270)
+        # sync_window_days   — max age (days) of transactions pulled per sync
+        # classify_batch_size — max transactions classified by LLM per sync
+        # classifier_model   — cheap/dumber model used only for classification
+        _add_col_if_missing(conn, "users", "sync_window_days", "INTEGER")
+        conn.execute("UPDATE users SET sync_window_days = 90 WHERE sync_window_days IS NULL")
+        _add_col_if_missing(conn, "users", "classify_batch_size", "INTEGER")
+        conn.execute("UPDATE users SET classify_batch_size = 50 WHERE classify_batch_size IS NULL")
+        _add_col_if_missing(conn, "users", "classifier_model", "TEXT")
+        conn.execute(
+            "UPDATE users SET classifier_model = 'claude-3-5-haiku-20241022' "
+            "WHERE classifier_model IS NULL"
+        )
+        conn.commit()
+
         # Migration: multi-currency (#160)
         _add_col_if_missing(conn, "bank_accounts", "currency", "TEXT")
         conn.execute("UPDATE bank_accounts SET currency = 'CAD' WHERE currency IS NULL")
@@ -173,6 +188,13 @@ def init_db(path: str | Path) -> None:
                 UNIQUE(user_id)
             )
         """)
+        conn.commit()
+
+        # connection_type distinguishes plaid vs simplefin connections; existing
+        # rows default to 'plaid' so the change is backward-compatible.
+        _add_col_if_missing(
+            conn, "bank_connections", "connection_type", "TEXT NOT NULL DEFAULT 'plaid'"
+        )
         conn.commit()
 
         # Migration: setup_interview (#206 — guided onboarding answers).
@@ -210,6 +232,31 @@ def init_db(path: str | Path) -> None:
         """)
         conn.commit()
 
+        # Migration: mortgage_accounts (#271 — mortgage detail + payment split).
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS mortgage_accounts (
+                account_id               TEXT PRIMARY KEY REFERENCES bank_accounts(id) ON DELETE CASCADE,
+                ledger_id                TEXT REFERENCES ledgers(id),
+                outstanding_principal    REAL,
+                origination_principal    REAL,
+                interest_rate            REAL,
+                loan_term                TEXT,
+                loan_type                TEXT,
+                next_payment_amount      REAL,
+                next_payment_due         TEXT,
+                last_payment_amount      REAL,
+                last_payment_date        TEXT,
+                escrow_balance           REAL,
+                origination_date         TEXT,
+                maturity_date            TEXT,
+                ytd_interest_paid        REAL,
+                ytd_principal_paid       REAL,
+                property_address         TEXT,
+                updated_at               INTEGER NOT NULL DEFAULT (unixepoch())
+            )
+        """)
+        conn.commit()
+
         # Migration: plaid_revocation_log (#265 — durable revocation audit log).
         # Mirrors every access token inserted via complete_link so that
         # wipe.py and retry_pending_revocations() can revoke tokens even
@@ -234,6 +281,25 @@ def init_db(path: str | Path) -> None:
                 id          INTEGER PRIMARY KEY CHECK (id = 1),
                 steps_json  TEXT,
                 finished_at INTEGER
+            )
+        """)
+        conn.commit()
+
+        # Migration: SimpleFIN connector support.
+        # connection_type already supports arbitrary values; 'simplefin' is valid.
+        # The Access URL (credentials embedded) is stored encrypted in
+        # plaid_access_token_encrypted (re-uses the existing NOT NULL column).
+        # No extra bank_connections column needed: SimpleFIN
+        # decrypts its credential from plaid_access_token_encrypted exactly
+        # like Plaid does — but the sync loop dispatches to SimpleFINProvider.
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS simplefin_config (
+                id         INTEGER PRIMARY KEY,
+                user_id    TEXT NOT NULL REFERENCES users(id),
+                notes      TEXT,
+                created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+                updated_at INTEGER NOT NULL DEFAULT (unixepoch()),
+                UNIQUE(user_id)
             )
         """)
         conn.commit()
@@ -291,6 +357,19 @@ def init_db(path: str | Path) -> None:
                 "These are correctly excluded from expense totals in summary() and get_ledger().",
                 savings_entry_count,
             )
+
+        # Migration: account overhaul — owner_label on bank_accounts (account-overhaul)
+        # Stores the SimpleFIN org.name (or org.domain) so the UI can separate
+        # accounts by owner/institution label (see RIDVAN_REQUESTS.md items 2 & 3).
+        _add_col_if_missing(conn, "bank_accounts", "owner_label", "TEXT")
+        conn.commit()
+
+        # Migration: account overhaul — inferred_type on bank_accounts
+        # Stores the type inferred from account name (e.g. "credit", "loan",
+        # "investment") when the provider only returns the generic "depository".
+        # See infer_account_type() in server.main (RIDVAN_REQUESTS.md items 5 & 6).
+        _add_col_if_missing(conn, "bank_accounts", "inferred_type", "TEXT")
+        conn.commit()
 
         # Migration: create default user only when there is existing data to migrate
         # (i.e. rows exist that need a user_id) but no users have been created yet.

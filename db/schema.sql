@@ -57,7 +57,11 @@ CREATE TABLE IF NOT EXISTS bank_accounts (
   description TEXT,                            -- user-set context for classifier
   default_ledger_id TEXT REFERENCES ledgers(id), -- transactions from this account route here by default
   is_duplicate INTEGER NOT NULL DEFAULT 0,     -- 1 = this account is a duplicate of primary_account_id (#269)
-  primary_account_id TEXT                      -- ID of the canonical account when is_duplicate=1
+  primary_account_id TEXT,                     -- ID of the canonical account when is_duplicate=1
+  owner_label TEXT,                            -- org/institution label from SimpleFIN org.name (account overhaul)
+                                               -- used to separate accounts by owner in UI (e.g. "Ridvan" vs "Dollar")
+  inferred_type TEXT                           -- type inferred from account name when provider returns generic "depository"
+                                               -- values: credit | loan | investment | depository (see infer_account_type() in server.main)
   -- INVARIANT: transactions from is_duplicate=1 accounts are NEVER classified or shown in reports
 );
 
@@ -261,4 +265,33 @@ CREATE TABLE IF NOT EXISTS plaid_revocation_log (
   created_at             INTEGER NOT NULL DEFAULT (unixepoch()),
   revoked_at             INTEGER,
   revoked                INTEGER NOT NULL DEFAULT 0
+);
+
+-- ---------------------------------------------------------------------------
+-- Mortgage accounts (#271)
+-- One row per mortgage/loan account, holding the extra loan detail pulled
+-- from the provider (Plaid /liabilities/get, SimpleFIN loan balance).  Used to
+-- split each mortgage payment into principal / interest / escrow on the owning
+-- property ledger instead of a single flat "Mortgage" line.
+-- ---------------------------------------------------------------------------
+
+CREATE TABLE IF NOT EXISTS mortgage_accounts (
+  account_id               TEXT PRIMARY KEY REFERENCES bank_accounts(id) ON DELETE CASCADE,
+  ledger_id                TEXT REFERENCES ledgers(id),  -- property ledger this mortgage belongs to
+  outstanding_principal    REAL,                         -- current balance owed
+  origination_principal    REAL,                         -- original loan amount
+  interest_rate            REAL,                         -- annual rate as a percentage (e.g. 4.75)
+  loan_term                TEXT,                          -- e.g. "30 year"
+  loan_type                TEXT,                          -- loan_type_description
+  next_payment_amount      REAL,
+  next_payment_due         TEXT,                          -- ISO date
+  last_payment_amount      REAL,
+  last_payment_date        TEXT,                          -- ISO date
+  escrow_balance           REAL,
+  origination_date         TEXT,                          -- ISO date
+  maturity_date            TEXT,                          -- ISO date
+  ytd_interest_paid        REAL,
+  ytd_principal_paid       REAL,
+  property_address         TEXT,
+  updated_at               INTEGER NOT NULL DEFAULT (unixepoch())
 );

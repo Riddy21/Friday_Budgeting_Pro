@@ -1,0 +1,67 @@
+{% extends "base.html" %}
+
+{% block title %}Connect a bank — Friday Budgeting Pro{% endblock %}
+
+{% block content %}
+<div class="card card-narrow">
+  <h1>Connect a bank</h1>
+  <p class="hint">Choose how you'd like to connect your bank.</p>
+
+  <div class="connect-choice-grid">
+    <a href="/link/plaid/start" class="connect-choice-card" id="choice-plaid">
+      <div class="connect-choice-icon" aria-hidden="true">🔗</div>
+      <h2>Plaid</h2>
+      <p class="hint">
+        US banks and some Canadian institutions through Plaid's hosted login.
+        Best for personal chequing, savings, and credit cards.
+      </p>
+      <span class="btn-primary connect-choice-btn">Continue with Plaid →</span>
+    </a>
+
+    <a href="/link/simplefin/start" class="connect-choice-card" id="choice-simplefin">
+      <div class="connect-choice-icon" aria-hidden="true">🏦</div>
+      <h2>SimpleFIN Bridge</h2>
+      <p class="hint">
+        Canadian banks (RBC, TD, Scotiabank and more) via the open SimpleFIN
+        Bridge protocol.  You control access — revoke any time from the
+        SimpleFIN dashboard.
+      </p>
+      <span class="btn-secondary connect-choice-btn">Continue with SimpleFIN →</span>
+    </a>
+  </div>
+
+  <p class="hint" style="margin-top:24px"><a href="{{ back_url or '/accounts' }}">Cancel</a></p>
+</div>
+
+<style>
+/* Scoped layout for the dual-connector choice (kept inline to avoid touching
+   the global stylesheet for a single page). */
+.connect-choice-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 16px;
+  margin-top: 16px;
+}
+@media (max-width: 560px) {
+  .connect-choice-grid { grid-template-columns: 1fr; }
+}
+.connect-choice-card {
+  display: block;
+  text-decoration: none;
+  color: inherit;
+  border: 1px solid var(--border-subtle, #d0d0d0);
+  border-radius: 12px;
+  padding: 20px;
+  transition: border-color .15s ease, transform .15s ease, box-shadow .15s ease;
+  background: var(--bg-subtle, transparent);
+}
+.connect-choice-card:hover {
+  border-color: var(--accent, #2b7);
+  transform: translateY(-2px);
+  box-shadow: 0 4px 16px rgba(0,0,0,0.08);
+}
+.connect-choice-icon { font-size: 32px; margin-bottom: 8px; }
+.connect-choice-card h2 { margin: 4px 0 8px; font-size: 1.1rem; }
+.connect-choice-btn { display: inline-block; margin-top: 12px; }
+</style>
+{% endblock %}

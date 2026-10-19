@@ -236,27 +236,34 @@ def test_issue_209_correction_rule_evaluation(tmp_app_dir, monkeypatch):
         recurring_merchant = "SyntheticMerchant209"
         tx_id_a = _uid()
         tx_id_b = _uid()
+        # NOTE: amounts are NEGATIVE here (inflow/credit). The test later corrects
+        # these transactions to an INCOME line item, and the sign-enforcement
+        # guardrail (#277) requires that income routing only accepts inflows
+        # (negative amounts). Positive amounts are outflows and may only route to
+        # expense/savings line items. The focus of this test is conflicting
+        # routing-rule DETECTION, so we use sign-valid inflows to avoid tripping
+        # the (unrelated) sign guardrail.
         conn.execute(
             "INSERT INTO transactions (id, date, merchant, amount, bank_account_id) "
-            "VALUES (?, '2026-05-10', ?, 50.0, ?)",
+            "VALUES (?, '2026-05-10', ?, -50.0, ?)",
             (tx_id_a, recurring_merchant, account_id),
         )
         conn.execute(
             "INSERT INTO transactions (id, date, merchant, amount, bank_account_id) "
-            "VALUES (?, '2026-05-11', ?, 55.0, ?)",
+            "VALUES (?, '2026-05-11', ?, -55.0, ?)",
             (tx_id_b, recurring_merchant, account_id),
         )
-        # Entries classified to li_expense
+        # Entries classified to li_expense (signs match the transaction amounts).
         conn.execute(
             "INSERT INTO transaction_entries "
             "(id, transaction_id, ledger_id, line_item_id, amount, source, reviewed) "
-            "VALUES (?, ?, ?, ?, 50.0, 'llm', 0)",
+            "VALUES (?, ?, ?, ?, -50.0, 'llm', 0)",
             (_uid(), tx_id_a, ledger_id, li_expense),
         )
         conn.execute(
             "INSERT INTO transaction_entries "
             "(id, transaction_id, ledger_id, line_item_id, amount, source, reviewed) "
-            "VALUES (?, ?, ?, ?, 55.0, 'llm', 0)",
+            "VALUES (?, ?, ?, ?, -55.0, 'llm', 0)",
             (_uid(), tx_id_b, ledger_id, li_expense),
         )
         conn.commit()

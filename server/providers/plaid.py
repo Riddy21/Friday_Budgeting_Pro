@@ -23,6 +23,7 @@ import os
 
 import plaid
 from plaid.api import plaid_api
+from plaid.model.accounts_get_request import AccountsGetRequest
 from plaid.model.country_code import CountryCode
 from plaid.model.item_get_request import ItemGetRequest
 from plaid.model.item_public_token_exchange_request import ItemPublicTokenExchangeRequest
@@ -207,18 +208,43 @@ class PlaidProvider(BankProvider):
         Callers MUST encrypt tokens via server.crypto.encrypt before persisting.
         """
         client = self._build_client()
-        kwargs: dict = {"access_token": access_token}
-        if cursor is not None:
-            kwargs["cursor"] = cursor
 
-        request = TransactionsSyncRequest(**kwargs)
-        response = client.transactions_sync(request)
+        # Paginate until has_more=False — Plaid batches large datasets across
+        # multiple pages.  Without this loop, only the first page is processed
+        # and the cursor never advances past it, leaving subsequent pages
+        # permanently stuck (symptom: stale last-transaction date despite
+        # healthy connection).
+        all_added: list = []
+        all_modified: list = []
+        all_removed: list = []
+        next_cursor = cursor
+        accounts: list = []
+
+        while True:
+            kwargs: dict = {"access_token": access_token}
+            if next_cursor is not None:
+                kwargs["cursor"] = next_cursor
+
+            request = TransactionsSyncRequest(**kwargs)
+            response = client.transactions_sync(request)
+
+            all_added.extend(response["added"])
+            all_modified.extend(response["modified"])
+            all_removed.extend(response["removed"])
+            next_cursor = response["next_cursor"]
+            # accounts is only populated on the first page in practice
+            if not accounts:
+                accounts = response.get("accounts", [])
+
+            if not response.get("has_more", False):
+                break
+
         return {
-            "added": response["added"],
-            "modified": response["modified"],
-            "removed": response["removed"],
-            "next_cursor": response["next_cursor"],
-            "accounts": response.get("accounts", []),
+            "added": all_added,
+            "modified": all_modified,
+            "removed": all_removed,
+            "next_cursor": next_cursor,
+            "accounts": accounts,
         }
 
     def get_item_status(self, access_token: str) -> dict:
@@ -317,3 +343,162 @@ class PlaidProvider(BankProvider):
             )
         )
         return inst["institution"]["name"]
+
+    def get_liabilities(self, access_token: str) -> list[dict]:
+        """Return mortgage liability detail for an item via /liabilities/get (#271).
+
+        Calls Plaid ``/liabilities/get`` and returns a normalised list of
+        mortgage dicts, one per mortgage account on the item.  Non-mortgage
+        liabilities (credit, student) are ignored here.  Returns an empty list
+        when the item exposes no mortgage liabilities or the product is not
+        available for the institution (``PRODUCT_NOT_READY`` /
+        ``PRODUCTS_NOT_SUPPORTED`` are swallowed to a no-op so a sync never fails
+        just because liabilities aren't offered).
+
+        Each dict uses our internal field names so callers don't depend on the
+        Plaid SDK shape:
+          account_id, outstanding_principal, origination_principal,
+          interest_rate, loan_term, loan_type, next_payment_amount,
+          next_payment_due, last_payment_amount, last_payment_date,
+          escrow_balance, origination_date, maturity_date, ytd_interest_paid,
+          ytd_principal_paid, property_address
+        """
+        from plaid.exceptions import ApiException
+        from plaid.model.liabilities_get_request import LiabilitiesGetRequest
+
+        client = self._build_client()
+        try:
+            resp = client.liabilities_get(
+                LiabilitiesGetRequest(access_token=access_token)
+            )
+        except ApiException as exc:  # product not available / not ready
+            body = getattr(exc, "body", "") or ""
+            if any(
+                code in str(body)
+                for code in (
+                    "PRODUCT_NOT_READY",
+                    "PRODUCTS_NOT_SUPPORTED",
+                    "NO_LIABILITY_ACCOUNTS",
+                    "PRODUCT_NOT_ENABLED",
+                )
+            ):
+                return []
+            raise
+
+        liabilities = resp.get("liabilities") or {}
+        mortgages = liabilities.get("mortgage") or []
+        out: list[dict] = []
+        for m in mortgages:
+            def _g(key, default=None):
+                try:
+                    val = m[key]
+                except (KeyError, TypeError):
+                    return default
+                return val if val is not None else default
+
+            # interest_rate is a nested {percentage, type} object.
+            rate_obj = _g("interest_rate")
+            rate_pct = None
+            if rate_obj is not None:
+                try:
+                    rate_pct = rate_obj["percentage"]
+                except (KeyError, TypeError):
+                    rate_pct = None
+
+            addr_obj = _g("property_address")
+            addr_str = None
+            if addr_obj is not None:
+                try:
+                    parts = [
+                        addr_obj.get("street"),
+                        addr_obj.get("city"),
+                        addr_obj.get("region"),
+                        addr_obj.get("postal_code"),
+                    ]
+                    addr_str = ", ".join(p for p in parts if p)
+                except (AttributeError, TypeError):
+                    addr_str = None
+
+            out.append(
+                {
+                    "account_id": _g("account_id"),
+                    "outstanding_principal": None,  # filled from account balance
+                    "origination_principal": _g("origination_principal_amount"),
+                    "interest_rate": rate_pct,
+                    "loan_term": _g("loan_term"),
+                    "loan_type": _g("loan_type_description"),
+                    "next_payment_amount": _g("next_monthly_payment"),
+                    "next_payment_due": _g("next_payment_due_date"),
+                    "last_payment_amount": _g("last_payment_amount"),
+                    "last_payment_date": _g("last_payment_date"),
+                    "escrow_balance": _g("escrow_balance"),
+                    "origination_date": _g("origination_date"),
+                    "maturity_date": _g("maturity_date"),
+                    "ytd_interest_paid": _g("ytd_interest_paid"),
+                    "ytd_principal_paid": _g("ytd_principal_paid"),
+                    "property_address": addr_str,
+                }
+            )
+        return out
+
+    def get_accounts(self, access_token: str) -> list[dict]:
+        """Return the FULL current account list for an item via /accounts/get.
+
+        ``transactions_sync`` only reliably returns accounts that have recent
+        transaction activity, so accounts with no transactions (investments,
+        mortgages, dormant chequing) — or accounts the institution has newly
+        provisioned — can be missing from a sync.  ``/accounts/get`` returns the
+        authoritative, complete account list with current balances and the
+        account ``mask`` (last 4 digits), which ``transactions_sync`` omits.
+
+        Each returned dict is shaped like the ``accounts`` entries from
+        ``sync_transactions`` so the sync loop can treat them uniformly:
+          account_id, name, official_name, mask, type, subtype,
+          balances{current, available, iso_currency_code}
+
+        Errors are swallowed to an empty list so a sync never fails just because
+        the balance refresh could not be retrieved.
+        """
+        from plaid.exceptions import ApiException
+
+        client = self._build_client()
+        try:
+            resp = client.accounts_get(AccountsGetRequest(access_token=access_token))
+        except ApiException:
+            return []
+
+        out: list[dict] = []
+        for a in resp.get("accounts") or []:
+            def _attr(obj, key, default=None):
+                try:
+                    val = obj[key]
+                except (KeyError, TypeError):
+                    try:
+                        val = getattr(obj, key)
+                    except AttributeError:
+                        return default
+                return val if val is not None else default
+
+            bal = _attr(a, "balances") or {}
+            acct_type = _attr(a, "type")
+            if acct_type is not None and not isinstance(acct_type, str):
+                acct_type = str(acct_type)
+            subtype = _attr(a, "subtype")
+            if subtype is not None and not isinstance(subtype, str):
+                subtype = str(subtype)
+            out.append(
+                {
+                    "account_id": _attr(a, "account_id"),
+                    "name": _attr(a, "name"),
+                    "official_name": _attr(a, "official_name"),
+                    "mask": _attr(a, "mask"),
+                    "type": acct_type,
+                    "subtype": subtype,
+                    "balances": {
+                        "current": _attr(bal, "current"),
+                        "available": _attr(bal, "available"),
+                        "iso_currency_code": _attr(bal, "iso_currency_code"),
+                    },
+                }
+            )
+        return out

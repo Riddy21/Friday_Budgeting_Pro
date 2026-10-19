@@ -271,7 +271,9 @@ class TestLedgersPageTotals:
         finally:
             conn.close()
 
-        r = client.get("/ledgers")
+        # period=all so the seeded entry isn't filtered out by the default
+        # "this_month" view (the page defaults to the current month).
+        r = client.get("/ledgers?period=all")
         assert r.status_code == 200
         assert "C$123.45" in r.text
 
@@ -302,6 +304,6 @@ class TestLedgersPageTotals:
         finally:
             conn.close()
 
-        r = client.get("/ledgers")
+        r = client.get("/ledgers?period=all")
         assert r.status_code == 200
         assert "1 transaction" in r.text

@@ -158,7 +158,7 @@ def test_classification_prompt_includes_account_description(db_with_account):
 
     captured: list[dict] = []
 
-    def fake_chat(messages, temperature=0.0):
+    def fake_chat(messages, temperature=0.0, model=None):
         captured.extend(messages)
         return json.dumps({"line_item_id": li_id, "confidence": 0.9, "reasoning": "test"})
 
@@ -182,7 +182,7 @@ def test_classification_prompt_no_account_description(db_with_account):
 
     captured: list[dict] = []
 
-    def fake_chat(messages, temperature=0.0):
+    def fake_chat(messages, temperature=0.0, model=None):
         captured.extend(messages)
         return json.dumps({"line_item_id": li_id, "confidence": 0.9, "reasoning": "test"})
 
@@ -205,7 +205,7 @@ def test_classification_prompt_no_bank_account_id(db_with_account):
 
     captured: list[dict] = []
 
-    def fake_chat(messages, temperature=0.0):
+    def fake_chat(messages, temperature=0.0, model=None):
         captured.extend(messages)
         return json.dumps({"line_item_id": li_id, "confidence": 0.9, "reasoning": "test"})
 

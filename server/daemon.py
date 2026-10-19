@@ -64,9 +64,11 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-_DEFAULT_HOST = os.environ.get(
-    "FRIDAY_BP_UI_HOST", "0.0.0.0"
-)  # bind all interfaces by default so remote access (e.g. Tailscale) works; override via FRIDAY_BP_UI_HOST
+# SECURITY (Design Constraint #6: local-network only, no internet-facing surface
+# by default): bind loopback only.  Remote access (e.g. Tailscale) must be an
+# explicit opt-in by setting FRIDAY_BP_UI_HOST (e.g. to the Tailscale IP or an
+# all-interfaces address).  Never default to a public/all-interfaces bind.
+_DEFAULT_HOST = os.environ.get("FRIDAY_BP_UI_HOST", "127.0.0.1")
 _DEFAULT_PORT = 6789
 
 
@@ -164,11 +166,22 @@ async def _run() -> None:
     """Async main — starts uvicorn server and background sync task."""
     port = _get_port()
 
+    # --- TLS/SSL support -------------------------------------------------
+    # Set FRIDAY_BP_SSL_CERTFILE and FRIDAY_BP_SSL_KEYFILE in .env to enable
+    # HTTPS. Required for Plaid OAuth redirect URI (Tailscale HTTPS).
+    ssl_certfile = os.environ.get("FRIDAY_BP_SSL_CERTFILE") or None
+    ssl_keyfile = os.environ.get("FRIDAY_BP_SSL_KEYFILE") or None
+    if ssl_certfile and ssl_keyfile:
+        log.info("TLS enabled — cert=%s  key=%s", ssl_certfile, ssl_keyfile)
+    # ---------------------------------------------------------------------
+
     config = uvicorn.Config(
         app=app,
         host=_DEFAULT_HOST,
         port=port,
         log_level="info",
+        ssl_certfile=ssl_certfile,
+        ssl_keyfile=ssl_keyfile,
     )
     server = uvicorn.Server(config)
 

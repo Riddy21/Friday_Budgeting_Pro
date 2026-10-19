@@ -368,7 +368,9 @@ class TestNetColorCSSClasses:
         finally:
             conn.close()
 
-        r = client.get("/ledgers")
+        # period=all so seeded 2026-05 entries aren't filtered out by the
+        # default "this_month" view.
+        r = client.get("/ledgers?period=all")
         assert r.status_code == 200
         assert "net-positive" in r.text
 
@@ -411,7 +413,7 @@ class TestNetColorCSSClasses:
         finally:
             conn.close()
 
-        r = client.get("/ledgers")
+        r = client.get("/ledgers?period=all")
         assert r.status_code == 200
         assert "net-negative" in r.text
 

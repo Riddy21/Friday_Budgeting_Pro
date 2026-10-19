@@ -177,7 +177,7 @@ def test_no_rule_llm_writes_single_entry(db_path, monkeypatch):
 
     llm_call_count = 0
 
-    def _mock_chat(messages, temperature=0.0):
+    def _mock_chat(messages, temperature=0.0, model=None):
         nonlocal llm_call_count
         llm_call_count += 1
         return _good_llm_response(LI_GROCERIES)
@@ -223,7 +223,7 @@ def test_no_duplicate_entries(db_path, monkeypatch):
     txn_id = _insert_txn(conn, "Netflix", amount=14.00)
     conn.close()
 
-    def _mock_chat(messages, temperature=0.0):
+    def _mock_chat(messages, temperature=0.0, model=None):
         return _good_llm_response(LI_GROCERIES)
 
     with patch("server.llm.chat", side_effect=_mock_chat):
@@ -258,7 +258,7 @@ def test_income_line_item_sets_entry_type(db_path, monkeypatch):
     txn_id = _insert_txn(conn, "Payroll Deposit", amount=-3000.00)
     conn.close()
 
-    def _mock_chat(messages, temperature=0.0):
+    def _mock_chat(messages, temperature=0.0, model=None):
         return _good_llm_response(LI_INCOME, classification_type="income")
 
     with patch("server.llm.chat", side_effect=_mock_chat):
@@ -291,7 +291,7 @@ def test_none_line_item_uses_default_ledger_fallback(db_path, monkeypatch):
     txn_id = _insert_txn(conn, "Mystery Merchant", amount=9.99)
     conn.close()
 
-    def _mock_chat(messages, temperature=0.0):
+    def _mock_chat(messages, temperature=0.0, model=None):
         # LLM returns no match
         return json.dumps(
             {
@@ -337,7 +337,7 @@ def test_classify_with_rules_rule_match():
         }
     ]
 
-    def _mock_chat(messages, temperature=0.0):
+    def _mock_chat(messages, temperature=0.0, model=None):
         return json.dumps(
             {
                 "rule_id": "rule-1",
@@ -382,7 +382,7 @@ def test_classify_with_rules_no_match():
         }
     ]
 
-    def _mock_chat(messages, temperature=0.0):
+    def _mock_chat(messages, temperature=0.0, model=None):
         return json.dumps(
             {
                 "rule_id": None,

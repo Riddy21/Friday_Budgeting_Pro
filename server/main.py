@@ -15,6 +15,7 @@ import os
 # when tools are called via the MCP framework (which doesn't go through daemon.py).
 try:
     from pathlib import Path as _Path
+
     from dotenv import load_dotenv as _load_dotenv
     _load_dotenv(_Path(__file__).parent.parent / ".env")
 except ImportError:
@@ -41,6 +42,11 @@ from server.classifier import (
 from server.db import get_db
 from server.db import transaction as db_txn
 from server.providers.plaid import PlaidProvider
+from server.providers.simplefin import (
+    SimpleFINAuthError,
+    SimpleFINError,
+    SimpleFINProvider,
+)
 from server.sync_lock import LockBusy, sync_lock
 from server.transfer_detect import get_transfer_hint
 from ui.auth import (
@@ -1346,10 +1352,14 @@ def set_account_ledger(account_id: str, ledger_id: str) -> dict:
 def create_property_ledger(name: str, description: str = None) -> dict:
     """Create a ledger for a rental/investment property with default line items.
 
-    Seeds 6 standard line items:
+    Seeds the standard property line items.  The mortgage is broken into its own
+    sub-category group (#271) so each payment splits into principal / interest /
+    escrow rather than a single flat "Mortgage" line:
       Income: ``Rent income``
-      Expenses: ``Mortgage``, ``Property tax``, ``Maintenance & repairs``,
-                ``Insurance``, ``Utilities``
+      Expenses: ``Mortgage – Principal``, ``Mortgage – Interest``,
+                ``Mortgage – Property tax (escrow)``,
+                ``Mortgage – Insurance (escrow)``, ``Property tax``,
+                ``Maintenance & repairs``, ``Insurance``, ``Utilities``
 
     Parameters
     ----------
@@ -1373,7 +1383,12 @@ def create_property_ledger(name: str, description: str = None) -> dict:
 
     _PROPERTY_LINE_ITEMS = [
         ("Rent income", "income"),
-        ("Mortgage", "expense"),
+        # Mortgage sub-category group (#271): payments auto-split across these.
+        ("Mortgage – Principal", "expense"),
+        ("Mortgage – Interest", "expense"),
+        ("Mortgage – Property tax (escrow)", "expense"),
+        ("Mortgage – Insurance (escrow)", "expense"),
+        # Non-escrow property costs.
         ("Property tax", "expense"),
         ("Maintenance & repairs", "expense"),
         ("Insurance", "expense"),
@@ -1454,8 +1469,16 @@ def create_investment_ledger(name: str) -> dict:
 # ---------------------------------------------------------------------------
 
 
-def classify_pending_transactions(user_id: str, limit: int | None = None) -> dict:
-    """Classify all unclassified transactions for *user_id* and write entries.
+def classify_pending_transactions(
+    user_id: str, limit: int | None = None, model: str | None = None
+) -> dict:
+    """Classify unclassified transactions for *user_id* and write entries.
+
+    Batched for safety (#270): when *limit* is None the per-user
+    ``classify_batch_size`` setting (default 50) is applied so a single call
+    never fires an unbounded number of serial LLM calls.  Remaining pending
+    transactions are reported via ``pending_remaining`` so callers / the UI can
+    offer "Classify more".
 
     Finds transactions owned by *user_id* that have no row in
     ``transaction_entries``, then for each one:
@@ -1481,16 +1504,35 @@ def classify_pending_transactions(user_id: str, limit: int | None = None) -> dic
 
     Args:
         user_id: The user whose transactions to classify.
+        limit: Max transactions to classify this call.  None => use the
+            per-user ``classify_batch_size`` setting.  Pass 0 to disable the
+            cap entirely (classify everything — use with care).
+        model: Classifier model override.  None => use the per-user
+            ``classifier_model`` setting (a cheap/dumber model).
 
     Returns:
-        ``{"classified": N, "skipped": M, "uncertain": K}``
+        ``{"classified": N, "skipped": M, "uncertain": K,
+           "pending_remaining": R, "batch_size": B}``
     """
     classified = 0
     skipped = 0
     uncertain = 0
 
     if not user_id:
-        return {"classified": classified, "skipped": skipped, "uncertain": uncertain}
+        return {
+            "classified": classified,
+            "skipped": skipped,
+            "uncertain": uncertain,
+            "pending_remaining": 0,
+            "batch_size": 0,
+        }
+
+    # Resolve batch size + model from settings when not explicitly overridden.
+    _settings = _get_sync_settings(user_id)
+    if model is None:
+        model = _settings["classifier_model"]
+    if limit is None:
+        limit = _settings["classify_batch_size"]
 
     conn = get_db(server.paths.DB_PATH)
     try:
@@ -1517,7 +1559,7 @@ def classify_pending_transactions(user_id: str, limit: int | None = None) -> dic
             JOIN bank_connections bc ON bc.id = ba.connection_id
             WHERE bc.user_id = ?
               AND t.pending = 0
-              AND ba.is_duplicate = 0
+              AND ba.is_duplicate = 0 AND ba.removed_at IS NULL
               AND NOT EXISTS (
                 SELECT 1 FROM transaction_entries te
                 WHERE te.transaction_id = t.id
@@ -1526,8 +1568,12 @@ def classify_pending_transactions(user_id: str, limit: int | None = None) -> dic
             """,
             (user_id,),
         ).fetchall()
-        if limit:
-            unclassified = unclassified[: int(limit)]
+        # total pending BEFORE applying the batch cap, so we can report how many
+        # still need classification after this run (#270).
+        total_pending = len(unclassified)
+        batch_cap = int(limit) if limit else 0  # 0 => no cap (classify all)
+        if batch_cap:
+            unclassified = unclassified[:batch_cap]
 
         for row in unclassified:
             tx_id = row["id"]
@@ -1575,6 +1621,7 @@ def classify_pending_transactions(user_id: str, limit: int | None = None) -> dic
                     ledger_tree=ledger_tree_text,
                     hints=hints_list,
                     context=context,
+                    model=model,
                 )
             except Exception as exc:
                 _logger.warning(
@@ -1757,7 +1804,168 @@ def classify_pending_transactions(user_id: str, limit: int | None = None) -> dic
     finally:
         conn.close()
 
-    return {"classified": classified, "skipped": skipped, "uncertain": uncertain}
+    processed = classified + skipped + uncertain
+    pending_remaining = max(0, total_pending - processed)
+    return {
+        "classified": classified,
+        "skipped": skipped,
+        "uncertain": uncertain,
+        "pending_remaining": pending_remaining,
+        "batch_size": batch_cap,
+    }
+
+
+def infer_account_type(name: str, current_type: str | None = None) -> str:
+    """Infer the correct account type from the account name when the provider
+    returns a generic type (e.g. SimpleFIN hardcodes ``"depository"`` for
+    everything because it doesn\'t expose type metadata).
+
+    This is needed because SimpleFIN cannot distinguish credit cards, mortgages,
+    and investment accounts from ordinary chequing/savings accounts.  We use
+    name-matching heuristics to fill the gap.
+
+    Rules (applied in order — first match wins):
+
+    1. If the provider already gave a non-generic type (i.e. not ``depository``
+       and not ``None``), trust it and return as-is.  This preserves Plaid\'s
+       richer type metadata.
+    2. Credit-card keywords in the name → ``"credit"``.
+       ("Visa", "Mastercard", "Credit Card", "Amex", "American Express", "MC")
+    3. Mortgage/loan keywords → ``"loan"``.
+       ("Mortgage", "Loan", "Credit Line", "Line of Credit", "LOC", "HELOC")
+    3b. Property-address mortgages (RBC pattern) → ``"loan"``.
+       Names that start with a street number AND carry an RBC loan-account
+       suffix like "(-001)" (e.g. "103 Ardsley (-001)") are mortgages/loans.
+    4. Investment keywords in the name → ``"investment"``.
+       Platforms (Wealthsimple, Questrade, Vanguard, Fidelity, Schwab, …),
+       Canadian registered accounts (RRSP, TFSA, FHSA, RRIF, RESP, LIRA, RDSP),
+       US registered/retirement accounts (401k, 403b, 457b, IRA, Roth, HSA, 529),
+       and generic terms (brokerage, portfolio, ETF, mutual/index fund).
+       Short/ambiguous tokens (IRA, ETF, Roth, HSA, RESP, LIRA, 529) require a
+       word boundary so they don't match inside unrelated words.
+    5. Fall back to ``current_type`` (e.g. ``"depository"``) if set, else
+       ``"depository"``.
+
+    Returns
+    -------
+    str
+        One of ``"credit"``, ``"loan"``, ``"investment"``, or ``"depository"``.
+    """
+    # Rule 1: trust non-generic provider types (Plaid gives real types).
+    if current_type and current_type not in ("depository", ""):
+        return current_type
+
+    name_lower = (name or "").lower()
+
+    # Rule 2: credit card detection.
+    # Common card brand names and generic "credit card" phrasing.
+    _CREDIT_KEYWORDS = (
+        "visa",
+        "mastercard",
+        "amex",
+        "american express",
+        " mc ",
+        "credit card",
+    )
+    if any(kw in name_lower for kw in _CREDIT_KEYWORDS):
+        return "credit"
+
+    # Rule 3: mortgage / loan detection.
+    # Mortgage and loan accounts are LIABILITIES — their balances represent
+    # money OWED.  We negate them for net-worth calculations.
+    _LOAN_KEYWORDS = (
+        "mortgage",
+        " loan",
+        "credit line",
+        "line of credit",
+        " loc ",
+        "heloc",
+    )
+    if any(kw in name_lower for kw in _LOAN_KEYWORDS):
+        return "loan"
+
+    # Rule 3b: property-address mortgage detection (RBC pattern).
+    # RBC exposes mortgages via SimpleFIN named after the PROPERTY ADDRESS
+    # (e.g. "103 Ardsley (-001)", "90 Glen Everest (-001)") with no explicit
+    # "mortgage"/"loan" keyword.  These are LIABILITIES (money owed), confirmed
+    # by the account owner (RIDVAN_REQUESTS.md item 5).  We detect them by two
+    # structural signals that are characteristic of RBC loan/mortgage accounts:
+    #
+    #   * the name starts with a street number (one or more digits followed by
+    #     a space and a word), AND
+    #   * the name carries the RBC loan-account suffix "(-001)" (or similar
+    #     "-NNN" segment-account marker).
+    #
+    # Using BOTH signals avoids mis-classifying ordinary accounts whose names
+    # merely happen to start with a number.
+    import re as _re
+
+    _starts_with_street_number = bool(_re.match(r"^\s*\d+\s+\w", name or ""))
+    _has_rbc_loan_suffix = bool(_re.search(r"\(-\d{3}\)", name or ""))
+    if _starts_with_street_number and _has_rbc_loan_suffix:
+        return "loan"
+
+    # Rule 4: investment account detection.
+    # These accounts hold securities whose balance changes without transactions.
+    _INVESTMENT_KEYWORDS = (
+        # Platforms / brokerages
+        "wealthsimple",
+        "questrade",
+        "rbc direct",
+        "brokerage",
+        "portfolio",
+        "invest",
+        "securities",
+        "vanguard",
+        "fidelity",
+        "schwab",
+        "etrade",
+        "e*trade",
+        "robinhood",
+        "td direct",
+        # Canadian registered accounts
+        "rrsp",
+        "tfsa",
+        "fhsa",
+        "rrif",
+        "resp",
+        "lira",
+        "lrsp",
+        "rdsp",
+        "dpsp",
+        # US registered / retirement accounts
+        "401k",
+        "401(k)",
+        "403b",
+        "403(b)",
+        "457b",
+        "ira",
+        "roth",
+        "sep-ira",
+        "simple ira",
+        "hsa",
+        "529",
+        # Generic
+        "mutual fund",
+        "index fund",
+        "etf",
+    )
+    # Whole-word-ish match for short/ambiguous tokens to avoid false positives
+    # (e.g. "ira" must not match "Mirabel"); pad name with spaces and require the
+    # keyword to be bounded by non-alphanumeric characters for the risky ones.
+    import re as _re
+
+    _AMBIGUOUS = {"ira", "etf", "529", "roth", "hsa", "resp", "lira", "457b"}
+    for kw in _INVESTMENT_KEYWORDS:
+        if kw in _AMBIGUOUS:
+            # Require a word boundary around short/ambiguous tokens.
+            if _re.search(r"(?<![a-z0-9])" + _re.escape(kw) + r"(?![a-z0-9])", name_lower):
+                return "investment"
+        elif kw in name_lower:
+            return "investment"
+
+    # Rule 5: fall back to current_type or generic depository.
+    return current_type or "depository"
 
 
 def _deduplicate_accounts(conn, user_id: str) -> None:  # conn: sqlite3.Connection
@@ -1860,13 +2068,192 @@ def _deduplicate_accounts(conn, user_id: str) -> None:  # conn: sqlite3.Connecti
             # Spans multiple connections → genuine cross-connection duplicate
             groups2[key] = [e["id"] for e in entries]
         else:
-            # All in same connection → reset each to non-duplicate
-            for e in entries:
-                conn.execute(
-                    "UPDATE bank_accounts SET is_duplicate=0, primary_account_id=NULL WHERE id=?",
-                    (e["id"],),
-                )
+            # All in same connection → leave for Pass 3/4 (don't reset here,
+            # since a later pass may still flag them; Pass 1 already reset any
+            # untouched rows implicitly via their own group handling).
+            pass
     _apply_groups(groups2)
+
+    # ------------------------------------------------------------------
+    # Helpers for Passes 3 & 4 (same-connection, mask-less siblings that
+    # Passes 1-2 intentionally skip).
+    # ------------------------------------------------------------------
+    def _already_dup(acct_id: str) -> bool:
+        row = conn.execute(
+            "SELECT is_duplicate FROM bank_accounts WHERE id=?", (acct_id,)
+        ).fetchone()
+        return bool(row and row["is_duplicate"])
+
+    def _latest_txn_date(acct_id: str):
+        row = conn.execute(
+            "SELECT MAX(date) AS d FROM transactions WHERE bank_account_id=?",
+            (acct_id,),
+        ).fetchone()
+        return row["d"] if row else None
+
+    def _txn_count(acct_id: str) -> int:
+        row = conn.execute(
+            "SELECT COUNT(*) AS c FROM transactions WHERE bank_account_id=?",
+            (acct_id,),
+        ).fetchone()
+        return int(row["c"]) if row else 0
+
+    def _txn_fingerprints(acct_id: str) -> set:
+        rows = conn.execute(
+            "SELECT date, amount, merchant FROM transactions WHERE bank_account_id=?",
+            (acct_id,),
+        ).fetchall()
+        return {(r["date"], r["amount"], r["merchant"]) for r in rows}
+
+    def _flag_dup(dup_id: str, primary_id: str) -> None:
+        conn.execute(
+            "UPDATE bank_accounts SET is_duplicate=1, primary_account_id=? WHERE id=?",
+            (primary_id, dup_id),
+        )
+        conn.execute(
+            "UPDATE bank_accounts SET is_duplicate=0, primary_account_id=NULL WHERE id=?",
+            (primary_id,),
+        )
+
+    _STALE_DAYS = 30
+
+    def _days_between(d1: str, d2: str):
+        """Absolute whole-day gap between two 'YYYY-MM-DD' dates, or None."""
+        from datetime import date as _date
+
+        try:
+            a = _date.fromisoformat(d1)
+            b = _date.fromisoformat(d2)
+        except (TypeError, ValueError):
+            return None
+        return abs((a - b).days)
+
+    # All same-connection, mask-less accounts for this user (candidates for 3/4).
+    sibling_rows = conn.execute(
+        """
+        SELECT ba.id, ba.name, ba.type, ba.subtype, ba.connection_id
+          FROM bank_accounts ba
+          JOIN bank_connections bc ON bc.id = ba.connection_id
+         WHERE bc.user_id = ?
+           AND (ba.mask IS NULL OR ba.mask = '')
+         ORDER BY ba.id
+        """,
+        (user_id,),
+    ).fetchall()
+
+    # ------------------------------------------------------------------
+    # Pass 3: stale-reissue within a single connection.
+    # Same (connection, name, type, subtype); if one sibling's latest txn is
+    # >= _STALE_DAYS older than another's, the stale one is a reissued dup and
+    # the live (most-recent) one is primary.
+    # ------------------------------------------------------------------
+    pass3_groups: dict[tuple, list[dict]] = {}
+    for r in sibling_rows:
+        key = (r["connection_id"], r["name"], r["type"], r["subtype"])
+        pass3_groups.setdefault(key, []).append({"id": r["id"]})
+
+    for entries in pass3_groups.values():
+        if len(entries) < 2:
+            continue
+        # Attach latest txn date to each.
+        enriched = []
+        for e in entries:
+            if _already_dup(e["id"]):
+                continue
+            enriched.append({"id": e["id"], "latest": _latest_txn_date(e["id"])})
+        if len(enriched) < 2:
+            continue
+        # Determine the live (most recent) account.
+        dated = [e for e in enriched if e["latest"]]
+        if len(dated) < 2:
+            continue
+        live = max(dated, key=lambda e: e["latest"])
+        for e in dated:
+            if e["id"] == live["id"]:
+                continue
+            gap = _days_between(live["latest"], e["latest"])
+            if gap is not None and gap >= _STALE_DAYS:
+                _flag_dup(e["id"], live["id"])
+
+    # ------------------------------------------------------------------
+    # Pass 4: name-independent transaction overlap within one connection.
+    # Different names, same connection, but sharing identical
+    # (date, amount, merchant) transactions => same account imported twice.
+    # Primary = account with more transactions.
+    # ------------------------------------------------------------------
+    by_conn: dict[str, list[str]] = {}
+    for r in sibling_rows:
+        by_conn.setdefault(r["connection_id"], []).append(r["id"])
+
+    for acct_ids in by_conn.values():
+        if len(acct_ids) < 2:
+            continue
+        fps = {aid: _txn_fingerprints(aid) for aid in acct_ids}
+        counts = {aid: _txn_count(aid) for aid in acct_ids}
+        for i in range(len(acct_ids)):
+            for j in range(i + 1, len(acct_ids)):
+                a, b = acct_ids[i], acct_ids[j]
+                if _already_dup(a) or _already_dup(b):
+                    continue
+                shared = fps[a] & fps[b]
+                if not shared:
+                    continue
+                # Require meaningful overlap: the smaller account's txns are
+                # (nearly) a subset of the larger account's txns.
+                smaller = a if counts[a] <= counts[b] else b
+                larger = b if smaller == a else a
+                smaller_fps = fps[smaller]
+                if not smaller_fps:
+                    continue
+                overlap_ratio = len(shared) / len(smaller_fps)
+                if overlap_ratio >= 0.5:
+                    _flag_dup(smaller, larger)
+
+    # ------------------------------------------------------------------
+    # Pass 5: identical empty siblings that share an account-number suffix.
+    # Same (connection, name, type, subtype) where EVERY sibling has zero
+    # transactions AND the name carries a parenthesised account-number suffix
+    # such as "RBC High Interest eSavings (1822)".  Two accounts sharing the
+    # same trailing number in the same bank are a re-link/re-import artefact,
+    # not two distinct accounts.  Passes 3/4 can't compare them (no dates, no
+    # fingerprints), so this pass handles them.
+    #
+    # We deliberately require the (NNNN) suffix: two same-named accounts WITHOUT
+    # an identifying number (e.g. "Mystery Account") could be genuinely
+    # different, so those are left alone (see test_null_mask_same_connection).
+    # Only triggers when ALL siblings are empty, so an account holding data is
+    # never hidden.
+    # ------------------------------------------------------------------
+    import re as _re
+
+    def _acct_suffix(name: str | None) -> str | None:
+        """Return the parenthesised account-number suffix, e.g. '(1822)' -> '1822'."""
+        if not name:
+            return None
+        matches = _re.findall(r"\(([^)]+)\)", name)
+        return matches[-1].strip() if matches else None
+
+    pass5_groups: dict[tuple, list[str]] = {}
+    for r in sibling_rows:
+        suffix = _acct_suffix(r["name"])
+        if not suffix:
+            continue  # no account-number signal -> too risky to auto-dedup
+        key = (r["connection_id"], r["name"], r["type"], r["subtype"], suffix)
+        pass5_groups.setdefault(key, []).append(r["id"])
+
+    for key, acct_ids in pass5_groups.items():
+        if len(acct_ids) < 2:
+            continue
+        live_ids = [aid for aid in acct_ids if not _already_dup(aid)]
+        if len(live_ids) < 2:
+            continue
+        # Only act when every remaining sibling is transaction-less.
+        if any(_txn_count(aid) > 0 for aid in live_ids):
+            continue
+        primary = sorted(live_ids)[0]  # deterministic primary
+        for aid in live_ids:
+            if aid != primary:
+                _flag_dup(aid, primary)
 
 
 # ---------------------------------------------------------------------------
@@ -1980,7 +2367,7 @@ def _detect_suspicious_transactions(conn, user_id: str) -> list[dict]:
          WHERE bc.user_id = ?
            AND t.pending = 0
            AND t.amount > 0
-           AND ba.is_duplicate = 0
+           AND ba.is_duplicate = 0 AND ba.removed_at IS NULL
          ORDER BY t.date DESC, t.authorized_datetime DESC
         """,
         (user_id,),
@@ -2158,16 +2545,52 @@ def _detect_suspicious_transactions(conn, user_id: str) -> list[dict]:
 
 
 @mcp.tool
-def sync(classify: bool = True, progress_callback=None) -> dict:
+def sync(
+    classify: bool = True,
+    progress_callback=None,
+    window_days: int | None = None,
+    big_pull_threshold: int = 200,
+) -> dict:
     """Pull new transactions from Plaid and return a summary.
 
     Args:
         classify: If True (default), run LLM auto-classification on newly synced
             transactions before returning.  Pass ``False`` when the caller wants
             to run classification separately (e.g. the UI background flow).
+            Classification is always batched to ``classify_batch_size`` (#270),
+            so a sync never fires an unbounded number of serial LLM calls.
         progress_callback: Optional callable that receives a dict at each key
             sync phase.  Not exposed via MCP — internal use only.
+        window_days: Max age (in days) of transactions to ingest.  Transactions
+            older than ``today - window_days`` are skipped (counted in
+            ``windowed_out``).  None => use the active user's ``sync_window_days``
+            setting (default 90).  Pass 0 to disable the window (ingest all).
+        big_pull_threshold: When the number of newly-added transactions meets or
+            exceeds this value, the result includes ``big_pull=True`` and a
+            human-readable ``warning`` so the UI/caller can warn the user (#270).
+
+    Returns a summary dict including ``added``, ``windowed_out``, ``big_pull``,
+    ``warning``, and classification counts / ``pending_remaining``.
     """
+    # Resolve the ingest window from settings when not explicitly overridden.
+    # When there is no active user (fresh installs / mechanics tests) default to
+    # 0 (no window) so sync is not silently empty; real users always have an
+    # active user whose sync_window_days setting (default 90) applies.
+    try:
+        _active_uid_for_window = get_active_user_id(server.paths.DB_PATH)
+    except Exception:  # noqa: BLE001
+        _active_uid_for_window = None
+    if window_days is None:
+        if _active_uid_for_window:
+            window_days = _get_sync_settings(_active_uid_for_window)["sync_window_days"]
+        else:
+            window_days = 0
+    _window_cutoff = None  # ISO date string 'YYYY-MM-DD' or None (no window)
+    if window_days and int(window_days) > 0:
+        from datetime import date as _date
+        from datetime import timedelta as _timedelta
+
+        _window_cutoff = (_date.today() - _timedelta(days=int(window_days))).isoformat()
 
     def _get(obj, key, default=None):
         """Get a field from a dict or an SDK object."""
@@ -2202,6 +2625,7 @@ def sync(classify: bool = True, progress_callback=None) -> dict:
     total_modified = 0
     total_removed = 0
     total_classified = 0
+    total_windowed_out = 0  # transactions skipped for being older than the window (#270)
 
     health_check_result: dict = {}
 
@@ -2224,33 +2648,51 @@ def sync(classify: bool = True, progress_callback=None) -> dict:
 
                 active_conns = db_conn.execute(
                     "SELECT id, plaid_access_token_encrypted, plaid_env, user_id, "
-                    "institution_name "
+                    "institution_name, "
+                    "COALESCE(connection_type, 'plaid') AS connection_type "
                     "FROM bank_connections WHERE status = 'active'"
                 ).fetchall()
 
                 for bc in active_conns:
                     connection_id = bc["id"]
-                    encrypted_token = bc["plaid_access_token_encrypted"]
-                    access_token = server.crypto.decrypt(encrypted_token)
-                    conn_plaid_env = bc["plaid_env"] or "sandbox"
                     conn_user_id = bc["user_id"]
                     institution_name = bc["institution_name"] or "Unknown"
+                    conn_type = bc["connection_type"] or "plaid"
 
-                    # Load per-user credentials from DB (falls back to env vars).
-                    cred_client_id, cred_secret, _ = _get_plaid_credentials(conn_user_id)
-
-                    # Per-connection provider locked to the stored env.
-                    conn_provider = PlaidProvider(
-                        env=conn_plaid_env,
-                        client_id=cred_client_id,
-                        secret=cred_secret,
-                    )
-                    if conn_provider.env != conn_plaid_env:
-                        raise ValueError(
-                            f"Environment mismatch: connection {connection_id!r} "
-                            f"was linked in env '{conn_plaid_env}' but resolved "
-                            f"provider env is '{conn_provider.env}'"
+                    # Dispatch to the right provider based on connection_type.
+                    # ``sync_token`` is what the shared Plaid-shaped sync loop
+                    # below passes as the first arg to sync_transactions():
+                    #   * Plaid     -> decrypted access_token
+                    #   * SimpleFIN -> decrypted Access URL (credentials embedded)
+                    if conn_type == "simplefin":
+                        # SimpleFIN Access URL is stored encrypted in the
+                        # plaid_access_token_encrypted column (re-uses the
+                        # existing NOT-NULL column; no extra column needed).
+                        conn_provider = SimpleFINProvider()
+                        sync_token = server.crypto.decrypt(
+                            bc["plaid_access_token_encrypted"]
                         )
+                    else:
+                        encrypted_token = bc["plaid_access_token_encrypted"]
+                        access_token = server.crypto.decrypt(encrypted_token)
+                        conn_plaid_env = bc["plaid_env"] or "sandbox"
+
+                        # Load per-user credentials from DB (falls back to env vars).
+                        cred_client_id, cred_secret, _ = _get_plaid_credentials(conn_user_id)
+
+                        # Per-connection provider locked to the stored env.
+                        conn_provider = PlaidProvider(
+                            env=conn_plaid_env,
+                            client_id=cred_client_id,
+                            secret=cred_secret,
+                        )
+                        if conn_provider.env != conn_plaid_env:
+                            raise ValueError(
+                                f"Environment mismatch: connection {connection_id!r} "
+                                f"was linked in env '{conn_plaid_env}' but resolved "
+                                f"provider env is '{conn_provider.env}'"
+                            )
+                        sync_token = access_token
 
                     cursor_row = db_conn.execute(
                         "SELECT cursor FROM sync_cursors WHERE connection_id = ?",
@@ -2262,7 +2704,7 @@ def sync(classify: bool = True, progress_callback=None) -> dict:
                         progress_callback({"phase": "pulling", "connection": institution_name, "msg": f"Pulling from {institution_name}\u2026"})
 
                     try:
-                        result = conn_provider.sync_transactions(access_token, cursor)
+                        result = conn_provider.sync_transactions(sync_token, cursor)
                     except Exception as e:
                         if _is_reauth_error(e):
                             with db_txn(db_conn):
@@ -2285,7 +2727,7 @@ def sync(classify: bool = True, progress_callback=None) -> dict:
                                 )
                             cursor = None
                             try:
-                                result = conn_provider.sync_transactions(access_token, None)
+                                result = conn_provider.sync_transactions(sync_token, None)
                             except Exception as retry_exc:
                                 _logger.error(
                                     "Sync retry after cursor reset also failed for connection %s: %s",
@@ -2302,8 +2744,35 @@ def sync(classify: bool = True, progress_callback=None) -> dict:
                     next_cursor = result.get("next_cursor") if isinstance(result, dict) else None
                     accounts_list = result.get("accounts", []) if isinstance(result, dict) else []
 
-                    # Build a lookup map: plaid_account_id -> {name, type, currency}
-                    # Use official_name if present, else fall back to name.
+                    # AUTHORITATIVE ACCOUNT LIST: transactions_sync only returns
+                    # accounts with recent transaction activity, so accounts with
+                    # no transactions (investments, mortgages, dormant chequing) or
+                    # newly-provisioned accounts can be MISSING.  For Plaid we also
+                    # fetch the full account list via /accounts/get, which includes
+                    # every account plus the ``mask`` (last 4) that transactions_sync
+                    # omits.  We merge both sources (accounts_get wins on conflict).
+                    # This fixes accounts like BMO "...3560" not appearing and empty
+                    # masks.  (SimpleFIN has no accounts_get; it already returns all.)
+                    if hasattr(conn_provider, "get_accounts"):
+                        try:
+                            full_accounts = conn_provider.get_accounts(sync_token)
+                        except Exception:
+                            full_accounts = []
+                        if full_accounts:
+                            # accounts_get entries take precedence; append sync ones
+                            # that aren't already present (keyed by account_id).
+                            seen_ids = {
+                                _get(a, "account_id") for a in full_accounts
+                            }
+                            merged = [*full_accounts]
+                            for a in accounts_list:
+                                if _get(a, "account_id") not in seen_ids:
+                                    merged.append(a)
+                            accounts_list = merged
+
+                    # Build a lookup map: plaid_account_id -> {name, type, mask,
+                    # subtype, currency, balance_current, balance_available,
+                    # owner_label}.  Use official_name if present, else name.
                     account_meta: dict[str, dict] = {}
                     for acct in accounts_list:
                         acct_id = _get(acct, "account_id")
@@ -2313,15 +2782,35 @@ def sync(classify: bool = True, progress_callback=None) -> dict:
                             # type may come back as an enum object; coerce to string
                             if acct_type is not None and not isinstance(acct_type, str):
                                 acct_type = str(acct_type)
+                            acct_subtype = _get(acct, "subtype")
+                            if acct_subtype is not None and not isinstance(acct_subtype, str):
+                                acct_subtype = str(acct_subtype)
+                            # mask: last 4 digits (from accounts_get; transactions_sync
+                            # does not include it).  Used for dedup + display.
+                            acct_mask = _get(acct, "mask")
                             # iso_currency_code from balances; fall back to 'CAD'
                             balances = _get(acct, "balances") or {}
                             acct_currency = _get(balances, "iso_currency_code") or "CAD"
+                            # owner_label: carried from SimpleFIN _normalise_account
+                            # (org.name or org.domain).  Plaid accounts set this to
+                            # None; the DB default of NULL is correct for Plaid.
+                            owner_label = _get(acct, "owner_label")
+                            # Infer the real account type from the account name when
+                            # the provider returns a generic "depository" type.
+                            # SimpleFIN hardcodes "depository" for everything — this
+                            # fixes credit cards, mortgages, and investment accounts.
+                            # (See infer_account_type() for the matching rules.)
+                            inferred_type = infer_account_type(acct_name, acct_type)
                             account_meta[acct_id] = {
                                 "name": acct_name,
                                 "type": acct_type,
+                                "subtype": acct_subtype,
+                                "mask": acct_mask,
+                                "inferred_type": inferred_type,
                                 "currency": acct_currency,
                                 "balance_current": _get(balances, "current"),
                                 "balance_available": _get(balances, "available"),
+                                "owner_label": owner_label,
                             }
 
                     now = int(_time.time())
@@ -2331,10 +2820,14 @@ def sync(classify: bool = True, progress_callback=None) -> dict:
                     conn_classified = 0
 
                     # Always upsert account rows and update names, types,
-                    # currencies, and balances from the accounts list — even
-                    # when no new transactions came back.  This ensures that
-                    # bank_accounts is populated on the very first sync for
-                    # accounts with no transaction history yet.
+                    # currencies, balances, owner_label, and inferred_type from
+                    # the accounts list — even when no new transactions came back.
+                    # This is critical for:
+                    # (a) accounts with no transaction history (investment, mortgage)
+                    # (b) balance-only sync: investment/mortgage balances drift
+                    #     without any transactions, so we must update them on every
+                    #     sync regardless of whether added/modified/removed is empty.
+                    # (see RIDVAN_REQUESTS.md item 7 — routine balance sync)
                     with db_txn(db_conn):
                         for plaid_acct_id, meta in account_meta.items():
                             # INSERT the row if it doesn't exist yet (first sync
@@ -2344,22 +2837,60 @@ def sync(classify: bool = True, progress_callback=None) -> dict:
                                 "(id, connection_id, plaid_account_id) VALUES (?, ?, ?)",
                                 (str(uuid.uuid4()), connection_id, plaid_acct_id),
                             )
+                            # Always update balance_current and balance_available
+                            # (unconditionally, not COALESCE) so that investment
+                            # and mortgage balances drift correctly with each sync.
+                            # owner_label: only set when the provider supplies one
+                            # (SimpleFIN), don\'t clobber existing value with NULL.
                             db_conn.execute(
                                 "UPDATE bank_accounts SET "
                                 "name = COALESCE(NULLIF(name, ''), ?), "
                                 "type = COALESCE(NULLIF(type, ''), ?), "
+                                # subtype + mask come from /accounts/get; set them
+                                # when provided, else keep any existing value.
+                                "subtype = COALESCE(?, subtype), "
+                                "mask = COALESCE(?, mask), "
+                                "inferred_type = ?, "
                                 "currency = ?, "
                                 "balance_current = ?, "
-                                "balance_available = ? "
+                                "balance_available = ?, "
+                                "owner_label = COALESCE(?, owner_label) "
                                 "WHERE plaid_account_id = ?",
                                 (
                                     meta.get("name"),
                                     meta.get("type"),
+                                    meta.get("subtype"),  # NULL-safe: COALESCE keeps old
+                                    meta.get("mask"),     # NULL-safe: COALESCE keeps old
+                                    meta.get("inferred_type"),
                                     meta.get("currency") or "CAD",
                                     meta.get("balance_current"),
                                     meta.get("balance_available"),
+                                    meta.get("owner_label"),  # NULL-safe: COALESCE keeps old value
                                     plaid_acct_id,
                                 ),
+                            )
+
+                    # Auto-removal: mark accounts that disappeared from SimpleFIN
+                    # as removed_at=now so they stop showing in the UI.  Only
+                    # applies to SimpleFIN (Plaid uses a cursor that already tracks
+                    # removals via the 'removed' list).  Skip if account_meta is
+                    # empty — an empty response likely means a transient API error,
+                    # not a real removal.
+                    if conn_type == "simplefin" and account_meta:
+                        live_plaid_ids = set(account_meta.keys())
+                        with db_txn(db_conn):
+                            db_conn.execute(
+                                """
+                                UPDATE bank_accounts
+                                   SET removed_at = ?
+                                 WHERE connection_id = ?
+                                   AND plaid_account_id NOT IN ({placeholders})
+                                   AND removed_at IS NULL
+                                   AND is_duplicate = 0
+                                """.format(
+                                    placeholders=",".join("?" * len(live_plaid_ids))
+                                ),
+                                (now, connection_id, *live_plaid_ids),
                             )
 
                     # Deduplicate shared/joint accounts after each connection's
@@ -2400,6 +2931,18 @@ def sync(classify: bool = True, progress_callback=None) -> dict:
 
                             plaid_txn_id = _get(txn, "transaction_id")
                             date = _get(txn, "date")
+
+                            # Window filter (#270): skip transactions older than
+                            # today - window_days.  Plaid/SimpleFIN dates are
+                            # 'YYYY-MM-DD' strings so lexical compare is correct.
+                            if _window_cutoff is not None and date is not None:
+                                try:
+                                    if str(date) < _window_cutoff:
+                                        total_windowed_out += 1
+                                        continue
+                                except Exception:
+                                    pass
+
                             # authorized_datetime is an ISO-8601 string with time (e.g.
                             # "2024-01-15T14:23:00Z"); fall back to datetime then None.
                             authorized_datetime = (
@@ -2423,9 +2966,11 @@ def sync(classify: bool = True, progress_callback=None) -> dict:
                             ).fetchone()
                             bank_account_id = ba_row["id"]
 
-                            # Populate name/type/currency from account metadata (idempotent —
-                            # only overwrites when the incoming value is non-null so
-                            # a second sync won't blank out rows with good data).
+                            # Populate name/type/currency/owner_label from account
+                            # metadata (idempotent — only overwrites when the incoming
+                            # value is non-null so a second sync won\'t blank out rows
+                            # with good data).  inferred_type and owner_label are only
+                            # written when the provider supplies them (SimpleFIN path).
                             acct_currency = "CAD"  # default
                             if plaid_account_id in account_meta:
                                 meta = account_meta[plaid_account_id]
@@ -2441,16 +2986,23 @@ def sync(classify: bool = True, progress_callback=None) -> dict:
                                         "WHERE plaid_account_id = ? AND (type IS NULL OR type = '')",
                                         (meta["type"], plaid_account_id),
                                     )
-                                # Always update currency + balances from Plaid (authoritative)
+                                # Always update inferred_type, currency, and balances.
+                                # inferred_type is computed on every sync from the
+                                # account name so it\'s always current even if the name
+                                # was renamed by the user between syncs.
                                 acct_currency = meta.get("currency") or "CAD"
                                 db_conn.execute(
                                     "UPDATE bank_accounts SET currency = ?, "
-                                    "balance_current = ?, balance_available = ? "
+                                    "balance_current = ?, balance_available = ?, "
+                                    "inferred_type = ?, "
+                                    "owner_label = COALESCE(?, owner_label) "
                                     "WHERE plaid_account_id = ?",
                                     (
                                         acct_currency,
                                         meta.get("balance_current"),
                                         meta.get("balance_available"),
+                                        meta.get("inferred_type"),
+                                        meta.get("owner_label"),
                                         plaid_account_id,
                                     ),
                                 )
@@ -2580,6 +3132,43 @@ def sync(classify: bool = True, progress_callback=None) -> dict:
                             (now, connection_id),
                         )
 
+                    # Mortgage liabilities pull (#271): for Plaid connections,
+                    # fetch per-mortgage detail and persist it so payments can be
+                    # split into principal/interest/escrow.  Best-effort — a
+                    # liabilities failure must never break a transaction sync.
+                    if conn_type == "plaid" and hasattr(conn_provider, "get_liabilities"):
+                        try:
+                            mortgages = conn_provider.get_liabilities(sync_token)
+                            for mort in mortgages:
+                                plaid_acct_id = mort.get("account_id")
+                                if not plaid_acct_id:
+                                    continue
+                                acct_row = db_conn.execute(
+                                    "SELECT id, balance_current, default_ledger_id "
+                                    "FROM bank_accounts WHERE plaid_account_id = ?",
+                                    (plaid_acct_id,),
+                                ).fetchone()
+                                if not acct_row:
+                                    continue
+                                # outstanding principal = |current balance| (loans
+                                # report a balance owed; sign varies by provider).
+                                bal = acct_row["balance_current"]
+                                if bal is not None:
+                                    mort["outstanding_principal"] = abs(float(bal))
+                                else:
+                                    mort.pop("outstanding_principal", None)
+                                upsert_mortgage_account(
+                                    acct_row["id"],
+                                    mort,
+                                    ledger_id=acct_row["default_ledger_id"],
+                                )
+                        except Exception as _mort_exc:  # noqa: BLE001
+                            _logger.warning(
+                                "Liabilities pull failed for connection %s: %s",
+                                connection_id,
+                                _mort_exc,
+                            )
+
                     connections_synced += 1
                     total_added += conn_added
                     total_modified += conn_modified
@@ -2596,7 +3185,13 @@ def sync(classify: bool = True, progress_callback=None) -> dict:
                 # auto-classification on any newly inserted (unclassified)
                 # transactions.  Errors are caught so a classification failure
                 # never blocks sync.
-                auto_classify_result = {"classified": 0, "skipped": 0, "uncertain": 0}
+                auto_classify_result = {
+                    "classified": 0,
+                    "skipped": 0,
+                    "uncertain": 0,
+                    "pending_remaining": 0,
+                    "batch_size": 0,
+                }
                 suspicious_flags: list[dict] = []
                 if classify:
                     try:
@@ -2644,6 +3239,25 @@ def sync(classify: bool = True, progress_callback=None) -> dict:
         "auto_classified": auto_classify_result.get("classified", 0),
         "auto_skipped": auto_classify_result.get("skipped", 0),
         "auto_uncertain": auto_classify_result.get("uncertain", 0),
+        "pending_remaining": auto_classify_result.get("pending_remaining", 0),
+        "classify_batch_size": auto_classify_result.get("batch_size", 0),
+        "windowed_out": total_windowed_out,
+        "window_days": int(window_days) if window_days else 0,
+        "big_pull": total_added >= int(big_pull_threshold),
+        "warning": (
+            (
+                f"Large pull: {total_added} new transactions. "
+                + (
+                    f"Classified {auto_classify_result.get('classified', 0)}; "
+                    f"{auto_classify_result.get('pending_remaining', 0)} still pending "
+                    "— run classify again to finish."
+                    if classify
+                    else "Classification was skipped."
+                )
+            )
+            if total_added >= int(big_pull_threshold)
+            else ""
+        ),
         "health_check": health_check_result,
         "suspicious_count": len(suspicious_flags),
         "suspicious": top_suspicious,
@@ -2670,7 +3284,7 @@ def get_suspicious_transactions(include_dismissed: bool = False) -> dict:
               JOIN transactions t ON t.id = st.transaction_id
               JOIN bank_accounts ba ON ba.id = t.bank_account_id
               JOIN bank_connections bc ON bc.id = ba.connection_id
-             WHERE bc.user_id = ? AND ba.is_duplicate = 0 {where}
+             WHERE bc.user_id = ? AND ba.is_duplicate = 0 AND ba.removed_at IS NULL {where}
              ORDER BY st.risk_level, st.flagged_at DESC
             """,
             (uid,),
@@ -2834,7 +3448,7 @@ def get_needs_review() -> dict:
             JOIN bank_connections bc ON bc.id = ba.connection_id
             WHERE bc.user_id = ?
               AND te.reviewed = 0
-              AND ba.is_duplicate = 0
+              AND ba.is_duplicate = 0 AND ba.removed_at IS NULL
               AND (
                 te.uncertain = 1
                 OR te.line_item_id IS NULL
@@ -3369,7 +3983,7 @@ def analyze_recurring_merchants(min_occurrences: int = 2, lookback_days: int = 9
                 "  JOIN bank_accounts ba ON ba.id = t.bank_account_id\n"
                 "  JOIN bank_connections bc ON bc.id = ba.connection_id\n"
                 " WHERE bc.user_id = ?\n"
-                "   AND ba.is_duplicate = 0\n"
+                "   AND ba.is_duplicate = 0 AND ba.removed_at IS NULL\n"
                 "   AND t.merchant IS NOT NULL\n"
                 "   AND TRIM(t.merchant) != ''\n"
                 "   AND t.date >= ?\n"
@@ -3378,7 +3992,7 @@ def analyze_recurring_merchants(min_occurrences: int = 2, lookback_days: int = 9
         else:
             base_filter = (
                 "  JOIN bank_accounts ba ON ba.id = t.bank_account_id\n"
-                " WHERE ba.is_duplicate = 0\n"
+                " WHERE ba.is_duplicate = 0 AND ba.removed_at IS NULL\n"
                 "   AND t.merchant IS NOT NULL\n"
                 "   AND TRIM(t.merchant) != ''\n"
                 "   AND t.date >= ?\n"
@@ -3459,7 +4073,7 @@ def summary(period: str) -> dict:
               "income": float,
               "expenses": float,
               "savings": float,           # sum of savings-type line items
-              "net": float,               # income - expenses - savings
+              "net": float,               # income - expenses (expenses excludes savings)
               "savings_contributions": float,  # same as savings
               "unspent_balance": float,    # income - expenses (may be negative)
               "total_saved": float,        # savings_contributions + unspent_balance
@@ -3569,13 +4183,20 @@ def summary(period: str) -> dict:
         else:
             expenses += total
 
-    # Compute savings metrics
-    # unspent_balance = what's left after expenses AND savings contributions
-    # total_saved     = income - expenses (= savings_contributions + unspent_balance)
+    # Compute savings metrics (#248).
+    #   net / total_saved = income - expenses (total money kept; expenses already
+    #                       excludes savings-type entries above)
+    #   savings_contributions = money explicitly routed to savings line items
+    #   unspent_balance   = net - savings_contributions (leftover after the money
+    #                       you explicitly moved into savings)
+    #   savings_rate      = savings_contributions / income (share of income you
+    #                       actively saved)
     savings_contributions = round(savings, 2)
-    unspent_balance = round(income - expenses - savings, 2)  # truly unallocated leftover
-    total_saved = round(income - expenses, 2)  # total net kept (savings + leftover)
-    savings_rate_pct = round(total_saved / income * 100, 1) if income > 0 else 0.0
+    total_saved = round(income - expenses, 2)  # total net kept
+    unspent_balance = round(total_saved - savings_contributions, 2)  # unallocated leftover
+    savings_rate_pct = (
+        round(savings_contributions / income * 100, 1) if income > 0 else 0.0
+    )
     savings_rate = f"{savings_rate_pct}%"
 
     # YTD savings rate from separate query
@@ -3596,7 +4217,7 @@ def summary(period: str) -> dict:
         "income": round(income, 2),
         "expenses": round(expenses, 2),
         "savings": savings_contributions,
-        "net": total_saved,  # income - expenses (total kept; = savings + unspent)
+        "net": total_saved,  # income - expenses (= total_saved alias; expenses excludes savings)
         "savings_contributions": savings_contributions,
         "unspent_balance": unspent_balance,
         "total_saved": total_saved,
@@ -4031,6 +4652,136 @@ def configure_plaid(
 
 
 # ---------------------------------------------------------------------------
+# SimpleFIN MCP tools
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool
+def complete_simplefin_link(
+    setup_token: str,
+    institution_name: str | None = None,
+) -> dict:
+    """Create a SimpleFIN bank connection from a user-supplied *setup_token*.
+
+    Parallel to ``complete_link`` for Plaid.
+
+    The flow:
+
+    1. The user visits https://bridge.simplefin.org/simplefin/create, connects
+       their bank, and copies the Setup Token (a Base64-encoded claim URL).
+    2. The user pastes the Setup Token into the Friday Budgeting Pro UI or
+       gives it to HAL via chat.
+    3. This tool is called with that token.  It exchanges the token for a
+       permanent Access URL **once**, stores it Fernet-encrypted in
+       ``bank_connections.plaid_access_token_encrypted``, and triggers an
+       initial background sync.
+
+    Parameters
+    ----------
+    setup_token : str
+        The Setup Token from https://bridge.simplefin.org/simplefin/create
+    institution_name : str or None
+        Optional display name for the bank (auto-detected from the SimpleFIN
+        response if omitted).
+
+    Returns
+    -------
+    dict
+        ``{"status": "ok", "connection_id": ..., "institution_name": ...}``
+        or ``{"status": "error", "message": ...}``.
+    """
+    if not setup_token or not setup_token.strip():
+        return {"status": "error", "message": "setup_token must be non-empty"}
+
+    uid = get_active_user_id(server.paths.DB_PATH)
+
+    # Exchange the Setup Token for a permanent Access URL.
+    provider = SimpleFINProvider()
+    try:
+        access_url = provider.claim_setup_token(setup_token.strip())
+    except ValueError as exc:
+        return {"status": "error", "message": f"Invalid Setup Token: {exc}"}
+    except SimpleFINAuthError as exc:
+        return {
+            "status": "error",
+            "message": (
+                f"SimpleFIN rejected the Setup Token (403) — it may have already "
+                f"been claimed or may have expired.  Get a fresh token from "
+                f"https://bridge.simplefin.org/simplefin/create.  Detail: {exc}"
+            ),
+        }
+    except SimpleFINError as exc:
+        return {"status": "error", "message": f"SimpleFIN error: {exc}"}
+
+    # Try to resolve institution name from the Access URL if not provided.
+    if not institution_name:
+        try:
+            institution_name = provider.get_institution_name(access_url)
+        except Exception:  # noqa: BLE001
+            institution_name = "SimpleFIN"
+    institution_name = institution_name or "SimpleFIN"
+
+    # Encrypt the Access URL for at-rest storage.
+    encrypted_access_url = server.crypto.encrypt(access_url)
+
+    conn = get_db(server.paths.DB_PATH)
+    try:
+        # Idempotency: if this exact Access URL was already stored, update in place.
+        existing = conn.execute(
+            "SELECT id FROM bank_connections WHERE plaid_access_token_encrypted = ?",
+            (encrypted_access_url,),
+        ).fetchone()
+        if existing:
+            connection_id = existing["id"]
+            conn.execute(
+                """
+                UPDATE bank_connections
+                   SET status = 'active',
+                       institution_name = COALESCE(?, institution_name)
+                 WHERE id = ?
+                """,
+                (institution_name, connection_id),
+            )
+        else:
+            connection_id = str(uuid.uuid4())
+            conn.execute(
+                """
+                INSERT INTO bank_connections
+                    (id, plaid_item_id, plaid_access_token_encrypted, institution_name,
+                     status, user_id, plaid_env, connection_type)
+                VALUES (?, ?, ?, ?, 'active', ?, 'production', 'simplefin')
+                """,
+                (
+                    connection_id,
+                    f"simplefin-{connection_id}",  # synthetic item id
+                    encrypted_access_url,
+                    institution_name,
+                    uid,
+                ),
+            )
+        conn.commit()
+    finally:
+        conn.close()
+
+    # Trigger an initial sync in the background so bank_accounts populates.
+    import threading
+
+    def _bg_sync():
+        try:
+            sync()
+        except Exception as exc:  # noqa: BLE001
+            _logger.warning("post-simplefin-link sync failed: %s", exc)
+
+    threading.Thread(target=_bg_sync, daemon=True).start()
+
+    return {
+        "status": "ok",
+        "connection_id": connection_id,
+        "institution_name": institution_name,
+    }
+
+
+# ---------------------------------------------------------------------------
 # Password MCP tools
 # ---------------------------------------------------------------------------
 
@@ -4369,18 +5120,38 @@ def delete_rule(id: str) -> dict:
 # Settings tools (#159)
 # ---------------------------------------------------------------------------
 
-_SETTING_KEYS = {"home_currency", "timezone"}
+_SETTING_KEYS = {
+    "home_currency",
+    "timezone",
+    "sync_window_days",
+    "classify_batch_size",
+    "classifier_model",
+}
 _SETTING_VALID_VALUES: dict[str, list[str]] = {
     "home_currency": ["CAD", "USD", "EUR", "GBP"],
     # timezone: any non-empty IANA string is valid; we enumerate common ones here
     # but do NOT restrict to this list (open-ended for power users).
     "timezone": [],  # empty = accept any non-empty value (validated in set_setting)
+    # sync_window_days / classify_batch_size: validated as bounded ints below.
+    "sync_window_days": [],
+    "classify_batch_size": [],
+    # classifier_model: open-ended model string.
+    "classifier_model": [],
+}
+
+# Integer settings: (min, max) inclusive bounds enforced in set_setting.
+_SETTING_INT_BOUNDS: dict[str, tuple[int, int]] = {
+    "sync_window_days": (1, 3650),       # 1 day .. 10 years
+    "classify_batch_size": (1, 1000),    # 1 .. 1000 txns per sync
 }
 
 
 _SETTING_DEFAULTS = {
     "home_currency": "CAD",
     "timezone": "America/Toronto",
+    "sync_window_days": "90",
+    "classify_batch_size": "50",
+    "classifier_model": "claude-3-5-haiku-20241022",
 }
 
 
@@ -4444,6 +5215,22 @@ def set_setting(key: str, value: str) -> dict:
             "status": "error",
             "message": f"Value for {key!r} must not be empty.",
         }
+    # Integer settings: validate numeric + bounds.
+    if key in _SETTING_INT_BOUNDS:
+        lo, hi = _SETTING_INT_BOUNDS[key]
+        try:
+            ival = int(str(value).strip())
+        except (TypeError, ValueError):
+            return {
+                "status": "error",
+                "message": f"Value for {key!r} must be an integer between {lo} and {hi}.",
+            }
+        if ival < lo or ival > hi:
+            return {
+                "status": "error",
+                "message": f"Value for {key!r} must be between {lo} and {hi} (got {ival}).",
+            }
+        value = str(ival)
     uid = get_active_user_id(server.paths.DB_PATH)
     if uid is None:
         return {"status": "error", "message": "No active user found"}
@@ -4454,6 +5241,259 @@ def set_setting(key: str, value: str) -> dict:
     finally:
         conn.close()
     return {"status": "ok", "key": key, "value": value}
+
+
+def _get_sync_settings(user_id: str) -> dict:
+    """Return the sync-safety settings for *user_id* with defaults applied.
+
+    Reads ``sync_window_days``, ``classify_batch_size`` and ``classifier_model``
+    from the ``users`` row, falling back to module defaults when columns are
+    NULL or the row is missing.  Used by :func:`sync` and
+    :func:`classify_pending_transactions` to bound work per run.
+
+    Returns
+    -------
+    dict
+        ``{"sync_window_days": int, "classify_batch_size": int,
+           "classifier_model": str}``
+    """
+    window = int(_SETTING_DEFAULTS["sync_window_days"])
+    batch = int(_SETTING_DEFAULTS["classify_batch_size"])
+    model = _SETTING_DEFAULTS["classifier_model"]
+    try:
+        conn = get_db(server.paths.DB_PATH)
+        try:
+            row = conn.execute(
+                "SELECT sync_window_days, classify_batch_size, classifier_model "
+                "FROM users WHERE id = ?",
+                (user_id,),
+            ).fetchone()
+        finally:
+            conn.close()
+        if row:
+            if row["sync_window_days"] is not None:
+                window = int(row["sync_window_days"])
+            if row["classify_batch_size"] is not None:
+                batch = int(row["classify_batch_size"])
+            if row["classifier_model"]:
+                model = row["classifier_model"]
+    except Exception as _exc:  # noqa: BLE001
+        _logger.warning("_get_sync_settings fell back to defaults: %s", _exc)
+    return {
+        "sync_window_days": window,
+        "classify_batch_size": batch,
+        "classifier_model": model,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Mortgage accounts (#271)
+# ---------------------------------------------------------------------------
+
+_MORTGAGE_FIELDS = (
+    "outstanding_principal",
+    "origination_principal",
+    "interest_rate",
+    "loan_term",
+    "loan_type",
+    "next_payment_amount",
+    "next_payment_due",
+    "last_payment_amount",
+    "last_payment_date",
+    "escrow_balance",
+    "origination_date",
+    "maturity_date",
+    "ytd_interest_paid",
+    "ytd_principal_paid",
+    "property_address",
+)
+
+
+def upsert_mortgage_account(account_id: str, detail: dict, ledger_id: str | None = None) -> None:
+    """Insert or update the ``mortgage_accounts`` row for *account_id* (#271).
+
+    *detail* is a dict using the internal field names in ``_MORTGAGE_FIELDS``
+    (as produced by ``PlaidProvider.get_liabilities`` or SimpleFIN loan
+    handling).  Only keys present in *detail* are written; missing keys are left
+    untouched on an update, so a partial SimpleFIN pull (balance only) does not
+    wipe richer Plaid detail.  *ledger_id*, when provided, links the mortgage to
+    its property ledger.
+    """
+    if not account_id:
+        return
+    import time as _time
+
+    conn = get_db(server.paths.DB_PATH)
+    try:
+        with db_txn(conn):
+            exists = conn.execute(
+                "SELECT 1 FROM mortgage_accounts WHERE account_id = ?", (account_id,)
+            ).fetchone()
+            cols = [k for k in _MORTGAGE_FIELDS if k in detail]
+            if exists:
+                sets = ", ".join(f"{c} = ?" for c in cols)
+                params = [detail[c] for c in cols]
+                if ledger_id is not None:
+                    sets += (", " if sets else "") + "ledger_id = ?"
+                    params.append(ledger_id)
+                sets += (", " if sets else "") + "updated_at = ?"
+                params.append(int(_time.time()))
+                params.append(account_id)
+                conn.execute(
+                    f"UPDATE mortgage_accounts SET {sets} WHERE account_id = ?", params
+                )
+            else:
+                insert_cols = ["account_id", "ledger_id", *cols, "updated_at"]
+                placeholders = ", ".join("?" for _ in insert_cols)
+                values = [
+                    account_id,
+                    ledger_id,
+                    *[detail[c] for c in cols],
+                    int(_time.time()),
+                ]
+                conn.execute(
+                    f"INSERT INTO mortgage_accounts ({', '.join(insert_cols)}) "
+                    f"VALUES ({placeholders})",
+                    values,
+                )
+    finally:
+        conn.close()
+
+
+def get_mortgage_for_account(account_id: str) -> dict | None:
+    """Return the ``mortgage_accounts`` row for *account_id* as a dict, or None."""
+    if not account_id:
+        return None
+    conn = get_db(server.paths.DB_PATH)
+    try:
+        row = conn.execute(
+            "SELECT * FROM mortgage_accounts WHERE account_id = ?", (account_id,)
+        ).fetchone()
+    finally:
+        conn.close()
+    return dict(row) if row else None
+
+
+def split_mortgage_payment(payment_amount: float, mortgage: dict) -> dict:
+    """Split a mortgage *payment_amount* into principal / interest / escrow (#271).
+
+    Uses the best available signal, in priority order:
+
+    1. **YTD actuals** — if Plaid reports ``ytd_interest_paid`` and
+       ``ytd_principal_paid``, use their ratio to apportion this payment.  This
+       is the most accurate because it reflects the lender's own accounting.
+    2. **Amortisation math** — interest = outstanding_principal * (rate/12);
+       principal = payment - interest.  Used when a rate + balance are known.
+    3. **Fallback** — everything to principal (no split) when we have no rate
+       data, so no money is lost or invented.
+
+    Escrow (property tax + insurance) is apportioned from
+    ``next_payment_amount`` vs the principal+interest implied payment when an
+    escrow signal exists; otherwise escrow is 0.
+
+    All amounts are positive floats rounded to cents.  Returns::
+
+        {"principal": float, "interest": float,
+         "escrow_tax": float, "escrow_insurance": float, "method": str}
+    """
+    amt = round(abs(float(payment_amount or 0.0)), 2)
+    result = {
+        "principal": amt,
+        "interest": 0.0,
+        "escrow_tax": 0.0,
+        "escrow_insurance": 0.0,
+        "method": "fallback",
+    }
+    if amt <= 0 or not mortgage:
+        return result
+
+    def _f(key):
+        v = mortgage.get(key)
+        try:
+            return float(v) if v is not None else None
+        except (TypeError, ValueError):
+            return None
+
+    rate = _f("interest_rate")
+    balance = _f("outstanding_principal")
+    ytd_i = _f("ytd_interest_paid")
+    ytd_p = _f("ytd_principal_paid")
+    escrow_bal = _f("escrow_balance")
+
+    # Determine the non-escrow (P+I) portion of the payment first.
+    # If next_payment_amount is known and larger than implied P+I, treat the
+    # remainder as escrow.  Otherwise assume the whole payment is P+I.
+    pi_amount = amt
+    escrow_total = 0.0
+    next_pay = _f("next_payment_amount")
+    if escrow_bal and escrow_bal > 0 and next_pay and next_pay > 0 and rate and balance:
+        monthly_interest = balance * (rate / 100.0) / 12.0
+        # crude: if the scheduled payment exceeds interest, the rest beyond a
+        # typical P+I may include escrow; cap escrow at 40% of payment to avoid
+        # runaway splits on noisy data.
+        implied_escrow = max(0.0, amt - (monthly_interest * 2))
+        escrow_total = round(min(implied_escrow, amt * 0.4), 2)
+        pi_amount = round(amt - escrow_total, 2)
+
+    # Priority 1: YTD actuals ratio.
+    if ytd_i is not None and ytd_p is not None and (ytd_i + ytd_p) > 0:
+        ratio_i = ytd_i / (ytd_i + ytd_p)
+        interest = round(pi_amount * ratio_i, 2)
+        principal = round(pi_amount - interest, 2)
+        result.update(
+            principal=principal, interest=interest, method="ytd_ratio"
+        )
+    # Priority 2: amortisation math.
+    elif rate is not None and balance is not None and balance > 0:
+        monthly_interest = round(balance * (rate / 100.0) / 12.0, 2)
+        interest = min(monthly_interest, pi_amount)
+        principal = round(pi_amount - interest, 2)
+        result.update(
+            principal=principal, interest=round(interest, 2), method="amortization"
+        )
+    else:
+        result.update(principal=pi_amount, interest=0.0, method="fallback")
+
+    # Escrow split: half tax / half insurance when we only have a lump escrow.
+    if escrow_total > 0:
+        result["escrow_tax"] = round(escrow_total / 2.0, 2)
+        result["escrow_insurance"] = round(escrow_total - result["escrow_tax"], 2)
+
+    return result
+
+
+@mcp.tool
+def get_mortgage_details(account_id: str) -> dict:
+    """Return stored mortgage detail for *account_id* (#271).
+
+    Surfaces the extra loan information pulled from the provider (outstanding
+    principal, interest rate, next/last payment, origination & maturity dates,
+    escrow, YTD principal/interest, property address) so the UI and chat can
+    display a mortgage's full picture.
+
+    Returns ``{"status": "ok", "mortgage": {...}}`` or
+    ``{"status": "not_found"}`` when the account has no mortgage row.
+    """
+    m = get_mortgage_for_account(account_id)
+    if not m:
+        return {"status": "not_found", "account_id": account_id}
+    return {"status": "ok", "mortgage": m}
+
+
+@mcp.tool
+def preview_mortgage_split(account_id: str, payment_amount: float) -> dict:
+    """Preview how a *payment_amount* would split for a mortgage account (#271).
+
+    Returns the principal / interest / escrow breakdown and the method used
+    (``ytd_ratio``, ``amortization``, or ``fallback``) without writing anything.
+    Useful for the UI to show "this $2,100 payment ≈ $480 interest / $1,620
+    principal" before committing entries.
+    """
+    m = get_mortgage_for_account(account_id)
+    if not m:
+        return {"status": "not_found", "account_id": account_id}
+    split = split_mortgage_payment(payment_amount, m)
+    return {"status": "ok", "account_id": account_id, "split": split}
 
 
 # ---------------------------------------------------------------------------
@@ -4553,6 +5593,7 @@ def find_transactions(
         "bc.user_id = ?",
         "t.pending = 0",
         "ba.is_duplicate = 0",  # exclude duplicate-account transactions (issue #269)
+        "ba.removed_at IS NULL",  # exclude removed accounts
     ]
     params: list = [uid]
 

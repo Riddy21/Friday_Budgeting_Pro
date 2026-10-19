@@ -24,7 +24,6 @@ from __future__ import annotations
 
 import os
 import socket
-import sqlite3
 import tempfile
 import threading
 import time
@@ -32,7 +31,6 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from pathlib import Path
-from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -709,7 +707,12 @@ class TestNavigation:
         page_desktop.goto(live_server["base_url"] + "/dashboard")
         page_desktop.wait_for_load_state("domcontentloaded")
 
-        page_desktop.locator(f"nav a:has-text('{label}')").click()
+        # Scope to the primary (desktop) nav: the responsive layout also renders
+        # a <nav class="mobile-nav"> with the same links, which would otherwise
+        # make this selector match two elements (Playwright strict-mode error).
+        page_desktop.locator(
+            f"nav:not(.mobile-nav) a:has-text('{label}')"
+        ).first.click()
         page_desktop.wait_for_load_state("domcontentloaded")
 
         assert expected_path in page_desktop.url, (
@@ -806,7 +809,9 @@ class TestSavingsUI:
 
     def test_api_summary_this_month(self, live_server):
         """GET /api/summary?period=this_month returns valid JSON."""
-        import urllib.request, urllib.parse, json as _json
+        import json as _json
+        import urllib.parse
+        import urllib.request
 
         base = live_server["base_url"]
 
@@ -834,8 +839,10 @@ class TestSavingsUI:
     @pytest.mark.parametrize("period", ["this_month", "last_month", "this_year", "ytd"])
     def test_api_summary_all_periods(self, live_server, period):
         """All UI period strings return valid JSON (no ValueError)."""
-        import urllib.request, urllib.parse, json as _json
         import http.cookiejar
+        import json as _json
+        import urllib.parse
+        import urllib.request
 
         base = live_server["base_url"]
         jar = http.cookiejar.CookieJar()
@@ -866,8 +873,9 @@ class TestSavingsUI:
         # Savings section should exist
         assert page.locator("#savings-summary-section").count() > 0, "Savings section missing"
 
-        # Two savings cards should have replaced the loading placeholder
-        cards = page.locator(".savings-card").count()
+        # Two savings cards should have replaced the loading placeholder.
+        # The dashboard JS renders them as <div class="stat-card savings">.
+        cards = page.locator(".stat-card.savings").count()
         assert cards == 2, f"Expected 2 savings cards, got {cards}"
 
         # The loading placeholder should be gone

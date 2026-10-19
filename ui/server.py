@@ -33,9 +33,12 @@ Route overview
 
 from __future__ import annotations
 
+import json
+import logging
 import os
 import secrets
 import time
+import urllib.request
 from pathlib import Path
 from typing import Optional
 
@@ -913,16 +916,49 @@ def api_sync(request: Request):
             # Run classification inline in this thread so progress log covers
             # both phases and running stays True until both are done.
             uid = get_active_user_id(_paths.DB_PATH)
+            # Big-pull warning surfaced from the sync summary (#270).
+            if isinstance(sync_result, dict) and sync_result.get("big_pull"):
+                _sync_emit({
+                    "phase": "warning",
+                    "msg": sync_result.get("warning")
+                    or f"Large pull: {total_added} new transactions.",
+                })
             if uid and total_added > 0:
                 _sync_emit({"phase": "classifying", "msg": "Classifying transactions\u2026"})
                 with _classify_lock:
                     _classify_state["running"] = True
                     _classify_state["result"] = None
                 try:
-                    classify_result = _sm.classify_pending_transactions(uid)
+                    # Classify in batches until nothing is pending or a safety
+                    # ceiling of passes is hit (#270).  Each pass is bounded by
+                    # the per-user classify_batch_size, so we never fire an
+                    # unbounded number of serial LLM calls in one go, and the
+                    # live progress log updates between batches.
+                    total_classified = 0
+                    classify_result = {"classified": 0, "skipped": 0, "uncertain": 0, "pending_remaining": 0}
+                    _MAX_PASSES = 40  # hard safety ceiling
+                    for _pass in range(_MAX_PASSES):
+                        classify_result = _sm.classify_pending_transactions(uid)
+                        batch_n = classify_result.get("classified", 0)
+                        total_classified += batch_n
+                        remaining = classify_result.get("pending_remaining", 0)
+                        if batch_n or remaining:
+                            _sync_emit({
+                                "phase": "classifying",
+                                "msg": f"Classified {total_classified} so far… {remaining} remaining",
+                            })
+                        # Stop when nothing left, or a pass made no progress
+                        # (avoids an infinite loop on persistently-uncertain rows).
+                        if remaining <= 0 or batch_n == 0:
+                            break
+                    classify_result = {**classify_result, "classified": total_classified}
                     _classify_state["result"] = {"status": "ok", **classify_result}
-                    n = classify_result.get("classified", 0)
-                    _sync_emit({"phase": "done", "msg": f"Done! {n} transaction{'s' if n != 1 else ''} classified", "added": total_added, "classified": n})
+                    n = total_classified
+                    remaining = classify_result.get("pending_remaining", 0)
+                    done_msg = f"Done! {n} transaction{'s' if n != 1 else ''} classified"
+                    if remaining > 0:
+                        done_msg += f" — {remaining} still pending (click Sync again to continue)"
+                    _sync_emit({"phase": "done", "msg": done_msg, "added": total_added, "classified": n, "pending_remaining": remaining})
                 except Exception as exc:
                     import logging as _cl_logging
                     _cl_logging.getLogger(__name__).error("Classification in sync thread failed: %s", exc)
@@ -1070,6 +1106,7 @@ def api_summary(request: Request, period: str = "this_month"):
     if not _is_authenticated(request):
         return JSONResponse({"error": "Unauthorized"}, status_code=401)
     from datetime import date as _date
+
     from server.main import summary as _summary
 
     # Translate UI-friendly period names to the values summary() expects.
@@ -1270,11 +1307,16 @@ def dashboard_get(request: Request):
 
 
 def _get_accounts_grouped(user_id: Optional[str] = None) -> dict:
-    """Return bank accounts grouped by institution, with balances.
+    """Return bank accounts grouped by institution, with balances and owner info.
 
     Returns a dict of {institution_name: {connection_id, accounts, hidden_count,
-    syncing}}.  Connections with no bank_accounts yet are included with
+    syncing, owners}}.  Connections with no bank_accounts yet are included with
     syncing=True so the UI can show a placeholder immediately after linking.
+
+    Each account row now includes ``owner_label`` (SimpleFIN org name) and
+    ``inferred_type`` (type inferred from account name, e.g. "credit" for Visas)
+    so the UI can separate accounts by owner and display correct liability signs.
+    (See RIDVAN_REQUESTS.md items 2, 3, 5 and 6.)
     """
     conn = get_db(_db_path())
     try:
@@ -1303,17 +1345,21 @@ def _get_accounts_grouped(user_id: Optional[str] = None) -> dict:
             }
 
         # --- Accounts (populated after first sync) ---
+        # Pull owner_label and inferred_type so the UI can display accurate
+        # account types and separate by owner (RIDVAN_REQUESTS.md items 2, 3, 5).
         if user_id:
             rows = conn.execute(
                 "SELECT ba.id, ba.name, ba.mask, ba.type, ba.subtype,"
                 "       ba.balance_current, ba.balance_available, ba.description,"
                 "       COALESCE(ba.currency, 'CAD') AS currency,"
                 "       COALESCE(ba.is_duplicate, 0) AS is_duplicate,"
+                "       ba.owner_label, ba.inferred_type,"
                 "       bc.id AS connection_id, bc.institution_name"
                 "  FROM bank_accounts ba"
                 "  JOIN bank_connections bc ON bc.id = ba.connection_id"
                 " WHERE bc.user_id = ?"
-                " ORDER BY bc.institution_name, ba.name",
+                "   AND ba.removed_at IS NULL"
+                " ORDER BY bc.institution_name, ba.owner_label, ba.name",
                 (user_id,),
             ).fetchall()
         else:
@@ -1322,11 +1368,18 @@ def _get_accounts_grouped(user_id: Optional[str] = None) -> dict:
                 "       ba.balance_current, ba.balance_available, ba.description,"
                 "       COALESCE(ba.currency, 'CAD') AS currency,"
                 "       COALESCE(ba.is_duplicate, 0) AS is_duplicate,"
+                "       ba.owner_label, ba.inferred_type,"
                 "       bc.id AS connection_id, bc.institution_name"
                 "  FROM bank_accounts ba"
                 "  JOIN bank_connections bc ON bc.id = ba.connection_id"
-                " ORDER BY bc.institution_name, ba.name"
+                " WHERE ba.removed_at IS NULL"
+                " ORDER BY bc.institution_name, ba.owner_label, ba.name"
             ).fetchall()
+
+        # Track seen account IDs per institution to prevent double-render.
+        # An account can only appear in one institution group; if it somehow
+        # ends up in two query rows (schema bug), we suppress the duplicate here.
+        seen_account_ids: set[str] = set()
 
         for r in rows:
             inst = r["institution_name"] or "Unknown Institution"
@@ -1336,12 +1389,27 @@ def _get_accounts_grouped(user_id: Optional[str] = None) -> dict:
                     "accounts": [],
                     "hidden_count": 0,
                     "syncing": False,
+                    "owners": [],  # distinct owner_labels seen in this institution group
                 }
             grouped[inst]["syncing"] = False  # has accounts → not syncing
             if r["is_duplicate"]:
                 grouped[inst]["hidden_count"] += 1
             else:
-                grouped[inst]["accounts"].append(dict(r))
+                acct_id = r["id"]
+                # Guard: skip if this account was already added (prevents double-render
+                # if a schema/join quirk returns the same account_id twice).
+                if acct_id in seen_account_ids:
+                    continue
+                seen_account_ids.add(acct_id)
+                acct_dict = dict(r)
+                grouped[inst]["accounts"].append(acct_dict)
+                # Collect distinct owner_labels for the institution group so the
+                # template can render a per-owner sub-heading when multiple owners
+                # share the same bank connection.
+                owner = r["owner_label"]
+                owners_list = grouped[inst].setdefault("owners", [])
+                if owner and owner not in owners_list:
+                    owners_list.append(owner)
         return grouped
     except Exception:
         return {}
@@ -1349,14 +1417,149 @@ def _get_accounts_grouped(user_id: Optional[str] = None) -> dict:
         conn.close()
 
 
-def _compute_net_worth(grouped: dict, home_currency: str = "CAD") -> dict:
+# Category ordering for the account list (RIDVAN_REQUESTS.md items 2, 3, 5, 6).
+# Assets first (Cash → Investments), then liabilities (Credit Cards → Debts).
+# Cash now absorbs chequing/checking AND savings (Ridvan's request 2026-10-18):
+# one liquid "Cash" tier, Investments separate, then Credit Cards and Debts
+# (loans/mortgages) as two DISTINCT liability buckets.
+_CATEGORY_ORDER = ["Cash", "Investments", "Credit Cards", "Debts"]
+
+
+def _account_category(acct: dict, txn_count: int = 0) -> str:
+    """Map a single account row to a top-level display category.
+
+    Categories (updated 2026-10-18 per Ridvan's request):
+      * "Credit Cards" — credit-card liabilities (shown negative)
+      * "Debts"        — loans / mortgages / credit lines (shown negative)
+      * "Investments"  — investment accounts, incl. the balance-driven heuristic:
+                         an account whose balance is non-trivial but which has NO
+                         transactions behaves like an investment/holding account
+                         (balance drifts without transactions).
+      * "Cash"         — chequing/checking + savings + everyday/day-to-day cash
+                         (savings is folded into Cash as one liquid tier).
+
+    ``txn_count`` enables the balance-driven investment heuristic; pass the
+    number of transactions recorded for this account over the sync window.
+    """
+    inferred = (acct.get("inferred_type") or "").lower()
+    provider = (acct.get("type") or "").lower()
+    effective = inferred if inferred and inferred != "depository" else (provider or "depository")
+    subtype = (acct.get("subtype") or "").lower()
+
+    # Liabilities: credit cards and loans/mortgages are now SEPARATE buckets.
+    if effective == "credit":
+        return "Credit Cards"
+    if effective == "loan":
+        return "Debts"
+
+    # Explicit investment type/subtype.
+    if effective == "investment" or subtype in (
+        "401k", "403b", "457b", "ira", "roth", "sep ira", "simple ira",
+        "tfsa", "rrsp", "fhsa", "rrif", "resp", "lira", "rdsp", "hsa",
+        "529", "brokerage", "mutual fund", "etf",
+    ):
+        return "Investments"
+
+    # Balance-driven investment heuristic (RIDVAN_REQUESTS.md item 6):
+    # a funded account with zero transactions is treated as an investment/holding
+    # account (its balance changes without transactions).  We require a
+    # meaningful balance so that empty/dormant chequing accounts aren't swept in.
+    balance = acct.get("balance_current")
+    if balance is None:
+        balance = acct.get("balance_available")
+    try:
+        balance_val = abs(float(balance)) if balance is not None else 0.0
+    except (TypeError, ValueError):
+        balance_val = 0.0
+    if txn_count == 0 and balance_val >= 1000.0:
+        return "Investments"
+
+    # Savings is folded into Cash (Ridvan's request): chequing/checking, savings,
+    # CDs, money-market and everyday cash all live in the single "Cash" tier.
+    return "Cash"
+
+
+def _get_accounts_by_category(user_id: Optional[str] = None) -> dict:
+    """Return non-duplicate bank accounts grouped by CATEGORY then OWNER.
+
+    Shape::
+
+        {
+          "Cash": {
+             "accounts": [...],            # flat list (all owners)
+             "owners": {"Ridvan": [...], "Dollar": [...]},  # owner → accounts
+             "count": int,
+          },
+          "Debts": {...},
+          ...
+        }
+
+    Categories are ordered Cash → Savings → Investments → Debts and only
+    non-empty categories are returned.  Owner sub-grouping uses ``owner_label``
+    (SimpleFIN org name); accounts with no owner label are grouped under the
+    connection's institution name as a sensible fallback.
+    (Implements RIDVAN_REQUESTS.md items 2 — group by account/category — and
+    3 — owner separation.)
+    """
+    grouped = _get_accounts_grouped(user_id)
+
+    # Pre-compute per-account transaction counts for the investment heuristic.
+    txn_counts: dict = {}
+    conn = get_db(_db_path())
+    try:
+        for row in conn.execute(
+            "SELECT bank_account_id AS id, COUNT(*) AS n"
+            "  FROM transactions GROUP BY bank_account_id"
+        ).fetchall():
+            txn_counts[row["id"]] = row["n"]
+    except Exception:
+        txn_counts = {}
+    finally:
+        conn.close()
+
+    categories: dict = {}
+    for inst_name, data in (grouped or {}).items():
+        for acct in data.get("accounts", []):
+            txn_count = txn_counts.get(acct.get("id"), 0)
+            cat = _account_category(acct, txn_count=txn_count)
+            # Owner fallback: SimpleFIN org label → else institution name.
+            owner = acct.get("owner_label") or inst_name or "Other"
+
+            bucket = categories.setdefault(
+                cat, {"accounts": [], "owners": {}, "count": 0}
+            )
+            bucket["accounts"].append(acct)
+            bucket["owners"].setdefault(owner, []).append(acct)
+            bucket["count"] += 1
+
+    # Return categories in the canonical order, dropping empty ones.
+    ordered: dict = {}
+    for label in _CATEGORY_ORDER:
+        if label in categories:
+            ordered[label] = categories.pop(label)
+    # Any unexpected categories trail at the end (defensive).
+    for label, bucket in categories.items():
+        ordered[label] = bucket
+    return ordered
+
+
+def _compute_net_worth(grouped: dict, home_currency: str = "CAD", txn_counts: Optional[dict] = None) -> dict:
     """Compute a net-worth summary across the supplied grouped accounts (#322).
 
-    Plaid balance convention used here:
-      * depository / investment / loan account balances are taken as-is
-        (positive numbers represent money the user owns).
-      * credit-card balances are returned as positive amounts owed; we
-        negate them so they reduce net worth.
+    Liability detection (RIDVAN_REQUESTS.md items 5 & 6):
+      We check ``inferred_type`` first (populated by infer_account_type() in
+      server.main from account names), then fall back to the provider ``type``.
+      This fixes SimpleFIN accounts which are all typed ``"depository"`` by the
+      provider even when they are credit cards or mortgages.
+
+    Balance sign conventions:
+      * depository → positive (asset)
+      * credit / loan → NEGATIVE liability (balance represents amount owed)
+      * investment → positive (asset, but in its own category)
+
+    Investment detection (RIDVAN_REQUESTS.md item 6):
+      Accounts with ``inferred_type == "investment"`` or provider
+      ``type == "investment"`` go into the Investments bucket.
 
     Returns::
 
@@ -1374,25 +1577,41 @@ def _compute_net_worth(grouped: dict, home_currency: str = "CAD") -> dict:
     When accounts hold currencies other than ``home_currency`` we surface
     a per-currency breakdown rather than silently mis-summing them.
     """
-    asset_subtypes = {
-        "chequing": "Chequing",
-        "checking": "Chequing",
-        "savings":  "Savings",
-        "cd":       "Savings",
-        "money market": "Savings",
-    }
+    # Per-account transaction counts drive the balance-driven investment
+    # heuristic inside _account_category (a funded account with zero txns is
+    # treated as an investment/holding).  Passed in by the caller so the Net
+    # Worth summary and the Accounts listing below it use identical inputs.
+    _txn_counts = txn_counts or {}
+
+    def _effective_type(acct: dict) -> str:
+        """Return the effective account type, preferring inferred_type over type.
+
+        SimpleFIN hardcodes type=\"depository\" for all accounts.  inferred_type
+        is populated by infer_account_type() in server.main from the account name
+        (e.g. \"RBC Rewards+ Visa\" → \"credit\").  We prefer inferred_type when it
+        exists and differs from the generic \"depository\" fallback.
+        (See RIDVAN_REQUESTS.md items 5 & 6.)
+        """
+        inferred = (acct.get("inferred_type") or "").lower()
+        provider = (acct.get("type") or "").lower()
+        # Use inferred only when it resolved to something more specific.
+        if inferred and inferred != "depository":
+            return inferred
+        return provider or "depository"
 
     def categorise(acct: dict) -> str:
-        """Return a coarse bucket label for a single bank_account row."""
-        t = (acct.get("type") or "").lower()
-        s = (acct.get("subtype") or "").lower()
-        if t == "credit":
-            return "Credit Cards"
-        if t == "loan":
-            return "Loans"
-        if t == "investment" or s in ("401k", "403b", "ira", "roth", "tfsa", "rrsp", "brokerage"):
-            return "Investments"
-        return asset_subtypes.get(s, "Cash")
+        """Return a coarse bucket label for a single bank_account row.
+
+        Delegates to the SAME categorizer used by the Accounts listing section
+        (``_account_category``) so the Net Worth summary and the account list
+        below it always agree on which bucket an account belongs to
+        (Cash / Savings / Investments / Debts).  Previously this used a
+        divergent rule set (subtype-only savings, no name-keyword or
+        balance-driven heuristics, and split Debts into Credit Cards/Loans),
+        which made the two sections look different for the same accounts.
+        """
+        tc = int((_txn_counts or {}).get(acct.get("id"), 0))
+        return _account_category(acct, txn_count=tc)
 
     buckets: dict = {}              # label -> {total, count, currencies}
     by_currency: dict = {}          # currency -> {assets, liabilities, net}
@@ -1407,8 +1626,12 @@ def _compute_net_worth(grouped: dict, home_currency: str = "CAD") -> dict:
                 continue  # never synced — skip
             has_data = True
             currency = (acct.get("currency") or home_currency).upper()
-            is_liability = (acct.get("type") or "").lower() == "credit"
-            # Net-worth sign: credit cards reduce net worth.
+            # Liability detection: credit cards and loans have NEGATIVE net worth.
+            # We use _effective_type() which respects inferred_type from account
+            # names — this fixes SimpleFIN accounts typed as generic "depository".
+            effective_t = _effective_type(acct)
+            is_liability = effective_t in ("credit", "loan")
+            # Net-worth sign: liabilities reduce net worth.
             value = -float(balance) if is_liability else float(balance)
             label = categorise(acct)
 
@@ -1424,8 +1647,9 @@ def _compute_net_worth(grouped: dict, home_currency: str = "CAD") -> dict:
                 c["assets"] += float(balance)
             c["net"] = c["assets"] - c["liabilities"]
 
-    # Stable ordering: Cash, Savings, Investments, Credit Cards, Loans
-    order = ["Cash", "Savings", "Investments", "Credit Cards", "Loans"]
+    # Stable ordering matches the Accounts listing section: Cash, Investments,
+    # then the two separate liability buckets Credit Cards and Debts.
+    order = ["Cash", "Investments", "Credit Cards", "Debts"]
     breakdown = []
     for label in order:
         if label in buckets:
@@ -1434,7 +1658,7 @@ def _compute_net_worth(grouped: dict, home_currency: str = "CAD") -> dict:
                 "label": label,
                 "total": b["total"],
                 "count": b["count"],
-                "is_liability": label in ("Credit Cards", "Loans"),
+                "is_liability": label in ("Credit Cards", "Debts"),
             })
     # Any unknown buckets (e.g. a new Plaid subtype) trail at the end.
     for label, b in buckets.items():
@@ -1450,18 +1674,35 @@ def _compute_net_worth(grouped: dict, home_currency: str = "CAD") -> dict:
     home_currency_upper = home_currency.upper()
 
     if not mixed and (home_currency_upper in currencies or not currencies):
-        # All balances are in the user's home currency — safe to sum.
+        # All balances are in the user's home currency — safe to sum directly.
         c = by_currency.get(home_currency_upper, {"assets": 0.0, "liabilities": 0.0})
         assets = c["assets"]
         liabilities = c["liabilities"]
         net = assets - liabilities
     else:
-        # Mixed currencies — the headline number is the home-currency slice
-        # only.  The template surfaces a hint when other currencies exist.
-        c = by_currency.get(home_currency_upper, {"assets": 0.0, "liabilities": 0.0})
-        assets = c["assets"]
-        liabilities = c["liabilities"]
+        # Mixed currencies: convert every foreign currency to home currency
+        # using live FX rates (cached <24h in fx_rates table).  Fall back to
+        # home-currency-only slice if a rate cannot be fetched.
+        assets = 0.0
+        liabilities = 0.0
+        fx_ok = True
+        for cur, c in by_currency.items():
+            if cur == home_currency_upper:
+                assets += c["assets"]
+                liabilities += c["liabilities"]
+            else:
+                rate = _get_or_fetch_fx_rate(cur, home_currency_upper)
+                if rate is None:
+                    fx_ok = False  # couldn't convert — degrade gracefully
+                    logging.getLogger(__name__).warning(
+                        "_compute_net_worth: no FX rate %s→%s, skipping %s",
+                        cur, home_currency_upper, cur,
+                    )
+                else:
+                    assets += c["assets"] * rate
+                    liabilities += c["liabilities"] * rate
         net = assets - liabilities
+        mixed = mixed and not fx_ok  # hide the fx hint once we've converted
 
     return {
         "home_currency": home_currency_upper,
@@ -1473,6 +1714,55 @@ def _compute_net_worth(grouped: dict, home_currency: str = "CAD") -> dict:
         "mixed_currency": mixed,
         "has_data": has_data,
     }
+
+
+def _get_or_fetch_fx_rate(base: str, quote: str) -> float | None:
+    """Return a live (or cached <24h) FX rate: 1 base = X quote.
+
+    Checks the fx_rates DB table first; if stale or missing, fetches from
+    the Frankfurter API (free, no key needed: api.frankfurter.app).
+    Returns None on any failure so callers can fall back gracefully.
+    """
+    if base == quote:
+        return 1.0
+    try:
+        db = get_db(_db_path())
+        try:
+            now = int(time.time())
+            row = db.execute(
+                "SELECT rate, fetched_at FROM fx_rates WHERE base=? AND quote=?",
+                (base, quote),
+            ).fetchone()
+            if row and (now - row["fetched_at"]) < 86400:  # <24h — reuse
+                return float(row["rate"])
+        finally:
+            db.close()
+    except Exception:
+        pass
+    # Fetch fresh rate from Frankfurter (ECB-sourced, free, no key)
+    try:
+        url = f"https://api.frankfurter.app/latest?from={base}&to={quote}"
+        req = urllib.request.Request(url, headers={"User-Agent": "friday-budgeting-pro/1.0"})
+        with urllib.request.urlopen(req, timeout=8) as resp:
+            data = json.loads(resp.read().decode())
+        rate = float(data["rates"][quote])
+        # Persist in fx_rates table
+        try:
+            db2 = get_db(_db_path())
+            try:
+                db2.execute(
+                    "INSERT OR REPLACE INTO fx_rates (base, quote, rate, fetched_at) VALUES (?,?,?,?)",
+                    (base, quote, rate, int(time.time())),
+                )
+                db2.commit()
+            finally:
+                db2.close()
+        except Exception:
+            pass
+        return rate
+    except Exception as exc:
+        logging.getLogger(__name__).warning("FX rate fetch failed %s→%s: %s", base, quote, exc)
+        return None
 
 
 def _get_home_currency(uid: Optional[str]) -> str:
@@ -1496,14 +1786,40 @@ def _get_home_currency(uid: Optional[str]) -> str:
 
 @app.get("/accounts", response_class=HTMLResponse)
 def accounts_get(request: Request):
-    """Accounts page — bank accounts grouped by institution with balances (#158)."""
+    """Accounts page — bank accounts grouped by CATEGORY then OWNER.
+
+    Primary layout (RIDVAN_REQUESTS.md items 2 & 3): accounts are grouped into
+    top-level categories (Cash / Savings / Investments / Debts) and, within each
+    category, sub-grouped by owner (SimpleFIN org label, falling back to the
+    institution name).  Liabilities (credit cards + mortgages/loans) land in the
+    Debts category and are shown with negative balances.
+
+    ``grouped_accounts`` (by institution) is still passed for the per-connection
+    actions (Copy token / Disconnect) and the syncing placeholders.
+    """
     if not _is_authenticated(request):
         return _redirect("/login")
     uid = _current_user_id(request)
     grouped = _get_accounts_grouped(uid)
+    categorized = _get_accounts_by_category(uid)
     home_currency = _get_home_currency(uid)
+    # Per-account txn counts so the Net Worth summary uses the same
+    # balance-driven investment heuristic as the Accounts listing below it.
+    _nw_txn_counts: dict = {}
     try:
-        net_worth = _compute_net_worth(grouped, home_currency=home_currency)
+        _nwc = get_db(_db_path())
+        try:
+            for _r in _nwc.execute(
+                "SELECT bank_account_id AS id, COUNT(*) AS n"
+                "  FROM transactions GROUP BY bank_account_id"
+            ).fetchall():
+                _nw_txn_counts[_r["id"]] = _r["n"]
+        finally:
+            _nwc.close()
+    except Exception:
+        _nw_txn_counts = {}
+    try:
+        net_worth = _compute_net_worth(grouped, home_currency=home_currency, txn_counts=_nw_txn_counts)
     except Exception:
         net_worth = None
     return templates.TemplateResponse(
@@ -1512,6 +1828,7 @@ def accounts_get(request: Request):
         {
             "current_page": "accounts",
             "grouped_accounts": grouped,
+            "categorized_accounts": categorized,
             "net_worth": net_worth,
             "reauth_connections": _get_reauth_connections(uid),
         },
@@ -1638,10 +1955,25 @@ def settings_get(request: Request):
     conn = get_db(_db_path())
     try:
         row = conn.execute(
-            "SELECT home_currency, timezone FROM users WHERE id = ?", (uid,)
+            "SELECT home_currency, timezone, sync_window_days, classify_batch_size, "
+            "classifier_model FROM users WHERE id = ?",
+            (uid,),
         ).fetchone()
         home_currency = row["home_currency"] if row and row["home_currency"] else "CAD"
         timezone = row["timezone"] if row and row["timezone"] else "America/Toronto"
+        sync_window_days = (
+            row["sync_window_days"] if row and row["sync_window_days"] is not None else 90
+        )
+        classify_batch_size = (
+            row["classify_batch_size"]
+            if row and row["classify_batch_size"] is not None
+            else 50
+        )
+        classifier_model = (
+            row["classifier_model"]
+            if row and row["classifier_model"]
+            else "claude-3-5-haiku-20241022"
+        )
     finally:
         conn.close()
     saved = request.query_params.get("saved") == "1"
@@ -1659,6 +1991,9 @@ def settings_get(request: Request):
             "currencies": _VALID_CURRENCIES,
             "timezone": timezone,
             "timezones": _VALID_TIMEZONES,
+            "sync_window_days": sync_window_days,
+            "classify_batch_size": classify_batch_size,
+            "classifier_model": classifier_model,
             "saved": saved,
             "rules": rules,
             "reauth_connections": _get_reauth_connections(uid),
@@ -1676,6 +2011,10 @@ async def settings_post(request: Request):
     home_currency = (form.get("home_currency") or "").strip().upper()
     # timezone is optional in the form: if not submitted keep the existing value
     submitted_tz = (form.get("timezone") or "").strip()
+    # Sync-safety settings (#270) — optional in the form.
+    submitted_window = (form.get("sync_window_days") or "").strip()
+    submitted_batch = (form.get("classify_batch_size") or "").strip()
+    submitted_model = (form.get("classifier_model") or "").strip()
 
     # Load current values for fallback + error re-render
     conn = get_db(_db_path())
@@ -1698,6 +2037,48 @@ async def settings_post(request: Request):
     if not timezone:
         errors.append("Timezone must not be empty.")
 
+    # Sync-safety validation: keep existing value when field not submitted.
+    sync_window_days = 90
+    classify_batch_size = 50
+    classifier_model = "claude-3-5-haiku-20241022"
+    _conn_cur = get_db(_db_path())
+    try:
+        _cur_row = _conn_cur.execute(
+            "SELECT sync_window_days, classify_batch_size, classifier_model "
+            "FROM users WHERE id = ?",
+            (uid,),
+        ).fetchone()
+        if _cur_row:
+            if _cur_row["sync_window_days"] is not None:
+                sync_window_days = int(_cur_row["sync_window_days"])
+            if _cur_row["classify_batch_size"] is not None:
+                classify_batch_size = int(_cur_row["classify_batch_size"])
+            if _cur_row["classifier_model"]:
+                classifier_model = _cur_row["classifier_model"]
+    finally:
+        _conn_cur.close()
+
+    if submitted_window:
+        try:
+            _w = int(submitted_window)
+            if _w < 1 or _w > 3650:
+                errors.append("Sync window (days) must be between 1 and 3650.")
+            else:
+                sync_window_days = _w
+        except ValueError:
+            errors.append("Sync window (days) must be a whole number.")
+    if submitted_batch:
+        try:
+            _b = int(submitted_batch)
+            if _b < 1 or _b > 1000:
+                errors.append("Classify batch size must be between 1 and 1000.")
+            else:
+                classify_batch_size = _b
+        except ValueError:
+            errors.append("Classify batch size must be a whole number.")
+    if submitted_model:
+        classifier_model = submitted_model
+
     if errors:
         return templates.TemplateResponse(
             request,
@@ -1708,6 +2089,9 @@ async def settings_post(request: Request):
                 "currencies": _VALID_CURRENCIES,
                 "timezone": current_tz,
                 "timezones": _VALID_TIMEZONES,
+                "sync_window_days": sync_window_days,
+                "classify_batch_size": classify_batch_size,
+                "classifier_model": classifier_model,
                 "saved": False,
                 "error": " ".join(errors),
                 "reauth_connections": _get_reauth_connections(uid),
@@ -1716,8 +2100,16 @@ async def settings_post(request: Request):
     conn = get_db(_db_path())
     try:
         conn.execute(
-            "UPDATE users SET home_currency = ?, timezone = ? WHERE id = ?",
-            (home_currency, timezone, uid),
+            "UPDATE users SET home_currency = ?, timezone = ?, sync_window_days = ?, "
+            "classify_batch_size = ?, classifier_model = ? WHERE id = ?",
+            (
+                home_currency,
+                timezone,
+                sync_window_days,
+                classify_batch_size,
+                classifier_model,
+                uid,
+            ),
         )
         conn.commit()
     finally:
@@ -2295,8 +2687,24 @@ def ledger_items_delete(request: Request, ledger_id: str, item_id: str):
 # ── /link/start ──────────────────────────────────────────────────────────────
 
 
-@app.get("/link/start")
+@app.get("/link/start", response_class=HTMLResponse)
 def link_start(request: Request, back: Optional[str] = None):
+    """Show the connector chooser: Plaid (hosted Link) or SimpleFIN (open banking).
+
+    Previously this route went straight to Plaid; it now renders a chooser so
+    users can pick their connector.  The Plaid path lives at /link/plaid/start.
+    """
+    if not _is_authenticated(request):
+        return _redirect("/login")
+    return templates.TemplateResponse(
+        request,
+        "link_choose.html",
+        {"current_page": "accounts", "back_url": back or "/accounts"},
+    )
+
+
+@app.get("/link/plaid/start")
+def link_plaid_start(request: Request, back: Optional[str] = None):
     """Generate a Plaid link token and redirect to /link?token=..."""
     if not _is_authenticated(request):
         return _redirect("/login")
@@ -2310,6 +2718,86 @@ def link_start(request: Request, back: Optional[str] = None):
     token = url.split("token=", 1)[1]
     back_param = f"&back={back}" if back else ""
     return _redirect(f"/link?token={token}{back_param}")
+
+
+# ── /link/simplefin ──────────────────────────────────────────────────────────────────────────
+
+
+@app.get("/link/simplefin/start", response_class=HTMLResponse)
+def link_simplefin_start(request: Request, back: Optional[str] = None):
+    """Render the SimpleFIN Setup Token paste form.
+
+    Unlike Plaid (which redirects to a hosted Link flow), SimpleFIN asks the
+    user to visit the SimpleFIN Bridge, copy their Setup Token, and paste it
+    here.  No server-side action is needed before showing this page.
+    """
+    if not _is_authenticated(request):
+        return _redirect("/login")
+    return templates.TemplateResponse(
+        request,
+        "simplefin_link.html",
+        {
+            "current_page": "accounts",
+            "complete_url": "/link/simplefin/complete",
+            "back_url": back or "/accounts",
+        },
+    )
+
+
+@app.post("/link/simplefin/complete")
+async def link_simplefin_complete(request: Request):
+    """Receive the SimpleFIN Setup Token, exchange it for an Access URL, and store.
+
+    The user submits the paste form from /link/simplefin/start.  This handler
+    calls ``complete_simplefin_link`` to exchange the token and create the
+    ``bank_connections`` row, then redirects to /accounts.
+    """
+    if not _is_authenticated(request):
+        return _redirect("/login")
+
+    form = await request.form()
+    setup_token = (form.get("setup_token") or "").strip()
+    institution_name = (form.get("institution_name") or "").strip() or None
+
+    if not setup_token:
+        return _redirect("/accounts?error=missing_setup_token")
+
+    try:
+        import server.main as _sm_sf
+
+        result = _sm_sf.complete_simplefin_link(
+            setup_token=setup_token,
+            institution_name=institution_name,
+        )
+    except Exception as exc:  # noqa: BLE001
+        logging.getLogger(__name__).error("complete_simplefin_link failed: %s", exc)
+        return templates.TemplateResponse(
+            request,
+            "simplefin_link.html",
+            {
+                "current_page": "accounts",
+                "complete_url": "/link/simplefin/complete",
+                "back_url": "/accounts",
+                "error": f"Unexpected error: {exc}",
+            },
+            status_code=500,
+        )
+
+    if result.get("status") != "ok":
+        # Re-render the form with the error so the user can retry.
+        return templates.TemplateResponse(
+            request,
+            "simplefin_link.html",
+            {
+                "current_page": "accounts",
+                "complete_url": "/link/simplefin/complete",
+                "back_url": "/accounts",
+                "error": result.get("message", "Could not connect SimpleFIN account."),
+            },
+            status_code=400,
+        )
+
+    return _redirect("/accounts?linked=1")
 
 
 # ── /link ─────────────────────────────────────────────────────────────────────

@@ -209,15 +209,22 @@ Full schema lives in `db/schema.sql` (source of truth). Summary:
 | `routing_rules` | Legacy substring rules — kept for compat, no new writes |
 | `fx_rates` | Exchange rate cache (base/quote/rate, refresh if >24h old) |
 | `sync_cursors` | Plaid incremental sync cursors per connection |
+| `mortgage_accounts` | Per-mortgage loan detail (balance, rate, escrow, YTD principal/interest, maturity) used to split payments (#271) |
 | `app_config` | Single-row: home_currency, timezone, password hash, notification channel |
 | `notifications` | In-app notification log |
 | `auto_promoted_rules_log` | Audit trail for auto-promoted routing rules |
 
 ### bank_accounts key fields
 - `currency` — native currency (from Plaid)
-- `balance_current`, `balance_available` — from last sync
+- `balance_current`, `balance_available` — from last sync (updated on EVERY sync, even balance-only)
 - `description` — user-set context for classifier
 - `default_ledger_id` — route transactions from this account to this ledger by default
+- `owner_label` — org/institution label from SimpleFIN `org.name` (or `org.domain`); used to
+  separate accounts by owner in the UI (e.g. "Ridvan" vs "Dollar" — RIDVAN_REQUESTS.md item 3)
+- `inferred_type` — account type inferred from the account name when the provider returns a generic
+  type (SimpleFIN hardcodes `depository` for everything).  Values: `credit | loan | investment | depository`.
+  See `infer_account_type()` in `server/main.py`.  Used by `_compute_net_worth()` and the accounts
+  UI to correctly sign liabilities (credit/loan → negative) and categorise investments separately.
 
 ### ledgers key fields
 - `type` — `personal | property | investment`
@@ -294,14 +301,29 @@ tool calls; nothing new is required from the UI.
 - `list_ledgers()` — returns `id`, `name`, `type`, `description`, and `items` for each ledger
 - `get_ledger(ledger_id, period?)` — returns full ledger tree: metadata, all line items with per-item totals, and the transactions classified to each item; `period` is `"this_month"` (default), `"last_month"`, `"this_year"`, or `None` for all time
 - `add_ledger(name)` — creates a generic personal ledger
-- `create_property_ledger(name, description?)` — creates a `property` ledger seeded with 6 default line items (Rent income, Mortgage, Property tax, Maintenance & repairs, Insurance, Utilities)
+- `create_property_ledger(name, description?)` — creates a `property` ledger seeded with 9 default line items.  The mortgage is broken into its own **sub-category group** (#271) so payments split into principal/interest/escrow instead of a single flat line: Rent income, Mortgage – Principal, Mortgage – Interest, Mortgage – Property tax (escrow), Mortgage – Insurance (escrow), Property tax, Maintenance & repairs, Insurance, Utilities
+- `get_mortgage_details(account_id)` / `preview_mortgage_split(account_id, payment_amount)` — surface stored mortgage detail and preview how a payment splits (method: `ytd_ratio` → `amortization` → `fallback`) (#271)
 - `create_investment_ledger(name)` — creates an `investment` ledger seeded with 2 default line items (Contributions, Dividends & Returns)
 - `add_line_item(ledger_id, name, item_type)` — `item_type` is `income`, `expense`, or `savings`
 - `remove_line_item(id)`
 - `set_account_ledger(account_id, ledger_id)` — routes transactions from a bank account to a specific ledger by default
 
 ### Transactions
-- `sync()` → pull from Plaid, classify, return summary
+- `sync(classify=True, window_days=None, big_pull_threshold=200)` → pull new
+  transactions, classify, return summary.  **Sync safety (#270):**
+  - `window_days` bounds how far back transactions are ingested; `None` uses the
+    active user's `sync_window_days` setting (default **90**; `0` = no window).
+    Transactions older than `today - window_days` are skipped and counted in
+    `windowed_out`.
+  - Classification is **batched** to the per-user `classify_batch_size`
+    (default **50**) so one sync never fires an unbounded number of serial LLM
+    calls.  Remaining work is reported via `pending_remaining`; the UI loops
+    batches and the user can Sync again to finish.
+  - When `added >= big_pull_threshold` the result sets `big_pull=True` and a
+    human-readable `warning` (surfaced in the dashboard progress log).
+  - Classification runs on a cheaper model via the per-user `classifier_model`
+    setting (default `claude-3-5-haiku-20241022`), threaded through
+    `classify_transaction(..., model=)` → `llm.chat(..., model=)`.
 - `list(filters)` → query transactions
 - `get_needs_review()` → ambiguous ones HAL should ask about
 - `route(transaction_id, allocations[])` → manual or HAL-driven routing
@@ -334,7 +356,51 @@ That's the whole API. ~15 tools.
 
 ---
 
+## Bank Connectors (provider abstraction)
+
+All bank integrations implement the `BankProvider` ABC in
+`server/providers/base.py`. Concrete providers:
+
+| Provider | Module | Flow | Connect artifact |
+|---|---|---|---|
+| **Plaid** | `server/providers/plaid.py` | Hosted **Plaid Link** JS widget | `public_token` → exchanged for a per-item `access_token` |
+
+Plaid-shaped dicts**, so the DB-upsert code in `server.main.sync()` works
+unchanged. Only *provider selection* branches on
+
+### Storage
+
+  x_api_key, instance) + merged `.env` fallback.
+  `plaid_access_token_encrypted` column (NOT NULL) for schema compatibility.
+  has no opaque cursor); each sync returns a point-in-time snapshot so
+  `modified`/`removed` are always empty.
+
+### UI
+
+`/link/start` renders a **connector chooser** (`link_choose.html`). Plaid →
+
+---
+
 ## Sync Pipeline
+
+### Balance-only sync (Account Overhaul 2026-10-17)
+
+The sync loop in `server.main.sync()` **always** upserts account rows and
+updates `balance_current`, `balance_available`, `inferred_type`, and
+`owner_label` from the provider response — **even when no new transactions
+are returned** (`added == []`).  This is critical for:
+
+- **Investment accounts**: market-value balances drift daily without any
+  transaction activity.
+- **Mortgage accounts**: outstanding principal decreases with each payment,
+  but the SimpleFIN balance feed may not carry transaction detail.
+- **Routine net-worth accuracy**: `_compute_net_worth()` reads
+  `balance_current` directly, so a balance refresh immediately updates the
+  net-worth card on the accounts page.
+
+The `owner_label` column uses `COALESCE(?, owner_label)` in the UPDATE
+so an existing non-NULL value is preserved if the provider returns NULL
+(prevents Plaid syncs from erasing SimpleFIN owner labels).
 
 The `sync()` MCP tool executes the full pipeline (including classification)
 automatically. The UI `/api/sync` route runs sync and classification as two
@@ -506,6 +572,59 @@ so it can run as a pre-pass without touching `classifier.py`.
   Fidelity, Schwab.
 - Used by callers that want to tag investment outflows as `savings` rather than
   `spending`.
+
+**`infer_account_type(name, current_type)`** — Account Overhaul (2026-10-17)
+- Infers the correct account type from the account **name** when the provider
+  returns a generic type.  SimpleFIN hardcodes `"depository"` for all accounts;
+  this function uses name heuristics to detect the real type.
+- Rules (first match wins):
+  1. Trust non-generic provider type (Plaid gives real types — if `current_type`
+     is not `depository` or `None`, return it as-is).
+  2. Credit-card keywords (`visa`, `mastercard`, `amex`, `american express`,
+     `credit card`) → `"credit"`.
+  3. Mortgage/loan keywords (`mortgage`, `loan`, `credit line`, `line of credit`,
+     `heloc`) → `"loan"`.
+  4. Investment keywords (`wealthsimple`, `questrade`, `rrsp`, `tfsa`, `fhsa`,
+     `invest`, `brokerage`, `portfolio`, `rbc direct`) → `"investment"`.
+  5. Fall back to `current_type` or `"depository"`.
+- Result is stored in `bank_accounts.inferred_type` (written on every sync).
+- `_compute_net_worth()` in `ui/server.py` and the accounts template use
+  `inferred_type` so credit cards and mortgages are treated as negative liabilities
+  and investments get their own bucket.
+
+### Mortgage Detail & Payment Splitting (#271)
+
+Mortgages are modelled as a **sub-category group inside each property ledger**
+(not a standalone Debts ledger) so a payment splits into principal / interest /
+escrow instead of a single flat "Mortgage" line.
+
+**Data pull.** On each sync, Plaid connections call
+`PlaidProvider.get_liabilities(access_token)` (`/liabilities/get`). This is
+best-effort: a liabilities failure (`PRODUCTS_NOT_SUPPORTED`, `PRODUCT_NOT_READY`,
+etc.) is swallowed and never breaks a transaction sync. Each mortgage is
+normalised into internal field names and persisted to `mortgage_accounts` via
+`upsert_mortgage_account(account_id, detail, ledger_id)`. Partial updates (e.g. a
+SimpleFIN balance-only refresh) only overwrite the keys present, so richer Plaid
+detail is preserved. `outstanding_principal` is taken from the account's current
+balance; the rest (rate, origination/maturity dates, next/last payment, escrow,
+YTD principal/interest, property address, loan term/type) come from Plaid.
+
+**Payment split.** `split_mortgage_payment(payment_amount, mortgage)` returns
+`{principal, interest, escrow_tax, escrow_insurance, method}` using the best
+available signal, in priority order:
+1. **`ytd_ratio`** — apportion by Plaid's `ytd_interest_paid` / `ytd_principal_paid`
+   ratio (most accurate; reflects the lender's own accounting).
+2. **`amortization`** — interest = `outstanding_principal × (rate/12)`;
+   principal = payment − interest.
+3. **`fallback`** — everything to principal when no rate/YTD data exists, so no
+   money is lost or invented.
+Escrow is only apportioned when a clear escrow signal exists (escrow balance +
+scheduled payment materially above implied P+I); otherwise escrow is 0.
+
+**Tools.** `get_mortgage_details(account_id)` returns the stored row;
+`preview_mortgage_split(account_id, payment_amount)` previews a split without
+writing. Both are MCP tools so chat and the UI can display a mortgage's full
+picture.
 
 ---
 
@@ -707,10 +826,18 @@ the DB (a future operation, not a v0.1 feature).
 
 **Accounts** (`/accounts`) — stub page (#158 will implement full accounts management)
 
-**Settings** (`/settings`) — app + user settings (#159, #161)
+**Settings** (`/settings`) — app + user settings (#159, #161, #270)
 - **Home Currency** — ISO 4217 selector (CAD, USD, EUR, GBP); used for totals and reports
 - **Timezone** — IANA timezone selector (America/Toronto, UTC, etc.); used for
   date-boundary queries ("this month") and as a hint for the UI's JS renderer
+- **Sync window (days)** — `sync_window_days` (default 90, range 1–3650).  Max age
+  of transactions pulled per sync; older ones are skipped.
+- **Classify batch size** — `classify_batch_size` (default 50, range 1–1000).  Max
+  transactions auto-classified per batch; keeps big pulls from hanging.
+- **Classifier model** — `classifier_model` (default `claude-3-5-haiku-20241022`).
+  Cheaper/faster model used only for transaction classification.
+- Settings persist as columns on the `users` row and are read/written via the
+  `get_setting` / `set_setting` MCP tools and the `/settings` form.
 - All timestamps in the DB are stored as UTC Unix seconds.  The UI renders
   them client-side via `<span class="datetime-local" data-utc="<int>">` elements
   and a small JS snippet in `base.html` that calls `new Date(ts*1000).toLocaleString()`.

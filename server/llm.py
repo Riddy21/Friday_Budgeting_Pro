@@ -167,7 +167,11 @@ def _openclaw_model() -> str:
 # ---------------------------------------------------------------------------
 
 
-def chat(messages: list[dict], temperature: float = 0.0) -> str:
+def chat(
+    messages: list[dict],
+    temperature: float = 0.0,
+    model: str | None = None,
+) -> str:
     """Send *messages* to the LLM and return the response text.
 
     Tries the OpenClaw local API first; falls back to the direct SDK path
@@ -176,6 +180,10 @@ def chat(messages: list[dict], temperature: float = 0.0) -> str:
     Args:
         messages: A list of ``{"role": ..., "content": ...}`` dicts.
         temperature: Sampling temperature (0.0 = deterministic).
+        model: Optional model override.  When provided it takes precedence over
+            the ``OPENCLAW_LLM_MODEL`` env default on both the OpenClaw and SDK
+            paths.  Used by the classifier to run on a cheaper/dumber model so
+            bulk classification does not burn an expensive model.
 
     Returns:
         The assistant's reply as a plain string.
@@ -187,7 +195,7 @@ def chat(messages: list[dict], temperature: float = 0.0) -> str:
     """
     # --- Primary path: OpenClaw local API ---
     try:
-        return _chat_openclaw(messages, temperature)
+        return _chat_openclaw(messages, temperature, model)
     except (
         urllib.error.URLError,
         urllib.error.HTTPError,
@@ -203,7 +211,7 @@ def chat(messages: list[dict], temperature: float = 0.0) -> str:
         )
 
     # --- Fallback path: Anthropic SDK ---
-    return _chat_sdk_fallback(messages, temperature)
+    return _chat_sdk_fallback(messages, temperature, model)
 
 
 # ---------------------------------------------------------------------------
@@ -215,14 +223,19 @@ class _UnparseableResponseError(Exception):
     """Raised when the OpenClaw response body cannot be parsed."""
 
 
-def _chat_openclaw(messages: list[dict], temperature: float) -> str:
-    """POST to OpenClaw local completions endpoint and parse the reply."""
+def _chat_openclaw(
+    messages: list[dict], temperature: float, model: str | None = None
+) -> str:
+    """POST to OpenClaw local completions endpoint and parse the reply.
+
+    When *model* is provided it overrides the ``OPENCLAW_LLM_MODEL`` default.
+    """
     url = _openclaw_url()
     payload = json.dumps(
         {
             "messages": messages,
             "temperature": temperature,
-            "model": _openclaw_model(),
+            "model": model or _openclaw_model(),
         }
     ).encode()
 
@@ -298,7 +311,9 @@ def _extract_content(data: dict) -> str | None:
 # ---------------------------------------------------------------------------
 
 
-def _chat_sdk_fallback(messages: list[dict], temperature: float) -> str:
+def _chat_sdk_fallback(
+    messages: list[dict], temperature: float, model_override: str | None = None
+) -> str:
     """Call the Anthropic or OpenAI SDK directly.
 
     Resolution order for the provider:
@@ -311,7 +326,7 @@ def _chat_sdk_fallback(messages: list[dict], temperature: float) -> str:
       2. OpenClaw auth-profiles.json (``anthropic:default``)
     """
     provider = os.environ.get("OPENCLAW_LLM_PROVIDER", "").lower()
-    model = os.environ.get("OPENCLAW_LLM_MODEL", "")
+    model = model_override or os.environ.get("OPENCLAW_LLM_MODEL", "")
 
     # Auto-detect provider if not set
     if not provider:

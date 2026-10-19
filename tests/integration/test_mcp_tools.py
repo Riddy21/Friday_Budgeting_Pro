@@ -92,7 +92,7 @@ def test_list_ledgers(db_path, authed_user, monkeypatch):
     """list_ledgers() returns a dict with a 'ledgers' key containing Personal."""
     from server.main import apply_initial_setup, list_ledgers
 
-    monkeypatch.setattr("server.main._register_openclaw_cron", lambda: False)
+    monkeypatch.setattr("server.main._register_openclaw_cron_file", lambda: False)
 
     # Seed the default Personal ledger via apply_initial_setup.
     apply_initial_setup(banks_to_link=[], extra_ledgers=[], hints=[])
