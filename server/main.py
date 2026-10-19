@@ -4152,7 +4152,7 @@ def summary(period: str) -> dict:
             li.name        AS line_item_name,
             l.name         AS ledger_name,
             li.item_type   AS item_type,
-            SUM(te.amount) AS total
+            SUM(COALESCE(te.amount_home, te.amount)) AS total
         FROM transaction_entries te
         JOIN transactions   t  ON t.id  = te.transaction_id
         JOIN line_items     li ON li.id = te.line_item_id
@@ -4171,7 +4171,7 @@ def summary(period: str) -> dict:
         # Compute YTD savings rate (separate query, only needed when period != ytd/year)
         ytd_start = f"{year_str}-01-01"
         ytd_sql = """
-            SELECT li.item_type, SUM(te.amount) AS total
+            SELECT li.item_type, SUM(COALESCE(te.amount_home, te.amount)) AS total
             FROM transaction_entries te
             JOIN transactions   t  ON t.id  = te.transaction_id
             JOIN line_items     li ON li.id = te.line_item_id
@@ -4308,7 +4308,7 @@ def savings_trend(months: int = 12) -> dict:
         SELECT
             substr(t.date, 1, 7)   AS month,
             li.item_type            AS item_type,
-            SUM(te.amount)          AS total
+            SUM(COALESCE(te.amount_home, te.amount)) AS total
         FROM transaction_entries te
         JOIN transactions   t  ON t.id  = te.transaction_id
         JOIN line_items     li ON li.id = te.line_item_id
