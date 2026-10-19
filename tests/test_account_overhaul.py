@@ -726,7 +726,7 @@ class TestAccountCategory:
 
     def test_credit_card_is_debts(self):
         from ui.server import _account_category
-        assert _account_category(self._acct(inferred_type="credit")) == "Debts"
+        assert _account_category(self._acct(inferred_type="credit")) == "Credit Cards"
 
     def test_loan_is_debts(self):
         from ui.server import _account_category
@@ -767,12 +767,12 @@ class TestAccountCategory:
 
     def test_savings_by_name(self):
         from ui.server import _account_category
-        assert _account_category(self._acct(name="RBC High Interest eSavings")) == "Savings"
-        assert _account_category(self._acct(name="Premium Rate Savings")) == "Savings"
+        assert _account_category(self._acct(name="RBC High Interest eSavings")) == "Cash"
+        assert _account_category(self._acct(name="Premium Rate Savings")) == "Cash"
 
     def test_savings_by_subtype(self):
         from ui.server import _account_category
-        assert _account_category(self._acct(subtype="savings")) == "Savings"
+        assert _account_category(self._acct(subtype="savings")) == "Cash"
 
     def test_plain_chequing_is_cash(self):
         from ui.server import _account_category

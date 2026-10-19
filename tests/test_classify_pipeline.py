@@ -84,16 +84,19 @@ def _insert_txn(conn, merchant: str, amount: float = 10.0, pending: int = 0) -> 
     return txn_id
 
 
-def _good_llm_response(line_item_id: str, classification_type: str = "spending") -> str:
-    """Return a well-formed LLM JSON string for a transaction."""
+def _good_llm_response(line_item_id: str, classification_type: str = "spending", transaction_index: int = 0) -> str:
+    """Return a well-formed LLM JSON string for a transaction (batch array format)."""
     return json.dumps(
-        {
-            "rule_id": None,
-            "line_item_id": line_item_id,
-            "classification_type": classification_type,
-            "confidence": 0.95,
-            "reasoning": "mock classification",
-        }
+        [
+            {
+                "transaction_index": transaction_index,
+                "rule_id": None,
+                "line_item_id": line_item_id,
+                "classification_type": classification_type,
+                "confidence": 0.95,
+                "reasoning": "mock classification",
+            }
+        ]
     )
 
 
