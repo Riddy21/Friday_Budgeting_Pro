@@ -1402,6 +1402,26 @@ def _get_accounts_grouped(user_id: Optional[str] = None) -> dict:
                     continue
                 seen_account_ids.add(acct_id)
                 acct_dict = dict(r)
+                # Centralized FX conversion: compute balance_home for all
+                # non-home-currency accounts so templates always have a
+                # CAD-equivalent balance without doing any FX logic themselves.
+                try:
+                    _acct_currency = (acct_dict.get("currency") or "CAD").upper()
+                    _home_cur = "CAD"  # default; could read from user settings
+                    _bal = acct_dict.get("balance_current")
+                    if _bal is not None and _acct_currency != _home_cur:
+                        _rate = _get_or_fetch_fx_rate(_acct_currency, _home_cur)
+                        acct_dict["balance_home"] = (
+                            round(float(_bal) * _rate, 2) if _rate else None
+                        )
+                        acct_dict["balance_home_currency"] = _home_cur
+                    else:
+                        acct_dict["balance_home"] = _bal
+                        acct_dict["balance_home_currency"] = _acct_currency
+                except Exception:
+                    # Never let FX conversion break the accounts page
+                    acct_dict["balance_home"] = acct_dict.get("balance_current")
+                    acct_dict["balance_home_currency"] = (acct_dict.get("currency") or "CAD").upper()
                 grouped[inst]["accounts"].append(acct_dict)
                 # Collect distinct owner_labels for the institution group so the
                 # template can render a per-owner sub-heading when multiple owners
