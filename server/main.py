@@ -712,7 +712,7 @@ def refresh_connection(id: str) -> dict:
     db = get_db(server.paths.DB_PATH)
     try:
         row = db.execute(
-            "SELECT plaid_access_token_encrypted, plaid_env FROM bank_connections WHERE id = ?",
+            "SELECT plaid_access_token_encrypted, plaid_env, user_id FROM bank_connections WHERE id = ?",
             (id,),
         ).fetchone()
     finally:
@@ -723,7 +723,9 @@ def refresh_connection(id: str) -> dict:
             raise ValueError(f"No bank connection found with id={id!r}")
         access_token = server.crypto.decrypt(row["plaid_access_token_encrypted"])
         plaid_env = row["plaid_env"] or os.environ.get("PLAID_ENV", "sandbox")
-        provider = PlaidProvider(env=plaid_env)
+        uid = row["user_id"]
+        cred_client_id, cred_secret, _ = _get_plaid_credentials(uid)
+        provider = PlaidProvider(env=plaid_env, client_id=cred_client_id, secret=cred_secret)
         link_token = provider.create_link_token(access_token=access_token)
     except Exception:
         # Fall back to fresh link token if connection not found, decryption,
@@ -758,7 +760,7 @@ def disconnect(id: str) -> dict:
     db = get_db(server.paths.DB_PATH)
     try:
         row = db.execute(
-            "SELECT plaid_access_token_encrypted, plaid_env " "FROM bank_connections WHERE id = ?",
+            "SELECT plaid_access_token_encrypted, plaid_env, user_id FROM bank_connections WHERE id = ?",
             (id,),
         ).fetchone()
     finally:
@@ -769,7 +771,9 @@ def disconnect(id: str) -> dict:
         try:
             access_token = server.crypto.decrypt(row["plaid_access_token_encrypted"])
             plaid_env = row["plaid_env"] or os.environ.get("PLAID_ENV", "sandbox")
-            provider = PlaidProvider(env=plaid_env)
+            uid = row["user_id"]
+            cred_client_id, cred_secret, _ = _get_plaid_credentials(uid)
+            provider = PlaidProvider(env=plaid_env, client_id=cred_client_id, secret=cred_secret)
             result = provider.remove_item(access_token)
             plaid_revoked = result.get("revoked", False)
         except Exception as exc:  # noqa: BLE001
