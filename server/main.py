@@ -2764,7 +2764,7 @@ def sync(
                             seen_ids = {
                                 _get(a, "account_id") for a in full_accounts
                             }
-                            merged = list(full_accounts)
+                            merged = [*full_accounts]
                             for a in accounts_list:
                                 if _get(a, "account_id") not in seen_ids:
                                     merged.append(a)

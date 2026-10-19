@@ -354,7 +354,7 @@ class TestComputeNetWorth:
         assert "Credit Cards" in labels
 
     def test_loan_bucket_appears_in_breakdown(self):
-        """Loan/mortgage accounts must appear in the Loans breakdown bucket."""
+        """Loan/mortgage accounts must appear in the Debts breakdown bucket."""
         from ui.server import _compute_net_worth
         grouped = self._grouped([
             {"id": "f", "name": "Mortgage", "type": "depository", "inferred_type": "loan",
@@ -362,7 +362,7 @@ class TestComputeNetWorth:
         ])
         nw = _compute_net_worth(grouped)
         labels = [b["label"] for b in nw["breakdown"]]
-        assert "Loans" in labels
+        assert "Debts" in labels  # category renamed from Loans → Debts in account overhaul
 
     def test_mixed_assets_and_liabilities(self):
         """Net worth = assets - liabilities across account types."""
