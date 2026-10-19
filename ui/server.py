@@ -1405,23 +1405,22 @@ def _get_accounts_grouped(user_id: Optional[str] = None) -> dict:
                 # Centralized FX conversion: compute balance_home for all
                 # non-home-currency accounts so templates always have a
                 # CAD-equivalent balance without doing any FX logic themselves.
-                try:
-                    _acct_currency = (acct_dict.get("currency") or "CAD").upper()
-                    _home_cur = "CAD"  # default; could read from user settings
-                    _bal = acct_dict.get("balance_current")
-                    if _bal is not None and _acct_currency != _home_cur:
-                        _rate = _get_or_fetch_fx_rate(_acct_currency, _home_cur)
-                        acct_dict["balance_home"] = (
-                            round(float(_bal) * _rate, 2) if _rate else None
-                        )
-                        acct_dict["balance_home_currency"] = _home_cur
-                    else:
-                        acct_dict["balance_home"] = _bal
-                        acct_dict["balance_home_currency"] = _acct_currency
-                except Exception:
-                    # Never let FX conversion break the accounts page
-                    acct_dict["balance_home"] = acct_dict.get("balance_current")
-                    acct_dict["balance_home_currency"] = (acct_dict.get("currency") or "CAD").upper()
+                _acct_currency = (acct_dict.get("currency") or "CAD").upper()
+                _home_cur = "CAD"  # default home currency
+                _bal = acct_dict.get("balance_current")
+                if _bal is not None and _acct_currency != _home_cur:
+                    # Query FX rate directly from the already-open connection
+                    _fx = conn.execute(
+                        "SELECT rate FROM fx_rates WHERE base=? AND quote=?",
+                        (_acct_currency, _home_cur),
+                    ).fetchone()
+                    acct_dict["balance_home"] = (
+                        round(float(_bal) * _fx["rate"], 2) if _fx else None
+                    )
+                    acct_dict["balance_home_currency"] = _home_cur if _fx else _acct_currency
+                else:
+                    acct_dict["balance_home"] = _bal
+                    acct_dict["balance_home_currency"] = _acct_currency
                 grouped[inst]["accounts"].append(acct_dict)
                 # Collect distinct owner_labels for the institution group so the
                 # template can render a per-owner sub-heading when multiple owners
