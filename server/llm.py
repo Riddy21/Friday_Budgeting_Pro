@@ -194,21 +194,28 @@ def chat(
         Exception: Any unhandled exception from the SDK is propagated.
     """
     # --- Primary path: OpenClaw local API ---
-    try:
-        return _chat_openclaw(messages, temperature, model)
-    except (
-        urllib.error.URLError,
-        urllib.error.HTTPError,
-        TimeoutError,
-        ConnectionError,
-        OSError,
-    ) as exc:
-        logger.warning("OpenClaw local API unreachable (%s); falling back to direct SDK.", exc)
-    except _UnparseableResponseError as exc:
-        logger.warning(
-            "OpenClaw response could not be parsed (%s); falling back to direct SDK.",
-            exc,
-        )
+    # Skip OpenClaw if the request has a system message — the OpenClaw completions
+    # endpoint rejects system-role messages (400) and would route through the
+    # main agent session anyway (producing conversational output, not raw JSON).
+    has_system = any(m.get("role") == "system" for m in messages)
+    if not has_system:
+        try:
+            return _chat_openclaw(messages, temperature, model)
+        except (
+            urllib.error.URLError,
+            urllib.error.HTTPError,
+            TimeoutError,
+            ConnectionError,
+            OSError,
+        ) as exc:
+            logger.warning("OpenClaw local API unreachable (%s); falling back to direct SDK.", exc)
+        except _UnparseableResponseError as exc:
+            logger.warning(
+                "OpenClaw response could not be parsed (%s); falling back to direct SDK.",
+                exc,
+            )
+    else:
+        logger.debug("Skipping OpenClaw path (system message present); using SDK directly.")
 
     # --- Fallback path: Anthropic SDK ---
     return _chat_sdk_fallback(messages, temperature, model)
@@ -364,11 +371,13 @@ def _chat_sdk_fallback(
 def _chat_anthropic(messages: list[dict], temperature: float, model: str) -> str:
     import anthropic  # type: ignore[import]
 
-    # Strip "openclaw/" prefix if the model name came from the OpenClaw path
-    # and fell through to the SDK (e.g. "openclaw/default" is not a real
-    # Anthropic model name).
+    # Strip provider prefixes if the model name came from the OpenClaw path
+    # or from OPENCLAW_LLM_MODEL env var (e.g. "openclaw/default",
+    # "anthropic/claude-haiku-4-5" are not real Anthropic model names).
     if not model or model.startswith("openclaw"):
-        model = "claude-3-5-haiku-20241022"
+        model = "claude-haiku-4-5"
+    elif model.startswith("anthropic/"):
+        model = model[len("anthropic/"):]
 
     # Resolve API key: env var first, then OpenClaw's own credential store.
     api_key = os.environ.get("ANTHROPIC_API_KEY", "") or _anthropic_api_key_from_openclaw()
@@ -387,7 +396,6 @@ def _chat_anthropic(messages: list[dict], temperature: float, model: str) -> str
         model=model,
         max_tokens=1024,
         messages=human_messages,
-        temperature=temperature,
     )
     if system_parts:
         kwargs["system"] = "\n\n".join(system_parts)

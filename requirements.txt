@@ -1,4 +1,5 @@
 # Runtime deps will be added as we build each phase.
+anthropic>=1.0
 fastmcp
 cryptography>=41.0
 keyring>=24.0
