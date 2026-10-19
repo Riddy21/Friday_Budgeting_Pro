@@ -49,9 +49,26 @@
           submitToken(public_token);
         },
         onExit: function(err) {
-          if (err) console.error('Plaid Link error:', err);
-          sessionStorage.removeItem('plaid_link_token');
-          window.location.href = '{{ back_url }}';
+          if (err) {
+            console.error('Plaid Link error:', JSON.stringify(err));
+            // Send error to server for logging
+            fetch('/link/error', {
+              method: 'POST',
+              headers: {'Content-Type': 'application/json'},
+              body: JSON.stringify({error: err}),
+              keepalive: true,
+            }).catch(function(){});
+            // Show to user briefly
+            var msg = (err.display_message || err.error_message || err.error_code || 'Unknown error');
+            document.getElementById('status-text').textContent = 'Plaid error: ' + msg;
+            setTimeout(function() {
+              sessionStorage.removeItem('plaid_link_token');
+              window.location.href = '{{ back_url }}';
+            }, 4000);
+          } else {
+            sessionStorage.removeItem('plaid_link_token');
+            window.location.href = '{{ back_url }}';
+          }
         },
       });
 

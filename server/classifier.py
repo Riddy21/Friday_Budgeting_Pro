@@ -96,7 +96,7 @@ def _strip_markdown_json(raw: str) -> str:
 
 # Maximum prompt character count before splitting into sub-batches.
 # Approximates ~20 000 tokens (chars / 4 ≈ tokens).
-MAX_BATCH_CHARS = 80_000
+MAX_BATCH_CHARS = 15_000  # reduced from 80k to keep prompts small and fast through the proxy
 
 
 def _build_batch_user_msg(

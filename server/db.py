@@ -369,6 +369,9 @@ def init_db(path: str | Path) -> None:
         # "investment") when the provider only returns the generic "depository".
         # See infer_account_type() in server.main (RIDVAN_REQUESTS.md items 5 & 6).
         _add_col_if_missing(conn, "bank_accounts", "inferred_type", "TEXT")
+
+        # Migration: bank_accounts.removed_at (soft-delete)
+        _add_col_if_missing(conn, "bank_accounts", "removed_at", "INTEGER")
         conn.commit()
 
         # Migration: create default user only when there is existing data to migrate

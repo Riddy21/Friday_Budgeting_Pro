@@ -1655,7 +1655,13 @@ def _compute_net_worth(grouped: dict, home_currency: str = "CAD", txn_counts: Op
             label = categorise(acct)
 
             b = buckets.setdefault(label, {"total": 0.0, "count": 0, "currencies": set()})
-            b["total"] += value
+            # Convert foreign-currency balance to home currency for the bucket total.
+            if currency != home_currency.upper():
+                rate = _get_or_fetch_fx_rate(currency, home_currency.upper())
+                bucket_value = value * rate if rate else value  # fall back to raw if rate missing
+            else:
+                bucket_value = value
+            b["total"] += bucket_value
             b["count"] += 1
             b["currencies"].add(currency)
 
@@ -2844,6 +2850,23 @@ def link_get(request: Request, token: Optional[str] = None, back: Optional[str] 
             "back_url": back_url,
         },
     )
+
+
+@app.post("/link/error")
+async def link_error(request: Request):
+    """Receive Plaid Link error details for server-side logging."""
+    import logging as _log
+    try:
+        body = await request.json()
+        err = body.get("error", {})
+        _log.getLogger(__name__).error(
+            "Plaid Link onExit error: code=%s type=%s msg=%s display=%s",
+            err.get("error_code"), err.get("error_type"),
+            err.get("error_message"), err.get("display_message"),
+        )
+    except Exception:
+        pass
+    return JSONResponse({"ok": True})
 
 
 @app.post("/link/complete")

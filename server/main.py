@@ -37,6 +37,7 @@ import server.health_monitor
 import server.paths
 from server.classifier import (
     apply_rules,
+    classify_batch,
     classify_transaction,  # kept import for legacy callers / tests
 )
 from server.db import get_db
@@ -1579,62 +1580,48 @@ def classify_pending_transactions(
         if batch_cap:
             unclassified = unclassified[:batch_cap]
 
+        # --- Batch classify: 1-2 LLM calls for the whole slice (replaces per-txn loop) ---
+        tx_meta: list[dict] = []
+        tx_dicts: list[dict] = []
         for row in unclassified:
-            tx_id = row["id"]
-            merchant = row["merchant"] or ""
-            amount = row["amount"]
-            date = row["date"]
-            plaid_category = row["plaid_category"] or ""
-            bank_account_id = row["bank_account_id"]
-
-            # Enrich with account context.
             ba_row = conn.execute(
                 "SELECT name, description, default_ledger_id FROM bank_accounts WHERE id = ?",
-                (bank_account_id,),
+                (row["bank_account_id"],),
             ).fetchone()
-            account_name = ba_row["name"] if ba_row else None
-            account_description = ba_row["description"] if ba_row else None
-            default_ledger_id = ba_row["default_ledger_id"] if ba_row else None
+            tx_meta.append({
+                "tx_id": row["id"],
+                "merchant": row["merchant"] or "",
+                "amount": row["amount"],
+                "default_ledger_id": ba_row["default_ledger_id"] if ba_row else None,
+            })
+            tx_dicts.append({
+                "merchant": row["merchant"] or "",
+                "amount": row["amount"],
+                "date": row["date"],
+                "account_name": ba_row["name"] if ba_row else None,
+                "account_description": ba_row["description"] if ba_row else None,
+                "plaid_category": row["plaid_category"] or "",
+            })
 
-            tx_dict = {
-                "merchant": merchant,
-                "amount": amount,
-                "date": date,
-                "account_name": account_name,
-                "account_description": account_description,
-                "plaid_category": plaid_category,
-            }
+        try:
+            batch_results = classify_batch(
+                conn, tx_dicts, rules,
+                ledger_tree=ledger_tree_text,
+                hints=hints_list,
+            )
+        except Exception as exc:
+            _logger.error("classify_pending_transactions: classify_batch failed: %s", exc)
+            uncertain += len(tx_dicts)
+            batch_results = [
+                {"line_item_id": None, "classification_type": "spending",
+                 "confidence": 0.0, "uncertain": True, "reasoning": f"batch error: {exc}"}
+            ] * len(tx_dicts)
 
-            # Build transfer hint context.
-            try:
-                hint = get_transfer_hint(tx_id, str(server.paths.DB_PATH))
-            except Exception:
-                hint = None
-
-            context: dict | None = None
-            if hint and hint.get("is_possible_transfer"):
-                context = {"possible_internal_transfer": True}
-
-            # Run UNIFIED classifier — ONE LLM call per transaction with all
-            # context (rules + ledger tree + hints + transfer hint + account).
-            try:
-                result = classify_transaction(
-                    conn,
-                    tx_dict,
-                    rules,
-                    ledger_tree=ledger_tree_text,
-                    hints=hints_list,
-                    context=context,
-                    model=model,
-                )
-            except Exception as exc:
-                _logger.warning(
-                    "classify_pending_transactions: classify_transaction failed for tx_id=%s: %s",
-                    tx_id,
-                    exc,
-                )
-                uncertain += 1
-                continue
+        for meta, result in zip(tx_meta, batch_results):
+            tx_id = meta["tx_id"]
+            merchant = meta["merchant"]
+            amount = meta["amount"]
+            default_ledger_id = meta["default_ledger_id"]
 
             classification_type = result.get("classification_type", "spending")
             line_item_id = result.get("line_item_id")
@@ -5184,7 +5171,7 @@ _SETTING_DEFAULTS = {
     "timezone": "America/Toronto",
     "sync_window_days": "90",
     "classify_batch_size": "50",
-    "classifier_model": "claude-3-5-haiku-20241022",
+    "classifier_model": "openclaw",
 }
 
 
