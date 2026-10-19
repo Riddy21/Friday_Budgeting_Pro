@@ -3030,6 +3030,16 @@ def sync(
                                     round(amount * _fx_row["rate"], 2)
                                     if _fx_row else None
                                 )
+                            # Dedup guard: skip if an identical (date, merchant, amount,
+                            # bank_account_id) row already exists, regardless of
+                            # plaid_transaction_id.  This prevents re-imports when Plaid
+                            # assigns new IDs after an account re-link.
+                            _existing = db_conn.execute(
+                                "SELECT id FROM transactions WHERE date=? AND merchant=? AND amount=? AND bank_account_id=?",
+                                (str(date) if date is not None else None, merchant, amount, bank_account_id),
+                            ).fetchone()
+                            if _existing is not None:
+                                continue  # Skip — already have this transaction
                             cur = db_conn.execute(
                                 "INSERT OR IGNORE INTO transactions "
                                 "(id, bank_account_id, plaid_transaction_id, date, authorized_datetime, merchant, amount, currency, amount_home, pending) "
