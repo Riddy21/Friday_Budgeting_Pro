@@ -744,6 +744,31 @@ def refresh_connection(id: str) -> dict:
 
 
 @mcp.tool
+def _cleanup_orphaned_transactions(db_conn) -> int:
+    """Delete transactions whose bank_account no longer exists.
+
+    Called automatically after disconnect() and at the end of sync()
+    to ensure no orphaned rows accumulate when accounts are removed.
+    Returns the number of transactions deleted.
+    """
+    # Delete ledger entries for orphaned transactions first
+    db_conn.execute(
+        "DELETE FROM transaction_entries WHERE transaction_id IN ("
+        "  SELECT t.id FROM transactions t"
+        "  LEFT JOIN bank_accounts ba ON t.bank_account_id = ba.id"
+        "  WHERE ba.id IS NULL"
+        ")"
+    )
+    result = db_conn.execute(
+        "DELETE FROM transactions WHERE id IN ("
+        "  SELECT t.id FROM transactions t"
+        "  LEFT JOIN bank_accounts ba ON t.bank_account_id = ba.id"
+        "  WHERE ba.id IS NULL"
+        ")"
+    )
+    return result.rowcount
+
+
 def disconnect(id: str) -> dict:
     """Disconnect and remove a Plaid bank connection.
 
@@ -818,9 +843,19 @@ def disconnect(id: str) -> dict:
     finally:
         conn.close()
 
+    # Clean up any orphaned transactions left behind after account removal.
+    _cleanup_db = get_db(server.paths.DB_PATH)
+    try:
+        orphaned = _cleanup_orphaned_transactions(_cleanup_db)
+        _cleanup_db.commit()
+    finally:
+        _cleanup_db.close()
+
     result_dict: dict = {"ok": True, "plaid_item_removed": plaid_revoked}
     if plaid_error is not None:
         result_dict["plaid_error"] = plaid_error
+    if orphaned > 0:
+        result_dict["orphaned_transactions_cleaned"] = orphaned
     return result_dict
 
 
@@ -3248,6 +3283,16 @@ def sync(
         }
         for f in sorted_flags[:5]
     ]
+
+    # Sweep orphaned transactions — catches any left from manual account deletions
+    # or edge cases where bank_accounts were removed outside the normal disconnect flow.
+    _sweep_db = get_db(server.paths.DB_PATH)
+    try:
+        _orphaned = _cleanup_orphaned_transactions(_sweep_db)
+        if _orphaned:
+            _sweep_db.commit()
+    finally:
+        _sweep_db.close()
 
     return {
         "status": "ok",
