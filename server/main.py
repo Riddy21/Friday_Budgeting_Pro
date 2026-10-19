@@ -3012,10 +3012,28 @@ def sync(
                                 )
 
                             txn_id = str(uuid.uuid4())
+                            # Compute home-currency amount for non-CAD transactions.
+                            # Looks up the FX rate from the fx_rates table; falls
+                            # back to None (NULL) when no rate is available so the
+                            # column stays nullable rather than silently wrong.
+                            _home_curr = _get_sync_settings(
+                                get_active_user_id(server.paths.DB_PATH)
+                            ).get("home_currency", "CAD") if _active_uid_for_window else "CAD"
+                            if acct_currency == _home_curr:
+                                amount_home = amount
+                            else:
+                                _fx_row = db_conn.execute(
+                                    "SELECT rate FROM fx_rates WHERE base=? AND quote=?",
+                                    (acct_currency, _home_curr),
+                                ).fetchone()
+                                amount_home = (
+                                    round(amount * _fx_row["rate"], 2)
+                                    if _fx_row else None
+                                )
                             cur = db_conn.execute(
                                 "INSERT OR IGNORE INTO transactions "
-                                "(id, bank_account_id, plaid_transaction_id, date, authorized_datetime, merchant, amount, currency, pending) "
-                                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                                "(id, bank_account_id, plaid_transaction_id, date, authorized_datetime, merchant, amount, currency, amount_home, pending) "
+                                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                                 (
                                     txn_id,
                                     bank_account_id,
@@ -3029,6 +3047,7 @@ def sync(
                                     merchant,
                                     amount,
                                     acct_currency,
+                                    amount_home,
                                     1 if pending else 0,
                                 ),
                             )
@@ -4133,7 +4152,7 @@ def summary(period: str) -> dict:
             li.name        AS line_item_name,
             l.name         AS ledger_name,
             li.item_type   AS item_type,
-            SUM(te.amount) AS total
+            SUM(COALESCE(te.amount_home, te.amount)) AS total
         FROM transaction_entries te
         JOIN transactions   t  ON t.id  = te.transaction_id
         JOIN line_items     li ON li.id = te.line_item_id
@@ -4152,7 +4171,7 @@ def summary(period: str) -> dict:
         # Compute YTD savings rate (separate query, only needed when period != ytd/year)
         ytd_start = f"{year_str}-01-01"
         ytd_sql = """
-            SELECT li.item_type, SUM(te.amount) AS total
+            SELECT li.item_type, SUM(COALESCE(te.amount_home, te.amount)) AS total
             FROM transaction_entries te
             JOIN transactions   t  ON t.id  = te.transaction_id
             JOIN line_items     li ON li.id = te.line_item_id
@@ -4289,7 +4308,7 @@ def savings_trend(months: int = 12) -> dict:
         SELECT
             substr(t.date, 1, 7)   AS month,
             li.item_type            AS item_type,
-            SUM(te.amount)          AS total
+            SUM(COALESCE(te.amount_home, te.amount)) AS total
         FROM transaction_entries te
         JOIN transactions   t  ON t.id  = te.transaction_id
         JOIN line_items     li ON li.id = te.line_item_id
