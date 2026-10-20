@@ -47,7 +47,7 @@ _SECURE_COOKIES = os.environ.get("FRIDAY_SECURE_COOKIES", "auto").lower()
 
 def _use_secure_cookie(request: Optional["Request"] = None) -> bool:
     """Return True if cookies should have secure=True.
-    
+
     In 'auto' mode (default), check if request came over HTTPS.
     Can be forced with FRIDAY_SECURE_COOKIES=true/false.
     """

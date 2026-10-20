@@ -4318,7 +4318,7 @@ def summary(period: str) -> dict:
             GROUP BY li.item_type
         """
         ytd_rows = conn.execute(ytd_sql, [ytd_start, today_str]).fetchall()
-        
+
         # Compute total cash on hand (sum of all active bank account balances)
         # Cash on hand - use the same logic as the Accounts page
         # Import here to avoid circular dependency
