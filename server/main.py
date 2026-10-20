@@ -1844,12 +1844,9 @@ def classify_pending_transactions(
                 continue
 
             # Write the classified entry.
-            # Normalise the stored amount to always be positive.
-            # Plaid uses negative amounts for money coming IN (income, refunds,
-            # transfers received, credit card payments). We always store ABS so
-            # ledger totals are additive and display correctly regardless of
-            # which direction the money flowed.
-            stored_amount = abs(amount)
+            # Preserve the original transaction sign: negative = income/refund,
+            # positive = expense. The source transaction amount is the truth.
+            stored_amount = amount
             entry_id = str(uuid.uuid4())
             conn.execute(
                 "INSERT OR IGNORE INTO transaction_entries "
@@ -3767,7 +3764,7 @@ def route(transaction_id: str, allocations: List) -> dict:
                          amount, entry_type, source, reviewed, corrected_at)
                     VALUES (?, ?, NULL, NULL, ?, 'skip', 'manual', 1, ?)
                     """,
-                    (entry_id, transaction_id, abs(tx_amount), now),
+                    (entry_id, transaction_id, tx_amount, now),
                 )
             conn.commit()
             return {"status": "ok", "entry_type": "skip", "transaction_id": transaction_id}
@@ -3802,7 +3799,7 @@ def route(transaction_id: str, allocations: List) -> dict:
 
         ledger_id = li_row["ledger_id"]
         item_type = li_row["item_type"]
-        amount = alloc_amount if alloc_amount is not None else abs(tx_amount)
+        amount = alloc_amount if alloc_amount is not None else tx_amount
 
         # Determine entry_type from line item type.
         entry_type = {
