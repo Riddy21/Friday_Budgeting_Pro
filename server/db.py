@@ -107,6 +107,12 @@ def init_db(path: str | Path) -> None:
             conn.execute("ALTER TABLE bank_accounts ADD COLUMN description TEXT")
             conn.commit()
 
+        # Migration: bank_accounts.removed_at (soft-delete support)
+        ba_cols = {row[1] for row in conn.execute("PRAGMA table_info(bank_accounts)")}
+        if "removed_at" not in ba_cols:
+            conn.execute("ALTER TABLE bank_accounts ADD COLUMN removed_at INTEGER")
+            conn.commit()
+
         # Migration: user_id columns (#131 — multi-profile support)
         # These are guarded so they are no-ops if the column already exists.
         _add_col_if_missing(conn, "bank_connections", "user_id", "TEXT")

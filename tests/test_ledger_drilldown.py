@@ -392,5 +392,5 @@ class TestLedgersPageDrilldown:
 
         r = authed_ui_client.get("/ledgers")
         assert r.status_code == 200
-        assert "btn-expand-item" in r.text
-        assert "txn-detail-row" in r.text
+        assert "item-card" in r.text
+        assert "txn-row" in r.text

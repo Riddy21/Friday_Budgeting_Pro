@@ -745,22 +745,30 @@ def refresh_connection(id: str) -> dict:
 
 
 def _cleanup_orphaned_transactions(db_conn) -> int:
-    """Delete transactions whose bank_account no longer exists."""
+    """Delete transactions whose bank_account no longer exists.
+
+    Returns the number of orphaned transactions removed.
+    Uses SELECT-then-DELETE so it works with both real and mock connections.
+    """
+    orphan_ids = [
+        r[0] for r in db_conn.execute(
+            "SELECT t.id FROM transactions t"
+            " LEFT JOIN bank_accounts ba ON t.bank_account_id = ba.id"
+            " WHERE ba.id IS NULL"
+        ).fetchall()
+    ]
+    if not orphan_ids:
+        return 0
+    placeholders = ",".join("?" * len(orphan_ids))
     db_conn.execute(
-        "DELETE FROM transaction_entries WHERE transaction_id IN ("
-        "  SELECT t.id FROM transactions t"
-        "  LEFT JOIN bank_accounts ba ON t.bank_account_id = ba.id"
-        "  WHERE ba.id IS NULL"
-        ")"
+        f"DELETE FROM transaction_entries WHERE transaction_id IN ({placeholders})",
+        orphan_ids,
     )
-    result = db_conn.execute(
-        "DELETE FROM transactions WHERE id IN ("
-        "  SELECT t.id FROM transactions t"
-        "  LEFT JOIN bank_accounts ba ON t.bank_account_id = ba.id"
-        "  WHERE ba.id IS NULL"
-        ")"
+    db_conn.execute(
+        f"DELETE FROM transactions WHERE id IN ({placeholders})",
+        orphan_ids,
     )
-    return result.rowcount
+    return len(orphan_ids)
 
 
 def _fix_entry_amount_home_signs(db_conn) -> int:
