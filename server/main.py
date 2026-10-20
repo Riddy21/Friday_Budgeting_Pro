@@ -17,6 +17,7 @@ try:
     from pathlib import Path as _Path
 
     from dotenv import load_dotenv as _load_dotenv
+
     _load_dotenv(_Path(__file__).parent.parent / ".env")
 except ImportError:
     pass
@@ -731,6 +732,7 @@ def refresh_connection(id: str) -> dict:
         # Fall back to fresh link token if connection not found, decryption,
         # or Plaid call fails
         import logging as _logging
+
         _logging.getLogger(__name__).warning(
             "refresh_connection: failed to get Update Mode token for id=%s, "
             "falling back to fresh link token",
@@ -740,6 +742,46 @@ def refresh_connection(id: str) -> dict:
         link_token = _plaid.create_link_token()
 
     return {"url": f"{_get_ui_base_url()}/link?token={link_token}"}
+
+
+def _cleanup_orphaned_transactions(db_conn) -> int:
+    """Delete transactions whose bank_account no longer exists."""
+    db_conn.execute(
+        "DELETE FROM transaction_entries WHERE transaction_id IN ("
+        "  SELECT t.id FROM transactions t"
+        "  LEFT JOIN bank_accounts ba ON t.bank_account_id = ba.id"
+        "  WHERE ba.id IS NULL"
+        ")"
+    )
+    result = db_conn.execute(
+        "DELETE FROM transactions WHERE id IN ("
+        "  SELECT t.id FROM transactions t"
+        "  LEFT JOIN bank_accounts ba ON t.bank_account_id = ba.id"
+        "  WHERE ba.id IS NULL"
+        ")"
+    )
+    return result.rowcount
+
+
+def _fix_entry_amount_home_signs(db_conn) -> int:
+    """Ensure transaction_entries.amount_home has the same sign as amount.
+
+    Plaid stores income as negative (credit convention). amount_home can
+    inherit that sign, but entry.amount is already sign-corrected (positive
+    for income). This aligns amount_home to match.
+    """
+    result = db_conn.execute(
+        "UPDATE transaction_entries "
+        "SET amount_home = CASE "
+        "  WHEN amount > 0 THEN  ABS(amount_home) "
+        "  WHEN amount < 0 THEN -ABS(amount_home) "
+        "  ELSE amount_home "
+        "END "
+        "WHERE amount_home IS NOT NULL "
+        "  AND ((amount > 0 AND amount_home < 0) "
+        "    OR (amount < 0 AND amount_home > 0))"
+    )
+    return result.rowcount
 
 
 @mcp.tool
@@ -817,9 +859,20 @@ def disconnect(id: str) -> dict:
     finally:
         conn.close()
 
+    # Clean up orphaned transactions after account removal
+    _cdb = get_db(server.paths.DB_PATH)
+    try:
+        orphaned = _cleanup_orphaned_transactions(_cdb)
+        if orphaned:
+            _cdb.commit()
+    finally:
+        _cdb.close()
+
     result_dict: dict = {"ok": True, "plaid_item_removed": plaid_revoked}
     if plaid_error is not None:
         result_dict["plaid_error"] = plaid_error
+    if orphaned:
+        result_dict["orphaned_cleaned"] = orphaned
     return result_dict
 
 
@@ -2645,7 +2698,9 @@ def sync(
                 # would use env-var credentials only, which breaks ClawHub
                 # installs where credentials are stored in plaid_config.
                 if progress_callback:
-                    progress_callback({"phase": "health_check", "msg": "Checking connection health\u2026"})
+                    progress_callback(
+                        {"phase": "health_check", "msg": "Checking connection health\u2026"}
+                    )
                 health_check_result = server.health_monitor.check_all_connections(
                     db_conn, plaid_provider=None
                 )
@@ -2673,9 +2728,7 @@ def sync(
                         # plaid_access_token_encrypted column (re-uses the
                         # existing NOT-NULL column; no extra column needed).
                         conn_provider = SimpleFINProvider()
-                        sync_token = server.crypto.decrypt(
-                            bc["plaid_access_token_encrypted"]
-                        )
+                        sync_token = server.crypto.decrypt(bc["plaid_access_token_encrypted"])
                     else:
                         encrypted_token = bc["plaid_access_token_encrypted"]
                         access_token = server.crypto.decrypt(encrypted_token)
@@ -2705,7 +2758,13 @@ def sync(
                     cursor = cursor_row["cursor"] if cursor_row else None
 
                     if progress_callback:
-                        progress_callback({"phase": "pulling", "connection": institution_name, "msg": f"Pulling from {institution_name}\u2026"})
+                        progress_callback(
+                            {
+                                "phase": "pulling",
+                                "connection": institution_name,
+                                "msg": f"Pulling from {institution_name}\u2026",
+                            }
+                        )
 
                     try:
                         result = conn_provider.sync_transactions(sync_token, cursor)
@@ -2765,9 +2824,7 @@ def sync(
                         if full_accounts:
                             # accounts_get entries take precedence; append sync ones
                             # that aren't already present (keyed by account_id).
-                            seen_ids = {
-                                _get(a, "account_id") for a in full_accounts
-                            }
+                            seen_ids = {_get(a, "account_id") for a in full_accounts}
                             merged = [*full_accounts]
                             for a in accounts_list:
                                 if _get(a, "account_id") not in seen_ids:
@@ -2864,7 +2921,7 @@ def sync(
                                     meta.get("name"),
                                     meta.get("type"),
                                     meta.get("subtype"),  # NULL-safe: COALESCE keeps old
-                                    meta.get("mask"),     # NULL-safe: COALESCE keeps old
+                                    meta.get("mask"),  # NULL-safe: COALESCE keeps old
                                     meta.get("inferred_type"),
                                     meta.get("currency") or "CAD",
                                     meta.get("balance_current"),
@@ -2891,9 +2948,7 @@ def sync(
                                    AND plaid_account_id NOT IN ({placeholders})
                                    AND removed_at IS NULL
                                    AND is_duplicate = 0
-                                """.format(
-                                    placeholders=",".join("?" * len(live_plaid_ids))
-                                ),
+                                """.format(placeholders=",".join("?" * len(live_plaid_ids))),
                                 (now, connection_id, *live_plaid_ids),
                             )
 
@@ -3016,9 +3071,13 @@ def sync(
                             # Looks up the FX rate from the fx_rates table; falls
                             # back to None (NULL) when no rate is available so the
                             # column stays nullable rather than silently wrong.
-                            _home_curr = _get_sync_settings(
-                                get_active_user_id(server.paths.DB_PATH)
-                            ).get("home_currency", "CAD") if _active_uid_for_window else "CAD"
+                            _home_curr = (
+                                _get_sync_settings(get_active_user_id(server.paths.DB_PATH)).get(
+                                    "home_currency", "CAD"
+                                )
+                                if _active_uid_for_window
+                                else "CAD"
+                            )
                             if acct_currency == _home_curr:
                                 amount_home = amount
                             else:
@@ -3027,9 +3086,20 @@ def sync(
                                     (acct_currency, _home_curr),
                                 ).fetchone()
                                 amount_home = (
-                                    round(amount * _fx_row["rate"], 2)
-                                    if _fx_row else None
+                                    round(amount * _fx_row["rate"], 2) if _fx_row else None
                                 )
+                            # Dedup guard: skip if identical (date, merchant, amount, bank_account_id) exists
+                            _dup = db_conn.execute(
+                                "SELECT id FROM transactions WHERE date=? AND merchant=? AND amount=? AND bank_account_id=?",
+                                (
+                                    str(date) if date is not None else None,
+                                    merchant,
+                                    amount,
+                                    bank_account_id,
+                                ),
+                            ).fetchone()
+                            if _dup is not None:
+                                continue
                             cur = db_conn.execute(
                                 "INSERT OR IGNORE INTO transactions "
                                 "(id, bank_account_id, plaid_transaction_id, date, authorized_datetime, merchant, amount, currency, amount_home, pending) "
@@ -3199,10 +3269,25 @@ def sync(
                     total_classified += conn_classified
 
                     if progress_callback:
-                        progress_callback({"phase": "pulled", "connection": institution_name, "added": conn_added, "modified": conn_modified, "msg": f"{institution_name}: {conn_added} new, {conn_modified} modified"})
+                        progress_callback(
+                            {
+                                "phase": "pulled",
+                                "connection": institution_name,
+                                "added": conn_added,
+                                "modified": conn_modified,
+                                "msg": f"{institution_name}: {conn_added} new, {conn_modified} modified",
+                            }
+                        )
 
                 if progress_callback:
-                    progress_callback({"phase": "sync_complete", "total_added": total_added, "total_modified": total_modified, "msg": f"Pulled {total_added} new transactions across {connections_synced} connection{'s' if connections_synced != 1 else ''}"})
+                    progress_callback(
+                        {
+                            "phase": "sync_complete",
+                            "total_added": total_added,
+                            "total_modified": total_modified,
+                            "msg": f"Pulled {total_added} new transactions across {connections_synced} connection{'s' if connections_synced != 1 else ''}",
+                        }
+                    )
 
                 # After all connections are synced, optionally run
                 # auto-classification on any newly inserted (unclassified)
@@ -3251,6 +3336,15 @@ def sync(
         }
         for f in sorted_flags[:5]
     ]
+
+    # Post-sync sweeps: orphan cleanup + sign correction
+    _sdb = get_db(server.paths.DB_PATH)
+    try:
+        _cleanup_orphaned_transactions(_sdb)
+        _fix_entry_amount_home_signs(_sdb)
+        _sdb.commit()
+    finally:
+        _sdb.close()
 
     return {
         "status": "ok",
@@ -3678,7 +3772,9 @@ def route(transaction_id: str, allocations: List) -> dict:
         entry_type = {
             "expense": "spending",
             "income": "income",
-        }.get(item_type, item_type)  # savings / transfer pass through as-is
+        }.get(
+            item_type, item_type
+        )  # savings / transfer pass through as-is
 
         existing = conn.execute(
             "SELECT id, line_item_id FROM transaction_entries WHERE transaction_id = ?",
@@ -3698,8 +3794,15 @@ def route(transaction_id: str, allocations: List) -> dict:
                     corrected_at               = ?
                 WHERE transaction_id = ?
                 """,
-                (ledger_id, line_item_id, amount, entry_type,
-                 existing["line_item_id"], now, transaction_id),
+                (
+                    ledger_id,
+                    line_item_id,
+                    amount,
+                    entry_type,
+                    existing["line_item_id"],
+                    now,
+                    transaction_id,
+                ),
             )
         else:
             entry_id = str(uuid.uuid4())
@@ -3710,8 +3813,7 @@ def route(transaction_id: str, allocations: List) -> dict:
                      amount, entry_type, source, reviewed, corrected_at)
                 VALUES (?, ?, ?, ?, ?, ?, 'manual', 1, ?)
                 """,
-                (entry_id, transaction_id, ledger_id, line_item_id,
-                 amount, entry_type, now),
+                (entry_id, transaction_id, ledger_id, line_item_id, amount, entry_type, now),
             )
         conn.commit()
         return {
@@ -4217,9 +4319,7 @@ def summary(period: str) -> dict:
     savings_contributions = round(savings, 2)
     total_saved = round(income - expenses, 2)  # total net kept
     unspent_balance = round(total_saved - savings_contributions, 2)  # unallocated leftover
-    savings_rate_pct = (
-        round(savings_contributions / income * 100, 1) if income > 0 else 0.0
-    )
+    savings_rate_pct = round(savings_contributions / income * 100, 1) if income > 0 else 0.0
     savings_rate = f"{savings_rate_pct}%"
 
     # YTD savings rate from separate query
@@ -5164,8 +5264,8 @@ _SETTING_VALID_VALUES: dict[str, list[str]] = {
 
 # Integer settings: (min, max) inclusive bounds enforced in set_setting.
 _SETTING_INT_BOUNDS: dict[str, tuple[int, int]] = {
-    "sync_window_days": (1, 3650),       # 1 day .. 10 years
-    "classify_batch_size": (1, 1000),    # 1 .. 1000 txns per sync
+    "sync_window_days": (1, 3650),  # 1 day .. 10 years
+    "classify_batch_size": (1, 1000),  # 1 .. 1000 txns per sync
 }
 
 
@@ -5362,9 +5462,7 @@ def upsert_mortgage_account(account_id: str, detail: dict, ledger_id: str | None
                 sets += (", " if sets else "") + "updated_at = ?"
                 params.append(int(_time.time()))
                 params.append(account_id)
-                conn.execute(
-                    f"UPDATE mortgage_accounts SET {sets} WHERE account_id = ?", params
-                )
+                conn.execute(f"UPDATE mortgage_accounts SET {sets} WHERE account_id = ?", params)
             else:
                 insert_cols = ["account_id", "ledger_id", *cols, "updated_at"]
                 placeholders = ", ".join("?" for _ in insert_cols)
@@ -5463,17 +5561,13 @@ def split_mortgage_payment(payment_amount: float, mortgage: dict) -> dict:
         ratio_i = ytd_i / (ytd_i + ytd_p)
         interest = round(pi_amount * ratio_i, 2)
         principal = round(pi_amount - interest, 2)
-        result.update(
-            principal=principal, interest=interest, method="ytd_ratio"
-        )
+        result.update(principal=principal, interest=interest, method="ytd_ratio")
     # Priority 2: amortisation math.
     elif rate is not None and balance is not None and balance > 0:
         monthly_interest = round(balance * (rate / 100.0) / 12.0, 2)
         interest = min(monthly_interest, pi_amount)
         principal = round(pi_amount - interest, 2)
-        result.update(
-            principal=principal, interest=round(interest, 2), method="amortization"
-        )
+        result.update(principal=principal, interest=round(interest, 2), method="amortization")
     else:
         result.update(principal=pi_amount, interest=0.0, method="fallback")
 
