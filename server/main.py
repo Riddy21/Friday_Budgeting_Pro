@@ -3304,12 +3304,22 @@ def sync(
 
                 # Post-sync fix: Interest transactions should be positive (income).
                 # Plaid sometimes imports them as negative. Flip sign if needed.
+                # Fix BOTH transaction.amount AND transaction_entries.amount (#364).
                 _interest_fixed = db_conn.execute(
                     "UPDATE transactions SET amount = ABS(amount), amount_home = ABS(amount_home) "
                     "WHERE LOWER(merchant) = 'interest' AND amount < 0"
                 ).rowcount
                 if _interest_fixed > 0:
                     _logger.info("Post-sync fix: corrected %d Interest transaction sign(s)", _interest_fixed)
+                    # Also fix the corresponding transaction_entries amounts
+                    _entries_fixed = db_conn.execute(
+                        "UPDATE transaction_entries SET amount = ABS(amount) "
+                        "WHERE transaction_id IN ("
+                        "  SELECT id FROM transactions WHERE LOWER(merchant) = 'interest'"
+                        ") AND amount < 0"
+                    ).rowcount
+                    if _entries_fixed > 0:
+                        _logger.info("Post-sync fix: corrected %d Interest entry sign(s)", _entries_fixed)
 
                 # After all connections are synced, optionally run
                 # auto-classification on any newly inserted (unclassified)
@@ -4307,23 +4317,18 @@ def summary(period: str) -> dict:
         ytd_rows = conn.execute(ytd_sql, [ytd_start, today_str]).fetchall()
         
         # Compute total cash on hand (sum of all active bank account balances)
-        # Only count liquid cash - exclude property accounts, investments, GICs
-        cash_sql = """
-            SELECT SUM(COALESCE(balance_current, 0)) AS total_cash
-            FROM bank_accounts
-            WHERE removed_at IS NULL
-              AND COALESCE(is_duplicate, 0) = 0
-              AND type = 'depository'
-              AND LOWER(name) NOT LIKE '%ardsley%'
-              AND LOWER(name) NOT LIKE '%glen everest%'
-              AND LOWER(name) NOT LIKE '%tfsa%'
-              AND LOWER(name) NOT LIKE '%rrsp%'
-              AND LOWER(name) NOT LIKE '%401k%'
-              AND LOWER(name) NOT LIKE '%investing%'
-              AND name NOT GLOB '*[0-9].[0-9][0-9]%*'
-        """
-        cash_row = conn.execute(cash_sql).fetchone()
-        total_cash_on_hand = float(cash_row["total_cash"] or 0.0) if cash_row else 0.0
+        # Cash on hand - use the same logic as the Accounts page
+        # Import here to avoid circular dependency
+        try:
+            from ui.server import _get_accounts_by_category
+            categories = _get_accounts_by_category()
+            cash_bucket = categories.get("Cash", {})
+            total_cash_on_hand = sum(
+                acct.get("balance_home") or acct.get("balance_current") or 0
+                for acct in cash_bucket.get("accounts", [])
+            )
+        except Exception:
+            total_cash_on_hand = 0.0
     finally:
         conn.close()
 

@@ -1703,10 +1703,17 @@ def _compute_net_worth(
             is_liability = effective_t in ("credit", "loan")
             # Net-worth sign: liabilities reduce net worth.
             value = -float(balance) if is_liability else float(balance)
+            # Use balance_home (FX-converted) for breakdown totals if available.
+            # This ensures the Accounts page category totals match the Dashboard.
+            balance_home = acct.get("balance_home")
+            if balance_home is not None:
+                value_home = -float(balance_home) if is_liability else float(balance_home)
+            else:
+                value_home = value  # fallback to raw balance
             label = categorise(acct)
 
             b = buckets.setdefault(label, {"total": 0.0, "count": 0, "currencies": set()})
-            b["total"] += value
+            b["total"] += value_home
             b["count"] += 1
             b["currencies"].add(currency)
 
