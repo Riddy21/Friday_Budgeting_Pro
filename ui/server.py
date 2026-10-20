@@ -113,6 +113,7 @@ def _sync_emit(step: dict) -> None:
         _sync_progress["steps"].append(step)
         _sync_progress["phase"] = step.get("phase", "running")
 
+
 app = FastAPI(title="Friday Budgeting Pro UI", version="0.1.0")
 
 _TEMPLATE_DIR = Path(__file__).parent / "templates"
@@ -870,7 +871,12 @@ def _run_classification_background(user_id: str) -> None:
             result = _sm.classify_pending_transactions(user_id)
             _classify_state["result"] = {"status": "ok", **result}
             n = result.get("classified", 0)
-            _sync_emit({"phase": "done", "msg": f"Classification done \u2014 {n} transaction{'s' if n != 1 else ''} auto-classified"})
+            _sync_emit(
+                {
+                    "phase": "done",
+                    "msg": f"Classification done \u2014 {n} transaction{'s' if n != 1 else ''} auto-classified",
+                }
+            )
         except Exception as exc:
             _logging.getLogger(__name__).error("Background classification failed: %s", exc)
             _classify_state["result"] = {"status": "error", "error": str(exc)}
@@ -918,11 +924,13 @@ def api_sync(request: Request):
             uid = get_active_user_id(_paths.DB_PATH)
             # Big-pull warning surfaced from the sync summary (#270).
             if isinstance(sync_result, dict) and sync_result.get("big_pull"):
-                _sync_emit({
-                    "phase": "warning",
-                    "msg": sync_result.get("warning")
-                    or f"Large pull: {total_added} new transactions.",
-                })
+                _sync_emit(
+                    {
+                        "phase": "warning",
+                        "msg": sync_result.get("warning")
+                        or f"Large pull: {total_added} new transactions.",
+                    }
+                )
             if uid and total_added > 0:
                 _sync_emit({"phase": "classifying", "msg": "Classifying transactions\u2026"})
                 with _classify_lock:
@@ -935,7 +943,12 @@ def api_sync(request: Request):
                     # unbounded number of serial LLM calls in one go, and the
                     # live progress log updates between batches.
                     total_classified = 0
-                    classify_result = {"classified": 0, "skipped": 0, "uncertain": 0, "pending_remaining": 0}
+                    classify_result = {
+                        "classified": 0,
+                        "skipped": 0,
+                        "uncertain": 0,
+                        "pending_remaining": 0,
+                    }
                     _MAX_PASSES = 40  # hard safety ceiling
                     for _pass in range(_MAX_PASSES):
                         classify_result = _sm.classify_pending_transactions(uid)
@@ -943,10 +956,12 @@ def api_sync(request: Request):
                         total_classified += batch_n
                         remaining = classify_result.get("pending_remaining", 0)
                         if batch_n or remaining:
-                            _sync_emit({
-                                "phase": "classifying",
-                                "msg": f"Classified {total_classified} so far… {remaining} remaining",
-                            })
+                            _sync_emit(
+                                {
+                                    "phase": "classifying",
+                                    "msg": f"Classified {total_classified} so far… {remaining} remaining",
+                                }
+                            )
                         # Stop when nothing left, or a pass made no progress
                         # (avoids an infinite loop on persistently-uncertain rows).
                         if remaining <= 0 or batch_n == 0:
@@ -958,19 +973,38 @@ def api_sync(request: Request):
                     done_msg = f"Done! {n} transaction{'s' if n != 1 else ''} classified"
                     if remaining > 0:
                         done_msg += f" — {remaining} still pending (click Sync again to continue)"
-                    _sync_emit({"phase": "done", "msg": done_msg, "added": total_added, "classified": n, "pending_remaining": remaining})
+                    _sync_emit(
+                        {
+                            "phase": "done",
+                            "msg": done_msg,
+                            "added": total_added,
+                            "classified": n,
+                            "pending_remaining": remaining,
+                        }
+                    )
                 except Exception as exc:
                     import logging as _cl_logging
-                    _cl_logging.getLogger(__name__).error("Classification in sync thread failed: %s", exc)
+
+                    _cl_logging.getLogger(__name__).error(
+                        "Classification in sync thread failed: %s", exc
+                    )
                     _classify_state["result"] = {"status": "error", "error": str(exc)}
                     _sync_emit({"phase": "error", "msg": f"Classification error: {exc}"})
                 finally:
                     with _classify_lock:
                         _classify_state["running"] = False
             elif uid:
-                _sync_emit({"phase": "done", "msg": "Done! No new transactions to classify.", "added": 0, "classified": 0})
+                _sync_emit(
+                    {
+                        "phase": "done",
+                        "msg": "Done! No new transactions to classify.",
+                        "added": 0,
+                        "classified": 0,
+                    }
+                )
         except Exception as exc:
             import logging
+
             logging.getLogger(__name__).error("api_sync background: %s", exc)
             _sync_emit({"phase": "error", "msg": f"Sync error: {exc}"})
         finally:
@@ -979,18 +1013,20 @@ def api_sync(request: Request):
                 # Persist the final steps list to DB so a page refresh can restore it.
                 _steps_snapshot = list(_sync_progress["steps"])
             import json as _json_lib
+
             try:
                 _log_conn = get_db(_db_path())
                 try:
                     _log_conn.execute(
                         "INSERT OR REPLACE INTO sync_log (id, steps_json, finished_at) VALUES (1, ?, ?)",
-                        (_json_lib.dumps(_steps_snapshot), int(time.time()))
+                        (_json_lib.dumps(_steps_snapshot), int(time.time())),
                     )
                     _log_conn.commit()
                 finally:
                     _log_conn.close()
             except Exception as _log_exc:
                 import logging as _ll
+
                 _ll.getLogger(__name__).warning("Failed to persist sync_log: %s", _log_exc)
 
     _threading.Thread(target=_run, daemon=True).start()
@@ -1015,11 +1051,10 @@ def api_sync_progress(request: Request):
     if not data["running"] and not data["steps"]:
         try:
             import json as _json_lib
+
             _log_conn = get_db(_db_path())
             try:
-                row = _log_conn.execute(
-                    "SELECT steps_json FROM sync_log WHERE id = 1"
-                ).fetchone()
+                row = _log_conn.execute("SELECT steps_json FROM sync_log WHERE id = 1").fetchone()
                 if row and row["steps_json"]:
                     data["steps"] = _json_lib.loads(row["steps_json"])
                     data["restored"] = True
@@ -1161,6 +1196,7 @@ def _get_dashboard_widgets() -> dict:
         top_categories:      top 5 line items by spending this month
     """
     from datetime import date as _date
+
     today = _date.today()
     # Month range
     month_start = today.replace(day=1).isoformat()
@@ -1169,6 +1205,7 @@ def _get_dashboard_widgets() -> dict:
     conn = get_db(_db_path())
     try:
         from ui.auth import get_active_user_id
+
         uid = get_active_user_id(_db_path())
 
         # ── Recent transactions ──────────────────────────────────────────
@@ -1414,9 +1451,7 @@ def _get_accounts_grouped(user_id: Optional[str] = None) -> dict:
                         "SELECT rate FROM fx_rates WHERE base=? AND quote=?",
                         (_acct_currency, _home_cur),
                     ).fetchone()
-                    acct_dict["balance_home"] = (
-                        round(float(_bal) * _fx["rate"], 2) if _fx else None
-                    )
+                    acct_dict["balance_home"] = round(float(_bal) * _fx["rate"], 2) if _fx else None
                     acct_dict["balance_home_currency"] = _home_cur if _fx else _acct_currency
                 else:
                     acct_dict["balance_home"] = _bal
@@ -1473,9 +1508,25 @@ def _account_category(acct: dict, txn_count: int = 0) -> str:
 
     # Explicit investment type/subtype.
     if effective == "investment" or subtype in (
-        "401k", "403b", "457b", "ira", "roth", "sep ira", "simple ira",
-        "tfsa", "rrsp", "fhsa", "rrif", "resp", "lira", "rdsp", "hsa",
-        "529", "brokerage", "mutual fund", "etf",
+        "401k",
+        "403b",
+        "457b",
+        "ira",
+        "roth",
+        "sep ira",
+        "simple ira",
+        "tfsa",
+        "rrsp",
+        "fhsa",
+        "rrif",
+        "resp",
+        "lira",
+        "rdsp",
+        "hsa",
+        "529",
+        "brokerage",
+        "mutual fund",
+        "etf",
     ):
         return "Investments"
 
@@ -1544,9 +1595,7 @@ def _get_accounts_by_category(user_id: Optional[str] = None) -> dict:
             # Owner fallback: SimpleFIN org label → else institution name.
             owner = acct.get("owner_label") or inst_name or "Other"
 
-            bucket = categories.setdefault(
-                cat, {"accounts": [], "owners": {}, "count": 0}
-            )
+            bucket = categories.setdefault(cat, {"accounts": [], "owners": {}, "count": 0})
             bucket["accounts"].append(acct)
             bucket["owners"].setdefault(owner, []).append(acct)
             bucket["count"] += 1
@@ -1562,7 +1611,9 @@ def _get_accounts_by_category(user_id: Optional[str] = None) -> dict:
     return ordered
 
 
-def _compute_net_worth(grouped: dict, home_currency: str = "CAD", txn_counts: Optional[dict] = None) -> dict:
+def _compute_net_worth(
+    grouped: dict, home_currency: str = "CAD", txn_counts: Optional[dict] = None
+) -> dict:
     """Compute a net-worth summary across the supplied grouped accounts (#322).
 
     Liability detection (RIDVAN_REQUESTS.md items 5 & 6):
@@ -1632,8 +1683,8 @@ def _compute_net_worth(grouped: dict, home_currency: str = "CAD", txn_counts: Op
         tc = int((_txn_counts or {}).get(acct.get("id"), 0))
         return _account_category(acct, txn_count=tc)
 
-    buckets: dict = {}              # label -> {total, count, currencies}
-    by_currency: dict = {}          # currency -> {assets, liabilities, net}
+    buckets: dict = {}  # label -> {total, count, currencies}
+    by_currency: dict = {}  # currency -> {assets, liabilities, net}
     has_data = False
 
     for inst_name, data in (grouped or {}).items():
@@ -1673,20 +1724,24 @@ def _compute_net_worth(grouped: dict, home_currency: str = "CAD", txn_counts: Op
     for label in order:
         if label in buckets:
             b = buckets.pop(label)
-            breakdown.append({
+            breakdown.append(
+                {
+                    "label": label,
+                    "total": b["total"],
+                    "count": b["count"],
+                    "is_liability": label in ("Credit Cards", "Debts"),
+                }
+            )
+    # Any unknown buckets (e.g. a new Plaid subtype) trail at the end.
+    for label, b in buckets.items():
+        breakdown.append(
+            {
                 "label": label,
                 "total": b["total"],
                 "count": b["count"],
-                "is_liability": label in ("Credit Cards", "Debts"),
-            })
-    # Any unknown buckets (e.g. a new Plaid subtype) trail at the end.
-    for label, b in buckets.items():
-        breakdown.append({
-            "label": label,
-            "total": b["total"],
-            "count": b["count"],
-            "is_liability": False,
-        })
+                "is_liability": False,
+            }
+        )
 
     currencies = set(by_currency.keys())
     mixed = len(currencies) > 1
@@ -1715,7 +1770,9 @@ def _compute_net_worth(grouped: dict, home_currency: str = "CAD", txn_counts: Op
                     fx_ok = False  # couldn't convert — degrade gracefully
                     logging.getLogger(__name__).warning(
                         "_compute_net_worth: no FX rate %s→%s, skipping %s",
-                        cur, home_currency_upper, cur,
+                        cur,
+                        home_currency_upper,
+                        cur,
                     )
                 else:
                     assets += c["assets"] * rate
@@ -1791,9 +1848,7 @@ def _get_home_currency(uid: Optional[str]) -> str:
     try:
         conn = get_db(_db_path())
         try:
-            row = conn.execute(
-                "SELECT home_currency FROM users WHERE id = ?", (uid,)
-            ).fetchone()
+            row = conn.execute("SELECT home_currency FROM users WHERE id = ?", (uid,)).fetchone()
             if row and row["home_currency"]:
                 return str(row["home_currency"]).upper()
         finally:
@@ -1838,7 +1893,9 @@ def accounts_get(request: Request):
     except Exception:
         _nw_txn_counts = {}
     try:
-        net_worth = _compute_net_worth(grouped, home_currency=home_currency, txn_counts=_nw_txn_counts)
+        net_worth = _compute_net_worth(
+            grouped, home_currency=home_currency, txn_counts=_nw_txn_counts
+        )
     except Exception:
         net_worth = None
     return templates.TemplateResponse(
@@ -1984,9 +2041,7 @@ def settings_get(request: Request):
             row["sync_window_days"] if row and row["sync_window_days"] is not None else 90
         )
         classify_batch_size = (
-            row["classify_batch_size"]
-            if row and row["classify_batch_size"] is not None
-            else 50
+            row["classify_batch_size"] if row and row["classify_batch_size"] is not None else 50
         )
         classifier_model = (
             row["classifier_model"]
@@ -2200,8 +2255,7 @@ def _get_reauth_connections(user_id: Optional[str] = None) -> list[dict]:
             ).fetchall()
         else:
             rows = db.execute(
-                "SELECT id, institution_name FROM bank_connections"
-                " WHERE status = 'needs_reauth'"
+                "SELECT id, institution_name FROM bank_connections" " WHERE status = 'needs_reauth'"
             ).fetchall()
         return [dict(r) for r in rows]
     finally:
@@ -2523,18 +2577,21 @@ def ledgers_get(request: Request, period: str = "this_month"):
         sum(li["total"] for li in ldr["line_items"]) == 0 for ldr in ledgers
     ):
         from datetime import date as _lm_date
+
         _lm_today = _lm_date.today()
         fallback_ledgers = _get_ledgers(uid, with_drilldown=True, period="last_month")
-        if any(
-            sum(li["total"] for li in ldr["line_items"]) != 0
-            for ldr in fallback_ledgers
-        ):
+        if any(sum(li["total"] for li in ldr["line_items"]) != 0 for ldr in fallback_ledgers):
             ledgers = fallback_ledgers
             period = "last_month"
     return templates.TemplateResponse(
         request,
         "ledgers.html",
-        {"current_page": "ledgers", "ledgers": ledgers, "period": period, "reauth_connections": _get_reauth_connections(uid)},
+        {
+            "current_page": "ledgers",
+            "ledgers": ledgers,
+            "period": period,
+            "reauth_connections": _get_reauth_connections(uid),
+        },
     )
 
 

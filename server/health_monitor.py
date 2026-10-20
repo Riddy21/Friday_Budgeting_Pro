@@ -87,6 +87,7 @@ def check_all_connections(db_conn: "sqlite3.Connection", plaid_provider=None) ->
 
         if conn_type == "simplefin":
             from server.providers.simplefin import SimpleFINProvider
+
             conn_provider = SimpleFINProvider()
         elif plaid_provider is not None:
             conn_provider = plaid_provider

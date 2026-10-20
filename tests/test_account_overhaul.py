@@ -71,8 +71,19 @@ def _seed_account(
         "(id, connection_id, plaid_account_id, name, type, subtype, balance_current, "
         " currency, owner_label, inferred_type, is_duplicate) "
         "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        (aid, connection_id, paid, name, account_type, subtype, balance,
-         currency, owner_label, inferred_type, is_duplicate),
+        (
+            aid,
+            connection_id,
+            paid,
+            name,
+            account_type,
+            subtype,
+            balance,
+            currency,
+            owner_label,
+            inferred_type,
+            is_duplicate,
+        ),
     )
     conn.commit()
     return aid
@@ -94,8 +105,15 @@ def _seed_connection(
         "(id, institution_name, plaid_access_token_encrypted, user_id, "
         " last_synced_at, connection_type, plaid_env) "
         "VALUES (?, ?, ?, ?, ?, ?, ?)",
-        (cid, institution_name, "enc-token", user_id, last_synced_at,
-         connection_type, "production"),
+        (
+            cid,
+            institution_name,
+            "enc-token",
+            user_id,
+            last_synced_at,
+            connection_type,
+            "production",
+        ),
     )
     conn.commit()
     return cid
@@ -298,10 +316,19 @@ class TestComputeNetWorth:
     def test_credit_account_is_liability(self):
         """An account with inferred_type='credit' must reduce net worth."""
         from ui.server import _compute_net_worth
-        grouped = self._grouped([
-            {"id": "a", "name": "Visa", "type": "depository", "inferred_type": "credit",
-             "balance_current": 500.0, "currency": "CAD"},
-        ])
+
+        grouped = self._grouped(
+            [
+                {
+                    "id": "a",
+                    "name": "Visa",
+                    "type": "depository",
+                    "inferred_type": "credit",
+                    "balance_current": 500.0,
+                    "currency": "CAD",
+                },
+            ]
+        )
         nw = _compute_net_worth(grouped)
         # $500 owed → liabilities = 500, net = -500
         assert nw["liabilities"] == pytest.approx(500.0)
@@ -311,10 +338,19 @@ class TestComputeNetWorth:
     def test_loan_account_is_liability(self):
         """An account with inferred_type='loan' must reduce net worth."""
         from ui.server import _compute_net_worth
-        grouped = self._grouped([
-            {"id": "b", "name": "Mortgage", "type": "depository", "inferred_type": "loan",
-             "balance_current": 350000.0, "currency": "CAD"},
-        ])
+
+        grouped = self._grouped(
+            [
+                {
+                    "id": "b",
+                    "name": "Mortgage",
+                    "type": "depository",
+                    "inferred_type": "loan",
+                    "balance_current": 350000.0,
+                    "currency": "CAD",
+                },
+            ]
+        )
         nw = _compute_net_worth(grouped)
         assert nw["liabilities"] == pytest.approx(350000.0)
         assert nw["net_worth"] == pytest.approx(-350000.0)
@@ -322,10 +358,19 @@ class TestComputeNetWorth:
     def test_investment_account_is_asset(self):
         """An account with inferred_type='investment' is an asset (positive)."""
         from ui.server import _compute_net_worth
-        grouped = self._grouped([
-            {"id": "c", "name": "RRSP", "type": "depository", "inferred_type": "investment",
-             "balance_current": 25000.0, "currency": "CAD"},
-        ])
+
+        grouped = self._grouped(
+            [
+                {
+                    "id": "c",
+                    "name": "RRSP",
+                    "type": "depository",
+                    "inferred_type": "investment",
+                    "balance_current": 25000.0,
+                    "currency": "CAD",
+                },
+            ]
+        )
         nw = _compute_net_worth(grouped)
         assert nw["assets"] == pytest.approx(25000.0)
         assert nw["liabilities"] == pytest.approx(0.0)
@@ -334,10 +379,19 @@ class TestComputeNetWorth:
     def test_investment_bucket_appears_in_breakdown(self):
         """Investment accounts must appear in the Investments breakdown bucket."""
         from ui.server import _compute_net_worth
-        grouped = self._grouped([
-            {"id": "d", "name": "TFSA", "type": "depository", "inferred_type": "investment",
-             "balance_current": 10000.0, "currency": "CAD"},
-        ])
+
+        grouped = self._grouped(
+            [
+                {
+                    "id": "d",
+                    "name": "TFSA",
+                    "type": "depository",
+                    "inferred_type": "investment",
+                    "balance_current": 10000.0,
+                    "currency": "CAD",
+                },
+            ]
+        )
         nw = _compute_net_worth(grouped)
         labels = [b["label"] for b in nw["breakdown"]]
         assert "Investments" in labels
@@ -345,10 +399,19 @@ class TestComputeNetWorth:
     def test_credit_cards_bucket_appears_in_breakdown(self):
         """Credit card accounts must appear in the Credit Cards breakdown bucket."""
         from ui.server import _compute_net_worth
-        grouped = self._grouped([
-            {"id": "e", "name": "Visa", "type": "depository", "inferred_type": "credit",
-             "balance_current": 333.0, "currency": "CAD"},
-        ])
+
+        grouped = self._grouped(
+            [
+                {
+                    "id": "e",
+                    "name": "Visa",
+                    "type": "depository",
+                    "inferred_type": "credit",
+                    "balance_current": 333.0,
+                    "currency": "CAD",
+                },
+            ]
+        )
         nw = _compute_net_worth(grouped)
         labels = [b["label"] for b in nw["breakdown"]]
         assert "Credit Cards" in labels
@@ -356,10 +419,19 @@ class TestComputeNetWorth:
     def test_loan_bucket_appears_in_breakdown(self):
         """Loan/mortgage accounts must appear in the Debts breakdown bucket."""
         from ui.server import _compute_net_worth
-        grouped = self._grouped([
-            {"id": "f", "name": "Mortgage", "type": "depository", "inferred_type": "loan",
-             "balance_current": 100000.0, "currency": "CAD"},
-        ])
+
+        grouped = self._grouped(
+            [
+                {
+                    "id": "f",
+                    "name": "Mortgage",
+                    "type": "depository",
+                    "inferred_type": "loan",
+                    "balance_current": 100000.0,
+                    "currency": "CAD",
+                },
+            ]
+        )
         nw = _compute_net_worth(grouped)
         labels = [b["label"] for b in nw["breakdown"]]
         assert "Debts" in labels  # category renamed from Loans → Debts in account overhaul
@@ -367,14 +439,35 @@ class TestComputeNetWorth:
     def test_mixed_assets_and_liabilities(self):
         """Net worth = assets - liabilities across account types."""
         from ui.server import _compute_net_worth
-        grouped = self._grouped([
-            {"id": "g", "name": "Chequing", "type": "depository", "inferred_type": "depository",
-             "balance_current": 5000.0, "currency": "CAD"},
-            {"id": "h", "name": "Visa", "type": "depository", "inferred_type": "credit",
-             "balance_current": 500.0, "currency": "CAD"},
-            {"id": "i", "name": "RRSP", "type": "depository", "inferred_type": "investment",
-             "balance_current": 20000.0, "currency": "CAD"},
-        ])
+
+        grouped = self._grouped(
+            [
+                {
+                    "id": "g",
+                    "name": "Chequing",
+                    "type": "depository",
+                    "inferred_type": "depository",
+                    "balance_current": 5000.0,
+                    "currency": "CAD",
+                },
+                {
+                    "id": "h",
+                    "name": "Visa",
+                    "type": "depository",
+                    "inferred_type": "credit",
+                    "balance_current": 500.0,
+                    "currency": "CAD",
+                },
+                {
+                    "id": "i",
+                    "name": "RRSP",
+                    "type": "depository",
+                    "inferred_type": "investment",
+                    "balance_current": 20000.0,
+                    "currency": "CAD",
+                },
+            ]
+        )
         nw = _compute_net_worth(grouped)
         # assets = chequing(5000) + rrsp(20000) = 25000; liabilities = visa(500)
         assert nw["assets"] == pytest.approx(25000.0)
@@ -384,10 +477,19 @@ class TestComputeNetWorth:
     def test_provider_credit_type_still_works(self):
         """Plaid-supplied type='credit' (no inferred_type) must still be a liability."""
         from ui.server import _compute_net_worth
-        grouped = self._grouped([
-            {"id": "j", "name": "My Card", "type": "credit", "inferred_type": None,
-             "balance_current": 200.0, "currency": "CAD"},
-        ])
+
+        grouped = self._grouped(
+            [
+                {
+                    "id": "j",
+                    "name": "My Card",
+                    "type": "credit",
+                    "inferred_type": None,
+                    "balance_current": 200.0,
+                    "currency": "CAD",
+                },
+            ]
+        )
         nw = _compute_net_worth(grouped)
         assert nw["liabilities"] == pytest.approx(200.0)
         assert nw["net_worth"] == pytest.approx(-200.0)
@@ -395,6 +497,7 @@ class TestComputeNetWorth:
     def test_no_data_returns_has_data_false(self):
         """Empty accounts list produces has_data=False."""
         from ui.server import _compute_net_worth
+
         nw = _compute_net_worth({})
         assert not nw["has_data"]
 
@@ -428,6 +531,7 @@ class TestGetAccountsGroupedNoDoubleRender:
 
         with patch("ui.server._db_path", return_value=db_path):
             from ui.server import _get_accounts_grouped
+
             grouped = _get_accounts_grouped(user_id)
 
         all_account_ids = []
@@ -436,9 +540,9 @@ class TestGetAccountsGroupedNoDoubleRender:
                 all_account_ids.append(acct["id"])
 
         # No ID should appear more than once.
-        assert len(all_account_ids) == len(set(all_account_ids)), (
-            f"Duplicate account IDs found: {all_account_ids}"
-        )
+        assert len(all_account_ids) == len(
+            set(all_account_ids)
+        ), f"Duplicate account IDs found: {all_account_ids}"
 
     def test_duplicate_accounts_hidden_not_rendered(self, tmp_path):
         """Accounts with is_duplicate=1 must not appear in the accounts list."""
@@ -455,13 +559,16 @@ class TestGetAccountsGroupedNoDoubleRender:
         cid = _seed_connection(conn, user_id=user_id, institution_name="Bank B")
         primary_id = _seed_account(conn, connection_id=cid, name="Chequing Primary")
         dup_id = _seed_account(
-            conn, connection_id=cid, name="Chequing Dup",
+            conn,
+            connection_id=cid,
+            name="Chequing Dup",
             is_duplicate=1,
         )
         conn.close()
 
         with patch("ui.server._db_path", return_value=db_path):
             from ui.server import _get_accounts_grouped
+
             grouped = _get_accounts_grouped(user_id)
 
         all_ids = [a["id"] for data in grouped.values() for a in data.get("accounts", [])]
@@ -488,6 +595,7 @@ class TestGetAccountsGroupedNoDoubleRender:
 
         with patch("ui.server._db_path", return_value=db_path):
             from ui.server import _get_accounts_grouped
+
             grouped = _get_accounts_grouped(user_id)
 
         total_hidden = sum(data.get("hidden_count", 0) for data in grouped.values())
@@ -515,14 +623,13 @@ class TestOwnerLabelGrouping:
         conn.commit()
 
         cid = _seed_connection(conn, user_id=user_id, institution_name="Multi-Owner Bank")
-        _seed_account(conn, connection_id=cid, name="Ridvan Chequing",
-                      owner_label="Ridvan")
-        _seed_account(conn, connection_id=cid, name="Dollar Chequing",
-                      owner_label="Dollar")
+        _seed_account(conn, connection_id=cid, name="Ridvan Chequing", owner_label="Ridvan")
+        _seed_account(conn, connection_id=cid, name="Dollar Chequing", owner_label="Dollar")
         conn.close()
 
         with patch("ui.server._db_path", return_value=db_path):
             from ui.server import _get_accounts_grouped
+
             grouped = _get_accounts_grouped(user_id)
 
         owners = grouped.get("Multi-Owner Bank", {}).get("owners", [])
@@ -542,12 +649,18 @@ class TestOwnerLabelGrouping:
         conn.commit()
 
         cid = _seed_connection(conn, user_id=user_id, institution_name="RBC")
-        _seed_account(conn, connection_id=cid, name="Chequing",
-                      owner_label="Ridvan", inferred_type="depository")
+        _seed_account(
+            conn,
+            connection_id=cid,
+            name="Chequing",
+            owner_label="Ridvan",
+            inferred_type="depository",
+        )
         conn.close()
 
         with patch("ui.server._db_path", return_value=db_path):
             from ui.server import _get_accounts_grouped
+
             grouped = _get_accounts_grouped(user_id)
 
         accts = grouped.get("RBC", {}).get("accounts", [])
@@ -601,8 +714,9 @@ class TestBalanceOnlySyncUpdatesDB:
         conn.commit()
 
         cid = _seed_connection(conn, user_id=user_id)
-        aid = _seed_account(conn, connection_id=cid, name="RRSP",
-                            inferred_type="investment", balance=25000.0)
+        aid = _seed_account(
+            conn, connection_id=cid, name="RRSP", inferred_type="investment", balance=25000.0
+        )
 
         # Simulate a balance-only update (no new transactions, just balance drift).
         conn.execute(
@@ -628,6 +742,7 @@ class TestSimpleFINOwnerLabelInSync:
 
     def _make_provider_with_org(self, org: dict | None = None) -> SimpleFINProvider:
         import json
+
         payload = {
             "errlist": [],
             "connections": [{"conn_id": "C1", "name": "RBC Royal Bank"}],
@@ -687,14 +802,23 @@ class TestEdgeCases:
     def test_compute_net_worth_skips_none_balance(self):
         """Accounts with no balance must be skipped gracefully."""
         from ui.server import _compute_net_worth
+
         grouped = {
             "Bank": {
                 "accounts": [
-                    {"id": "z", "name": "Pending", "type": "depository",
-                     "inferred_type": None, "balance_current": None,
-                     "balance_available": None, "currency": "CAD"},
+                    {
+                        "id": "z",
+                        "name": "Pending",
+                        "type": "depository",
+                        "inferred_type": None,
+                        "balance_current": None,
+                        "balance_available": None,
+                        "currency": "CAD",
+                    },
                 ],
-                "hidden_count": 0, "syncing": False, "owners": [],
+                "hidden_count": 0,
+                "syncing": False,
+                "owners": [],
             }
         }
         nw = _compute_net_worth(grouped)
@@ -717,65 +841,83 @@ class TestAccountCategory:
 
     def _acct(self, **kw):
         base = {
-            "id": "a", "name": "Acct", "type": "depository", "inferred_type": None,
-            "subtype": None, "balance_current": 100.0, "balance_available": 100.0,
+            "id": "a",
+            "name": "Acct",
+            "type": "depository",
+            "inferred_type": None,
+            "subtype": None,
+            "balance_current": 100.0,
+            "balance_available": 100.0,
             "currency": "CAD",
         }
         base.update(kw)
         return base
 
-    def test_credit_card_is_debts(self):
+    def test_credit_card_is_credit_cards(self):
+        # Credit Cards is a separate category from Debts since 2026-10-18
         from ui.server import _account_category
-        assert _account_category(self._acct(inferred_type="credit")) == "Debts"
+
+        assert _account_category(self._acct(inferred_type="credit")) == "Credit Cards"
 
     def test_loan_is_debts(self):
         from ui.server import _account_category
+
         assert _account_category(self._acct(inferred_type="loan")) == "Debts"
 
     def test_mortgage_by_name_is_debts(self):
         """A property-address mortgage (inferred_type=loan) lands in Debts."""
         from ui.server import _account_category
-        acct = self._acct(name="103 Ardsley (-001)", inferred_type="loan",
-                          balance_current=357329.04)
+
+        acct = self._acct(
+            name="103 Ardsley (-001)", inferred_type="loan", balance_current=357329.04
+        )
         assert _account_category(acct) == "Debts"
 
     def test_investment_type_is_investments(self):
         from ui.server import _account_category
+
         assert _account_category(self._acct(inferred_type="investment")) == "Investments"
 
     def test_investment_subtype_is_investments(self):
         from ui.server import _account_category
+
         assert _account_category(self._acct(subtype="tfsa")) == "Investments"
 
     def test_balance_driven_investment_heuristic(self):
         """Funded account with ZERO transactions -> Investments (balance drifts)."""
         from ui.server import _account_category
+
         acct = self._acct(name="Holdings", balance_current=5000.0)
         assert _account_category(acct, txn_count=0) == "Investments"
 
     def test_funded_account_with_txns_not_investment(self):
         """Same account but WITH transactions is normal cash, not investment."""
         from ui.server import _account_category
+
         acct = self._acct(name="Chequing", balance_current=5000.0)
         assert _account_category(acct, txn_count=12) == "Cash"
 
     def test_low_balance_no_txn_not_investment(self):
         """A near-empty no-txn account is NOT swept into Investments."""
         from ui.server import _account_category
+
         acct = self._acct(name="Dormant", balance_current=5.0)
         assert _account_category(acct, txn_count=0) == "Cash"
 
     def test_savings_by_name(self):
         from ui.server import _account_category
-        assert _account_category(self._acct(name="RBC High Interest eSavings")) == "Savings"
-        assert _account_category(self._acct(name="Premium Rate Savings")) == "Savings"
+
+        assert _account_category(self._acct(name="RBC High Interest eSavings")) == "Cash"
+        assert _account_category(self._acct(name="Premium Rate Savings")) == "Cash"
 
     def test_savings_by_subtype(self):
         from ui.server import _account_category
-        assert _account_category(self._acct(subtype="savings")) == "Savings"
+
+        assert _account_category(self._acct(subtype="savings")) == "Cash"
 
     def test_plain_chequing_is_cash(self):
         from ui.server import _account_category
+
         assert _account_category(self._acct(name="Primary Chequing Account", txn_count=3)) == "Cash"
 
 
@@ -790,14 +932,32 @@ class TestGetAccountsByCategory:
             "Royal Bank of Canada (RBC)": {
                 "connection_id": "c1",
                 "accounts": [
-                    {"id": "m1", "name": "103 Ardsley (-001)", "type": "depository",
-                     "inferred_type": "loan", "subtype": None, "balance_current": 357329.04,
-                     "balance_available": 0.0, "currency": "CAD", "owner_label": "Ridvan"},
-                    {"id": "ch", "name": "RBC Day to Day Banking (7077)", "type": "depository",
-                     "inferred_type": "depository", "subtype": None, "balance_current": 5399.12,
-                     "balance_available": 5399.12, "currency": "CAD", "owner_label": "Dollar"},
+                    {
+                        "id": "m1",
+                        "name": "103 Ardsley (-001)",
+                        "type": "depository",
+                        "inferred_type": "loan",
+                        "subtype": None,
+                        "balance_current": 357329.04,
+                        "balance_available": 0.0,
+                        "currency": "CAD",
+                        "owner_label": "Ridvan",
+                    },
+                    {
+                        "id": "ch",
+                        "name": "RBC Day to Day Banking (7077)",
+                        "type": "depository",
+                        "inferred_type": "depository",
+                        "subtype": None,
+                        "balance_current": 5399.12,
+                        "balance_available": 5399.12,
+                        "currency": "CAD",
+                        "owner_label": "Dollar",
+                    },
                 ],
-                "hidden_count": 0, "syncing": False, "owners": ["Ridvan", "Dollar"],
+                "hidden_count": 0,
+                "syncing": False,
+                "owners": ["Ridvan", "Dollar"],
             }
         }
         monkeypatch.setattr(u, "_get_accounts_grouped", lambda user_id=None: fake_grouped)
@@ -812,8 +972,14 @@ class TestGetAccountsByCategory:
         assert any(a["id"] == "m1" for a in cats["Debts"]["owners"]["Ridvan"])
         # Canonical ordering: Debts must come after any asset categories present.
         labels = list(cats.keys())
-        assert labels == sorted(labels, key=lambda x: ["Cash", "Savings", "Investments", "Debts"].index(x)
-                                if x in ["Cash", "Savings", "Investments", "Debts"] else 99)
+        assert labels == sorted(
+            labels,
+            key=lambda x: (
+                ["Cash", "Savings", "Investments", "Debts"].index(x)
+                if x in ["Cash", "Savings", "Investments", "Debts"]
+                else 99
+            ),
+        )
 
 
 class TestInvestmentAccountDetection:
@@ -825,19 +991,38 @@ class TestInvestmentAccountDetection:
     """
 
     def test_canadian_registered_accounts(self):
-        for name in ("Wealthsimple RRSP", "My TFSA", "FHSA Account",
-                     "RRIF Payout", "RESP for kids", "LIRA Locked-In"):
+        for name in (
+            "Wealthsimple RRSP",
+            "My TFSA",
+            "FHSA Account",
+            "RRIF Payout",
+            "RESP for kids",
+            "LIRA Locked-In",
+        ):
             assert infer_account_type(name, "depository") == "investment", name
 
     def test_us_registered_accounts(self):
-        for name in ("401(k) Plan", "401k Rollover", "403(b)", "457b Deferred",
-                     "Roth IRA", "Traditional IRA", "529 College Fund"):
+        for name in (
+            "401(k) Plan",
+            "401k Rollover",
+            "403(b)",
+            "457b Deferred",
+            "Roth IRA",
+            "Traditional IRA",
+            "529 College Fund",
+        ):
             assert infer_account_type(name, "depository") == "investment", name
 
     def test_brokerage_platforms(self):
-        for name in ("Vanguard Brokerage", "Fidelity Investments", "Schwab One",
-                     "Questrade Margin", "RBC Direct Investing", "TD Direct Investing",
-                     "My ETF Holdings"):
+        for name in (
+            "Vanguard Brokerage",
+            "Fidelity Investments",
+            "Schwab One",
+            "Questrade Margin",
+            "RBC Direct Investing",
+            "TD Direct Investing",
+            "My ETF Holdings",
+        ):
             assert infer_account_type(name, "depository") == "investment", name
 
     def test_ambiguous_token_no_false_positive(self):
@@ -853,7 +1038,14 @@ class TestInvestmentAccountDetection:
     def test_category_places_investment_accounts(self):
         """_account_category routes investment-typed accounts to Investments."""
         from ui.server import _account_category
-        acct = {"id": "i", "name": "Wealthsimple RRSP", "type": "depository",
-                "inferred_type": "investment", "subtype": None,
-                "balance_current": 25000.0, "currency": "CAD"}
+
+        acct = {
+            "id": "i",
+            "name": "Wealthsimple RRSP",
+            "type": "depository",
+            "inferred_type": "investment",
+            "subtype": None,
+            "balance_current": 25000.0,
+            "currency": "CAD",
+        }
         assert _account_category(acct) == "Investments"

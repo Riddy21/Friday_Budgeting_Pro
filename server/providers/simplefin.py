@@ -348,29 +348,24 @@ class SimpleFINProvider(BankProvider):
         # (canonical domain, e.g. "rbcroyalbank.com").  We prefer the
         # human-readable ``name``; fall back to ``domain`` then ``conn_name``.
         org = acct.get("org") or {}
-        owner_label = (
-            org.get("name")
-            or org.get("domain")
-            or conn_name
-            or None
-        )
+        owner_label = org.get("name") or org.get("domain") or conn_name or None
 
         return {
             "account_id": acct.get("id"),
             "name": acct_name,
             "official_name": acct_name,
             "type": "depository",  # SimpleFIN doesn't expose account type; we
-                                    # infer the real type later via infer_account_type()
-                                    # in server.main (see RIDVAN_REQUESTS.md item 5).
+            # infer the real type later via infer_account_type()
+            # in server.main (see RIDVAN_REQUESTS.md item 5).
             "subtype": None,
-            "mask": None,          # SimpleFIN doesn't expose last-4 digits
+            "mask": None,  # SimpleFIN doesn't expose last-4 digits
             "balances": {
                 "current": _to_float(balance_str),
                 "available": _to_float(avail_str),
                 "iso_currency_code": currency,
             },
             # Non-Plaid extras: used by the sync loop in server.main.
-            "_conn_name": conn_name,     # institution/connection display name
+            "_conn_name": conn_name,  # institution/connection display name
             "owner_label": owner_label,  # org-level owner label for UI separation
         }
 
@@ -389,9 +384,7 @@ class SimpleFINProvider(BankProvider):
         date_only: str | None = None
         if posted_ts is not None:
             try:
-                dt = _datetime.datetime.fromtimestamp(
-                    int(posted_ts), tz=_datetime.timezone.utc
-                )
+                dt = _datetime.datetime.fromtimestamp(int(posted_ts), tz=_datetime.timezone.utc)
                 date_only = dt.strftime("%Y-%m-%d")
             except (TypeError, ValueError, OSError):
                 pass
@@ -459,18 +452,12 @@ class SimpleFINProvider(BankProvider):
                 start_date_str = start_date.isoformat()
             except ValueError:
                 # Malformed cursor: fall back to the configured history window.
-                start_date_str = (
-                    today - _datetime.timedelta(days=self.max_days)
-                ).isoformat()
+                start_date_str = (today - _datetime.timedelta(days=self.max_days)).isoformat()
         else:
             # First sync: fetch up to ``self.max_days`` of history (default 90).
-            start_date_str = (
-                today - _datetime.timedelta(days=self.max_days)
-            ).isoformat()
+            start_date_str = (today - _datetime.timedelta(days=self.max_days)).isoformat()
 
-        data = self._fetch_accounts(
-            access_url, start_date=start_date_str, end_date=end_date_str
-        )
+        data = self._fetch_accounts(access_url, start_date=start_date_str, end_date=end_date_str)
 
         # Build a conn_id → connection name map for institution_name resolution.
         conn_names: dict[str, str] = {}

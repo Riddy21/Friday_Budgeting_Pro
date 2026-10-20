@@ -119,4 +119,6 @@ def test_migration_updates_transfer_rule_to_savings(tmp_db, monkeypatch):
     conn.close()
 
     assert rule is not None
-    assert rule["rule_type"] == "savings", f"Expected savings after migration, got {rule['rule_type']}"
+    assert (
+        rule["rule_type"] == "savings"
+    ), f"Expected savings after migration, got {rule['rule_type']}"

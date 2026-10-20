@@ -107,6 +107,12 @@ def init_db(path: str | Path) -> None:
             conn.execute("ALTER TABLE bank_accounts ADD COLUMN description TEXT")
             conn.commit()
 
+        # Migration: bank_accounts.removed_at (soft-delete support)
+        ba_cols = {row[1] for row in conn.execute("PRAGMA table_info(bank_accounts)")}
+        if "removed_at" not in ba_cols:
+            conn.execute("ALTER TABLE bank_accounts ADD COLUMN removed_at INTEGER")
+            conn.commit()
+
         # Migration: user_id columns (#131 — multi-profile support)
         # These are guarded so they are no-ops if the column already exists.
         _add_col_if_missing(conn, "bank_connections", "user_id", "TEXT")
@@ -307,24 +313,21 @@ def init_db(path: str | Path) -> None:
         # Migration: Investment contribution rule → savings type (#235)
         # The default rule at priority 20 was previously typed 'transfer'.
         # Update it to 'savings' so investment outflows are classified correctly.
-        conn.execute(
-            """
+        conn.execute("""
             UPDATE classification_rules
             SET rule_type = 'savings',
                 description = 'Outflows to Wealthsimple, Questrade, RBC Direct Investing, RRSP, TFSA, or any investment platform are Savings, not spending or transfers'
             WHERE name = 'Investment contribution'
               AND is_default = 1
               AND rule_type = 'transfer'
-            """
-        )
+            """)
         conn.commit()
 
         # Migration: fix savings line items that were seeded as expense type (#284)
         # Line items whose names indicate savings/investments were historically
         # seeded as item_type='expense' before the 'savings' type was added (#234).
         # Correct them so totals and the savings UI work properly.
-        conn.execute(
-            """
+        conn.execute("""
             UPDATE line_items
             SET item_type = 'savings'
             WHERE item_type = 'expense'
@@ -335,8 +338,7 @@ def init_db(path: str | Path) -> None:
                 'Savings and Investments',
                 'Investments and Savings'
               )
-            """
-        )
+            """)
         conn.commit()
 
         # Sanity-check migration: verify savings entries are not double-counted in
@@ -352,6 +354,7 @@ def init_db(path: str | Path) -> None:
         savings_entry_count = conn.execute(savings_in_expense_sql).fetchone()["cnt"]
         if savings_entry_count > 0:
             import logging as _logging
+
             _logging.getLogger(__name__).info(
                 "[savings-sanity] %d transaction_entries are linked to savings-type line items. "
                 "These are correctly excluded from expense totals in summary() and get_ledger().",

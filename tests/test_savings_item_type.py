@@ -165,7 +165,9 @@ def test_get_ledger_totals_include_savings(tmp_db, monkeypatch):
     assert totals["income"] == 1000.0
     assert totals["expenses"] == 300.0
     assert totals["savings"] == 500.0
-    assert totals["net"] == 700.0  # income - expenses = 1000 - 300 (net now excludes savings from subtraction)
+    assert (
+        totals["net"] == 700.0
+    )  # income - expenses = 1000 - 300 (net now excludes savings from subtraction)
 
 
 def test_summary_includes_savings(tmp_db, monkeypatch):
@@ -223,4 +225,6 @@ def test_summary_includes_savings(tmp_db, monkeypatch):
     assert result["income"] == 2000.0
     assert result["expenses"] == 400.0
     assert result["savings"] == 600.0
-    assert result["net"] == 1600.0  # income - expenses = 2000 - 400 (net no longer subtracts savings)
+    assert (
+        result["net"] == 1600.0
+    )  # income - expenses = 2000 - 400 (net no longer subtracts savings)

@@ -6,6 +6,7 @@ Covers:
   - When sync_transactions raises TRANSACTIONS_SYNC_MUTATION_DURING_PAGINATION,
     the cursor is deleted and a retry is attempted from scratch
 """
+
 from __future__ import annotations
 
 import json
@@ -17,6 +18,7 @@ from unittest.mock import MagicMock, patch
 # Helper: build an exception that mimics a Plaid ApiException
 # ---------------------------------------------------------------------------
 
+
 def _make_plaid_exc(error_code: str) -> Exception:
     """Return a fake Plaid exception with a .body attribute."""
     exc = Exception(f"Plaid error: {error_code}")
@@ -27,6 +29,7 @@ def _make_plaid_exc(error_code: str) -> Exception:
 # ---------------------------------------------------------------------------
 # 1. Unit tests for _is_mutation_during_pagination_error
 # ---------------------------------------------------------------------------
+
 
 class TestIsMutationDuringPaginationError:
     """Unit tests for the _is_mutation_during_pagination_error helper."""
@@ -70,20 +73,20 @@ class TestIsMutationDuringPaginationError:
 # 2. Integration-level test: sync() resets cursor and retries on mutation error
 # ---------------------------------------------------------------------------
 
+
 def _build_minimal_db(path: Path) -> None:
     """Create a minimal DB that sync() can boot against."""
     from server.db import init_db
+
     init_db(str(path))
     conn = sqlite3.connect(str(path))
     conn.row_factory = sqlite3.Row
     # Insert a fake active bank connection
-    conn.execute(
-        """
+    conn.execute("""
         INSERT INTO bank_connections
             (id, user_id, plaid_access_token_encrypted, plaid_env, institution_name, status)
         VALUES ('conn-1', 'user-1', 'encrypted-token', 'sandbox', 'TestBank', 'active')
-        """
-    )
+        """)
     # Insert a stale cursor for that connection
     conn.execute(
         "INSERT INTO sync_cursors (connection_id, cursor) VALUES ('conn-1', 'stale-cursor')"
@@ -133,6 +136,7 @@ def test_sync_resets_cursor_and_retries_on_mutation_error(tmp_path):
         patch("server.main.classify_pending_transactions", return_value={"classified": 0}),
     ):
         from server.main import sync
+
         result = sync(classify=False)
 
     # Verify we got 2 calls to sync_transactions (first failed, second succeeded)
@@ -140,9 +144,7 @@ def test_sync_resets_cursor_and_retries_on_mutation_error(tmp_path):
 
     # Verify the cursor was reset (deleted from DB) after the mutation error
     conn = sqlite3.connect(str(db_path))
-    row = conn.execute(
-        "SELECT cursor FROM sync_cursors WHERE connection_id = 'conn-1'"
-    ).fetchone()
+    row = conn.execute("SELECT cursor FROM sync_cursors WHERE connection_id = 'conn-1'").fetchone()
     conn.close()
     # After retry completes, cursor should be updated to the new value
     # (the existing sync cursor upsert logic handles this)
@@ -180,6 +182,7 @@ def test_sync_continues_when_retry_also_fails(tmp_path):
         patch("server.main.classify_pending_transactions", return_value={"classified": 0}),
     ):
         from server.main import sync
+
         # Should NOT raise — the connection is skipped via `continue`
         result = sync(classify=False)
 

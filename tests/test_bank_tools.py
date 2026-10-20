@@ -149,8 +149,13 @@ def test_disconnect_removes_connection_and_sync_cursor(db_path):
 
     from server.main import disconnect
 
-    with patch("server.main._get_plaid_credentials", return_value=("fake-id", "fake-secret", "production")), \
-         patch("server.main.PlaidProvider") as mock_provider_cls:
+    with (
+        patch(
+            "server.main._get_plaid_credentials",
+            return_value=("fake-id", "fake-secret", "production"),
+        ),
+        patch("server.main.PlaidProvider") as mock_provider_cls,
+    ):
         mock_provider_instance = mock_provider_cls.return_value
         mock_provider_instance.remove_item.return_value = {"revoked": True, "request_id": "req-abc"}
         disconnect_result = disconnect(connection_id)
@@ -190,10 +195,13 @@ def test_disconnect_still_removes_local_row_when_plaid_remove_fails(db_path):
 
     from server.main import disconnect
 
-    with patch("server.main._get_plaid_credentials", return_value=("fake-id", "fake-secret", "production")), \
-         patch(
-        "server.main.PlaidProvider"
-    ) as mock_p:
+    with (
+        patch(
+            "server.main._get_plaid_credentials",
+            return_value=("fake-id", "fake-secret", "production"),
+        ),
+        patch("server.main.PlaidProvider") as mock_p,
+    ):
         mock_p.return_value.remove_item.side_effect = Exception("Plaid API error")
         disconnect_result = disconnect(connection_id)
 

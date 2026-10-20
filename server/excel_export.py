@@ -241,7 +241,11 @@ def _write_ledger_sheet(
         net_cell.font = _BOLD_FONT
         net_ytd = 0.0
         for m in range(1, 13):
-            net = income_by_month.get(m, 0.0) - expense_by_month.get(m, 0.0) - savings_by_month.get(m, 0.0)
+            net = (
+                income_by_month.get(m, 0.0)
+                - expense_by_month.get(m, 0.0)
+                - savings_by_month.get(m, 0.0)
+            )
             ws.cell(row=row, column=m + 1, value=net)
             net_ytd += net
         ws.cell(row=row, column=14, value=net_ytd)

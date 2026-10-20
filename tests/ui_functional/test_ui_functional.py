@@ -100,13 +100,19 @@ def _post(base_url: str, path: str, data: dict) -> int:
         return e.code
 
 
-def _complete_setup(base_url: str, username: str = "testuser", password: str = "testpass123") -> None:
+def _complete_setup(
+    base_url: str, username: str = "testuser", password: str = "testpass123"
+) -> None:
     """Drive the setup wizard via HTTP without a browser."""
-    _post(base_url, "/setup/1", {
-        "username": username,
-        "password": password,
-        "password_confirm": password,
-    })
+    _post(
+        base_url,
+        "/setup/1",
+        {
+            "username": username,
+            "password": password,
+            "password_confirm": password,
+        },
+    )
     _post(base_url, "/setup/2", {"notification_channel": "openclaw_chat"})
     _post(base_url, "/setup/3", {"action": "skip"})
 
@@ -280,9 +286,9 @@ class TestPageLoads:
         page_desktop.goto(url)
         page_desktop.wait_for_load_state("domcontentloaded")
         _screenshot(page_desktop, f"desktop_{title_fragment.lower()}_load")
-        assert title_fragment in page_desktop.title(), (
-            f"Expected '{title_fragment}' in page title for {path}, got: {page_desktop.title()}"
-        )
+        assert (
+            title_fragment in page_desktop.title()
+        ), f"Expected '{title_fragment}' in page title for {path}, got: {page_desktop.title()}"
 
     @pytest.mark.parametrize("path,title_fragment", PAGES)
     def test_page_loads_mobile(self, page_mobile, live_server, path, title_fragment):
@@ -332,7 +338,11 @@ class TestAuthPages:
         _screenshot(page, "login_invalid")
         # Should stay on login page or show error
         content = page.content()
-        assert "login" in page.url.lower() or "error" in content.lower() or "invalid" in content.lower()
+        assert (
+            "login" in page.url.lower()
+            or "error" in content.lower()
+            or "invalid" in content.lower()
+        )
         ctx.close()
 
     def test_forgot_password_page_loads(self, browser_instance, live_server):
@@ -396,9 +406,9 @@ class TestDashboardPage:
         page_desktop.wait_for_load_state("domcontentloaded")
 
         for label in ["Dashboard", "Accounts", "Ledgers", "Settings"]:
-            assert page_desktop.locator(f"nav a:has-text('{label}')").count() > 0, (
-                f"Nav link '{label}' not found"
-            )
+            assert (
+                page_desktop.locator(f"nav a:has-text('{label}')").count() > 0
+            ), f"Nav link '{label}' not found"
 
     def test_logout_link_present(self, page_desktop, live_server):
         page_desktop.goto(live_server["base_url"] + "/dashboard")
@@ -667,12 +677,16 @@ class TestProfilePage:
     def test_profile_export_excel_link(self, page_desktop, live_server):
         page_desktop.goto(live_server["base_url"] + "/profile")
         page_desktop.wait_for_load_state("domcontentloaded")
-        assert page_desktop.locator("a[href='/export/excel']").count() > 0, "Export Excel link not found"
+        assert (
+            page_desktop.locator("a[href='/export/excel']").count() > 0
+        ), "Export Excel link not found"
 
     def test_profile_connect_bank_link(self, page_desktop, live_server):
         page_desktop.goto(live_server["base_url"] + "/profile")
         page_desktop.wait_for_load_state("domcontentloaded")
-        assert page_desktop.locator("a[href='/link/start']").count() > 0, "Connect a bank link not found"
+        assert (
+            page_desktop.locator("a[href='/link/start']").count() > 0
+        ), "Connect a bank link not found"
 
     def test_profile_mobile(self, page_mobile, live_server):
         page_mobile.goto(live_server["base_url"] + "/profile")
@@ -710,9 +724,7 @@ class TestNavigation:
         # Scope to the primary (desktop) nav: the responsive layout also renders
         # a <nav class="mobile-nav"> with the same links, which would otherwise
         # make this selector match two elements (Playwright strict-mode error).
-        page_desktop.locator(
-            f"nav:not(.mobile-nav) a:has-text('{label}')"
-        ).first.click()
+        page_desktop.locator(f"nav:not(.mobile-nav) a:has-text('{label}')").first.click()
         page_desktop.wait_for_load_state("domcontentloaded")
 
         assert expected_path in page_desktop.url, (
@@ -764,7 +776,9 @@ class TestResponsiveLayout:
 
     @pytest.mark.parametrize("viewport", VIEWPORTS)
     def test_header_visible(self, browser_instance, live_server, viewport):
-        ctx = browser_instance.new_context(viewport={"width": viewport["width"], "height": viewport["height"]})
+        ctx = browser_instance.new_context(
+            viewport={"width": viewport["width"], "height": viewport["height"]}
+        )
         page = ctx.new_page()
         _login_browser(page, live_server["base_url"], live_server["password"])
 
@@ -779,7 +793,9 @@ class TestResponsiveLayout:
 
     @pytest.mark.parametrize("viewport", VIEWPORTS)
     def test_footer_visible(self, browser_instance, live_server, viewport):
-        ctx = browser_instance.new_context(viewport={"width": viewport["width"], "height": viewport["height"]})
+        ctx = browser_instance.new_context(
+            viewport={"width": viewport["width"], "height": viewport["height"]}
+        )
         page = ctx.new_page()
         _login_browser(page, live_server["base_url"], live_server["password"])
 
@@ -792,7 +808,9 @@ class TestResponsiveLayout:
 
     @pytest.mark.parametrize("viewport", VIEWPORTS)
     def test_main_content_visible(self, browser_instance, live_server, viewport):
-        ctx = browser_instance.new_context(viewport={"width": viewport["width"], "height": viewport["height"]})
+        ctx = browser_instance.new_context(
+            viewport={"width": viewport["width"], "height": viewport["height"]}
+        )
         page = ctx.new_page()
         _login_browser(page, live_server["base_url"], live_server["password"])
 
@@ -800,7 +818,9 @@ class TestResponsiveLayout:
         page.wait_for_load_state("domcontentloaded")
 
         main = page.locator("main")
-        assert main.count() > 0 and main.is_visible(), f"Main content not visible at {viewport['name']}"
+        assert (
+            main.count() > 0 and main.is_visible()
+        ), f"Main content not visible at {viewport['name']}"
         ctx.close()
 
 
@@ -817,23 +837,35 @@ class TestSavingsUI:
 
         # Need a session cookie — log in via HTTP
         import http.cookiejar
+
         jar = http.cookiejar.CookieJar()
         opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(jar))
         payload = urllib.parse.urlencode(
             {"username": live_server["username"], "password": live_server["password"]}
         ).encode()
-        opener.open(urllib.request.Request(
-            f"{base}/login", data=payload,
-            headers={"Content-Type": "application/x-www-form-urlencoded"}
-        ))
+        opener.open(
+            urllib.request.Request(
+                f"{base}/login",
+                data=payload,
+                headers={"Content-Type": "application/x-www-form-urlencoded"},
+            )
+        )
 
         # Now hit the endpoint
         resp = opener.open(f"{base}/api/summary?period=this_month")
         assert resp.status == 200
         data = _json.loads(resp.read().decode())
         assert "error" not in data, f"API returned error: {data['error']}"
-        for key in ("income", "expenses", "savings", "savings_contributions",
-                    "unspent_balance", "total_saved", "savings_rate", "savings_rate_ytd"):
+        for key in (
+            "income",
+            "expenses",
+            "savings",
+            "savings_contributions",
+            "unspent_balance",
+            "total_saved",
+            "savings_rate",
+            "savings_rate_ytd",
+        ):
             assert key in data, f"Missing key: {key}"
 
     @pytest.mark.parametrize("period", ["this_month", "last_month", "this_year", "ytd"])
@@ -850,10 +882,13 @@ class TestSavingsUI:
         payload = urllib.parse.urlencode(
             {"username": live_server["username"], "password": live_server["password"]}
         ).encode()
-        opener.open(urllib.request.Request(
-            f"{base}/login", data=payload,
-            headers={"Content-Type": "application/x-www-form-urlencoded"}
-        ))
+        opener.open(
+            urllib.request.Request(
+                f"{base}/login",
+                data=payload,
+                headers={"Content-Type": "application/x-www-form-urlencoded"},
+            )
+        )
 
         resp = opener.open(f"{base}/api/summary?period={period}")
         assert resp.status == 200
@@ -864,6 +899,7 @@ class TestSavingsUI:
     def test_dashboard_savings_cards_render(self, page_desktop, live_server):
         """Dashboard savings section renders two cards (no JS error)."""
         import time as _time
+
         page = page_desktop
         _login_browser(page, live_server["base_url"], live_server["password"])
         page.goto(live_server["base_url"] + "/dashboard")
@@ -885,6 +921,7 @@ class TestSavingsUI:
     def test_dashboard_no_js_errors_savings(self, browser_instance, live_server):
         """No JavaScript errors while loading the savings section on dashboard."""
         import time as _time
+
         ctx = browser_instance.new_context()
         page = ctx.new_page()
         js_errors = []
