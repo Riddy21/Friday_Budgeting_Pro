@@ -427,6 +427,8 @@ def test_sync_passes_none_not_module_singleton_to_health_monitor(monkeypatch):
     class _FakeConn:
         def execute(self, *a, **kw):
             class _Result:
+                rowcount = 0
+
                 def fetchall(self):
                     return []
 
