@@ -1104,7 +1104,7 @@ def _build_ledger_drilldown(
     for item in item_rows:
         txn_sql = (
             "SELECT t.id, t.date, t.merchant, te.amount_home, te.amount, "
-            "       b.name AS account_name, t.pending "
+            "       t.currency, b.name AS account_name, t.pending "
             "FROM transaction_entries te "
             "JOIN transactions t ON te.transaction_id = t.id "
             "LEFT JOIN bank_accounts b ON t.bank_account_id = b.id "
@@ -1125,6 +1125,8 @@ def _build_ledger_drilldown(
                     "date": tx["date"],
                     "merchant": tx["merchant"] or "",
                     "amount": round(amt, 2),
+                    "original_amount": round(tx["amount"], 2) if tx["amount"] is not None else round(amt, 2),
+                    "original_currency": tx["currency"] or "CAD",
                     "account_name": tx["account_name"] or "",
                     "pending": bool(tx["pending"]),
                 }
