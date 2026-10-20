@@ -105,8 +105,11 @@ CREATE TABLE IF NOT EXISTS transactions (
   plaid_category TEXT,                         -- Plaid personal_finance_category primary
   plaid_category_detailed TEXT,                -- Plaid personal_finance_category detailed
   pending INTEGER DEFAULT 0,                   -- 1 = pending, do not classify
-  notes TEXT                                   -- user note for context (e.g. "Trip to China for grandma")
+  notes TEXT,                                  -- user note for context (e.g. "Trip to China for grandma")
+  content_hash TEXT                            -- SHA256(mask|date|normalized_merchant|amount) for cross-connection dedup (#SimpleFIN migration)
 );
+
+CREATE INDEX IF NOT EXISTS idx_transactions_content_hash ON transactions(content_hash);
 
 -- ---------------------------------------------------------------------------
 -- Classification results
