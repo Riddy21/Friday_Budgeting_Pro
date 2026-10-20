@@ -26,8 +26,7 @@ from server.main import _deduplicate_accounts
 def _mk_user(conn, user_id=None):
     uid = user_id or str(uuid.uuid4())
     conn.execute(
-        "INSERT OR IGNORE INTO users (id, username, password_hash, created_at) "
-        "VALUES (?, ?, ?, ?)",
+        "INSERT OR IGNORE INTO users (id, username, password_hash, created_at) VALUES (?, ?, ?, ?)",
         (uid, uid[:8], "x", int(time.time())),
     )
     return uid

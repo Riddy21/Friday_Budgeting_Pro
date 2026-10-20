@@ -117,7 +117,7 @@ def test_unusually_large_charge_detected():
 
     # 3 prior ~$10 charges, then one $500 charge
     for i in range(3):
-        _insert_txn(conn, aid, "Starbucks", 10.00, date=f"2024-05-{i+1:02d}")
+        _insert_txn(conn, aid, "Starbucks", 10.00, date=f"2024-05-{i + 1:02d}")
     _insert_txn(conn, aid, "Starbucks", 500.00, date="2024-06-01")
 
     flags = _detect_suspicious_transactions(conn, uid)

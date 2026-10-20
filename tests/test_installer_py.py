@@ -123,7 +123,8 @@ def test_install_calls_launchctl_bootstrap(tmp_path: Path) -> None:
 
     plist_path = tmp_path / "Library" / "LaunchAgents" / installer.PLIST_NAME
     expected_cmd = ["launchctl", "bootstrap", f"gui/{os.getuid()}", str(plist_path)]
-    mock_run.assert_called_once_with(expected_cmd, check=False)
+    # May also call tailscale status check, so use assert_any_call
+    mock_run.assert_any_call(expected_cmd, check=False)
 
 
 # ---------------------------------------------------------------------------

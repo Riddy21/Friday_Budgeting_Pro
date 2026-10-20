@@ -228,41 +228,35 @@
         var labelEl = document.getElementById('savings-period-label');
         if (labelEl) labelEl.textContent = '(' + periodLabel + ')';
 
-        var totalSaved      = d.total_saved || 0;
-        var contributions   = d.savings_contributions || 0;
-        var unspent         = d.unspent_balance || 0;
-        var savingsRate     = d.savings_rate || '0%';
-        var savingsRateYtd  = d.savings_rate_ytd || '0%';
-        var savingsRatePct  = parseFloat(savingsRate);
+        // Simple numbers
+        var income          = d.income || 0;
+        var expenses        = d.expenses || 0;
+        var net             = income - expenses;
+        var cashOnHand      = d.total_cash_on_hand || 0;
+        var savingsRate     = income > 0 ? (net / income * 100) : 0;
 
-        var badgeClass, badgeText;
-        if (totalSaved < 0) {
-          badgeClass = 'savings-badge-red';
-          badgeText  = '\u26A0\uFE0F Overspent';
-        } else if (savingsRatePct >= 20) {
-          badgeClass = 'savings-badge-green';
-          badgeText  = '\u2705 On Track';
-        } else {
-          badgeClass = 'savings-badge-amber';
-          badgeText  = '\u26A0\uFE0F Under Saving';
-        }
-
-        var fmt = function(n) {
-          return 'C$' + Math.abs(n).toFixed(2) + (n < 0 ? ' (deficit)' : '');
+        var fmtMoney = function(n) {
+          var sign = n < 0 ? '-' : '';
+          return sign + 'C$' + Math.abs(n).toLocaleString('en-CA', {minimumFractionDigits: 2, maximumFractionDigits: 2});
         };
 
         container.innerHTML =
           '<div class="stat-card savings">' +
-            '<div class="stat-card-title">Net (Income \u2212 Expenses)</div>' +
-            '<div class="stat-card-value">' + fmt(totalSaved) + '</div>' +
-            '<div class="stat-card-sub">Investments: ' + fmt(contributions) + '</div>' +
-            '<div class="stat-card-sub">Unspent: ' + fmt(unspent) + '</div>' +
-            '<span class="savings-badge ' + badgeClass + '">' + badgeText + '</span>' +
+            '<div class="stat-card-title">Cash on Hand</div>' +
+            '<div class="stat-card-value">' + fmtMoney(cashOnHand) + '</div>' +
+            '<div class="stat-card-sub">Total across all accounts</div>' +
           '</div>' +
           '<div class="stat-card savings">' +
-            '<div class="stat-card-title">Net Savings Rate</div>' +
-            '<div class="stat-card-value">' + savingsRate + '</div>' +
-            '<div class="stat-card-sub">YTD rate: ' + savingsRateYtd + '</div>' +
+            '<div class="stat-card-title">This Month</div>' +
+            '<div class="stat-card-sub">Income: ' + fmtMoney(income) + '</div>' +
+            '<div class="stat-card-sub">Expenses: ' + fmtMoney(expenses) + '</div>' +
+            '<div class="stat-card-value ' + (net >= 0 ? 'net-positive' : 'net-negative') + '">' + fmtMoney(net) + '</div>' +
+            '<div class="stat-card-sub">' + (net >= 0 ? 'surplus' : 'deficit') + '</div>' +
+          '</div>' +
+          '<div class="stat-card savings">' +
+            '<div class="stat-card-title">Savings Rate</div>' +
+            '<div class="stat-card-value ' + (savingsRate >= 0 ? 'net-positive' : 'net-negative') + '">' + savingsRate.toFixed(1) + '%</div>' +
+            '<div class="stat-card-sub">(Net ÷ Income)</div>' +
           '</div>';
       } catch(e) {
         document.getElementById('savings-loading').textContent = 'Could not load savings data.';

@@ -60,8 +60,7 @@ def _ensure_user(db_path):
 
     conn = get_db(db_path)
     conn.execute(
-        "INSERT OR IGNORE INTO users (id, username, password_hash, created_at) "
-        "VALUES (?, ?, ?, ?)",
+        "INSERT OR IGNORE INTO users (id, username, password_hash, created_at) VALUES (?, ?, ?, ?)",
         ("user-1", "testuser", "hash", int(_time.time())),
     )
     conn.commit()

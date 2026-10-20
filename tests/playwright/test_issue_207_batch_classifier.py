@@ -480,9 +480,9 @@ def test_classify_batch_sub_batching(tmp_app_dir, monkeypatch):
 
     # With MAX_BATCH_CHARS=100, each transaction should be in its own sub-batch.
     assert len(results) == 4
-    assert chat_calls["count"] > 1, (
-        f"Expected multiple chat calls with tiny MAX_BATCH_CHARS=100, " f"got {chat_calls['count']}"
-    )
+    assert (
+        chat_calls["count"] > 1
+    ), f"Expected multiple chat calls with tiny MAX_BATCH_CHARS=100, got {chat_calls['count']}"
 
 
 def test_classify_batch_malformed_llm_response(tmp_app_dir):

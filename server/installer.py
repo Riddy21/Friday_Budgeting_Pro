@@ -36,7 +36,7 @@ def _openclaw_config_path() -> Path:
 
 def _get_public_url() -> str | None:
     """Detect the best public URL for this machine.
-    
+
     Checks in order:
     1. FRIDAY_BP_PUBLIC_URL env var (explicit override)
     2. Tailscale hostname (if tailscale is available)
@@ -45,7 +45,7 @@ def _get_public_url() -> str | None:
     # Check explicit override first
     if url := os.environ.get("FRIDAY_BP_PUBLIC_URL"):
         return url
-    
+
     # Try to detect Tailscale hostname
     try:
         result = subprocess.run(
@@ -56,18 +56,20 @@ def _get_public_url() -> str | None:
         )
         if result.returncode == 0:
             import json
+
             status = json.loads(result.stdout)
             if dns_name := status.get("Self", {}).get("DNSName", "").rstrip("."):
-                return f"http://{dns_name}:6789"
+                # Use HTTPS - Friday uses TLS when certs are available
+                return f"https://{dns_name}:6789"
     except (subprocess.TimeoutExpired, FileNotFoundError, json.JSONDecodeError):
         pass
-    
+
     return None
 
 
 def _render_plist(install_dir: Path, public_url: str | None = None) -> str:
     """Return the launchd plist XML for the daemon.
-    
+
     Parameters
     ----------
     install_dir:
@@ -78,7 +80,7 @@ def _render_plist(install_dir: Path, public_url: str | None = None) -> str:
     """
     log_path = Path.home() / ".friday-bp" / "daemon.log"
     python_bin = sys.executable
-    
+
     # Build environment variables section if needed
     env_section = ""
     if public_url:
@@ -89,7 +91,7 @@ def _render_plist(install_dir: Path, public_url: str | None = None) -> str:
         <string>{public_url}</string>
     </dict>
 """
-    
+
     return f"""<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">

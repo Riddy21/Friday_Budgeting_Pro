@@ -42,6 +42,26 @@ import urllib.request
 from pathlib import Path
 from typing import Optional
 
+# Secure cookies only in production (HTTPS). Tests use HTTP.
+_SECURE_COOKIES = os.environ.get("FRIDAY_SECURE_COOKIES", "auto").lower()
+
+
+def _use_secure_cookie(request: Optional["Request"] = None) -> bool:
+    """Return True if cookies should have secure=True.
+
+    In 'auto' mode (default), check if request came over HTTPS.
+    Can be forced with FRIDAY_SECURE_COOKIES=true/false.
+    """
+    if _SECURE_COOKIES == "true":
+        return True
+    if _SECURE_COOKIES == "false":
+        return False
+    # Auto-detect from request
+    if request is not None:
+        return request.url.scheme == "https"
+    return False
+
+
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
@@ -513,7 +533,13 @@ async def setup_post(request: Request, step: int):
         # rest of the wizard and lands authenticated on /profile at the end.
         # (Matches the spec in tests/test_setup_wizard.py which asserts
         # friday_bp_session is set after POST /setup/1.)
-        resp.set_cookie(SESSION_COOKIE, stoken, httponly=True, samesite="lax")
+        resp.set_cookie(
+            SESSION_COOKIE,
+            stoken,
+            httponly=True,
+            samesite="lax",
+            secure=_use_secure_cookie(request),
+        )
         return resp
     elif step == 2:
         raw = form.get("notification_channel") or form.get("notification_pref") or "openclaw_chat"
@@ -568,7 +594,14 @@ async def setup_post(request: Request, step: int):
         redir = _redirect("/dashboard")
         st = state.get("session_token")
         if st:
-            redir.set_cookie(_SETUP_COMPLETE_COOKIE, st, httponly=True, samesite="lax", max_age=300)
+            redir.set_cookie(
+                _SETUP_COMPLETE_COOKIE,
+                st,
+                httponly=True,
+                samesite="lax",
+                secure=_use_secure_cookie(request),
+                max_age=300,
+            )
         _clear_wizard(redir, tok)
         return redir
     return HTMLResponse(status_code=404, content="Unknown step.")
@@ -660,7 +693,9 @@ async def login_post(request: Request):
     token = create_session(_db_path(), user_agent=ua, user_id=user["id"])
 
     response = _redirect("/dashboard")
-    response.set_cookie(SESSION_COOKIE, token, httponly=True, samesite="lax")
+    response.set_cookie(
+        SESSION_COOKIE, token, httponly=True, samesite="lax", secure=_use_secure_cookie(request)
+    )
     response.delete_cookie(_SETUP_COMPLETE_COOKIE)
     return response
 
@@ -1224,6 +1259,7 @@ def _get_dashboard_widgets() -> dict:
                   LEFT JOIN transaction_entries te ON te.transaction_id = t.id
                   LEFT JOIN line_items li ON li.id = te.line_item_id
                  WHERE bc.user_id = ?
+                   AND (te.entry_type IS NULL OR te.entry_type != 'transfer')
                  ORDER BY t.date DESC, t.id DESC
                  LIMIT 8
                 """,
@@ -1703,10 +1739,17 @@ def _compute_net_worth(
             is_liability = effective_t in ("credit", "loan")
             # Net-worth sign: liabilities reduce net worth.
             value = -float(balance) if is_liability else float(balance)
+            # Use balance_home (FX-converted) for breakdown totals if available.
+            # This ensures the Accounts page category totals match the Dashboard.
+            balance_home = acct.get("balance_home")
+            if balance_home is not None:
+                value_home = -float(balance_home) if is_liability else float(balance_home)
+            else:
+                value_home = value  # fallback to raw balance
             label = categorise(acct)
 
             b = buckets.setdefault(label, {"total": 0.0, "count": 0, "currencies": set()})
-            b["total"] += value
+            b["total"] += value_home
             b["count"] += 1
             b["currencies"].add(currency)
 
@@ -1926,7 +1969,7 @@ def account_transactions_get(request: Request, account_id: str, limit: int = 50)
         rows = conn.execute(
             """
             SELECT t.id, t.date, t.authorized_datetime, t.merchant, t.amount,
-                   t.pending,
+                   t.pending, t.notes,
                    COALESCE(t.currency, 'CAD') AS currency,
                    te.entry_type, te.source, te.uncertain,
                    li.name AS line_item_name,
@@ -2006,6 +2049,71 @@ async def accounts_name_patch(request: Request, account_id: str):
     finally:
         conn.close()
     return JSONResponse({"status": "ok", "account_id": account_id, "name": name})
+
+
+# ── Transaction notes ────────────────────────────────────────────────────────
+
+
+@app.patch("/api/transactions/{transaction_id}/notes")
+async def transaction_notes_patch(request: Request, transaction_id: str):
+    """Update or clear the notes on a transaction.
+
+    Reads JSON body: {"notes": "<text or null>"}
+    Returns {"status": "ok", "transaction_id": ..., "notes": ...} or 404.
+    """
+    if not _is_authenticated(request):
+        return JSONResponse({"error": "not authenticated"}, status_code=401)
+    body = await request.json()
+    notes = body.get("notes")
+    if notes is not None:
+        notes = notes.strip() or None  # empty string -> NULL
+    conn = get_db(_db_path())
+    try:
+        result = conn.execute(
+            "UPDATE transactions SET notes = ? WHERE id = ?",
+            (notes, transaction_id),
+        )
+        conn.commit()
+        if result.rowcount == 0:
+            return JSONResponse(
+                {"error": f"transaction {transaction_id!r} not found"}, status_code=404
+            )
+    finally:
+        conn.close()
+    return JSONResponse({"status": "ok", "transaction_id": transaction_id, "notes": notes})
+
+
+@app.get("/api/transactions/{transaction_id}")
+def transaction_get(request: Request, transaction_id: str):
+    """Get a single transaction with full details including notes."""
+    if not _is_authenticated(request):
+        return JSONResponse({"error": "not authenticated"}, status_code=401)
+    conn = get_db(_db_path())
+    try:
+        row = conn.execute(
+            """
+            SELECT t.id, t.date, t.merchant, t.amount, t.currency, t.notes,
+                   t.plaid_category, t.plaid_category_detailed,
+                   ba.name AS account_name, ba.mask AS account_mask,
+                   bc.institution_name,
+                   te.entry_type, te.source, te.reviewed, te.uncertain,
+                   li.name AS line_item_name,
+                   l.name AS ledger_name
+              FROM transactions t
+              JOIN bank_accounts ba ON ba.id = t.bank_account_id
+              JOIN bank_connections bc ON bc.id = ba.connection_id
+              LEFT JOIN transaction_entries te ON te.transaction_id = t.id
+              LEFT JOIN line_items li ON li.id = te.line_item_id
+              LEFT JOIN ledgers l ON l.id = te.ledger_id
+             WHERE t.id = ?
+            """,
+            (transaction_id,),
+        ).fetchone()
+        if row is None:
+            return JSONResponse({"error": "transaction not found"}, status_code=404)
+        return JSONResponse(dict(row))
+    finally:
+        conn.close()
 
 
 # ── /settings (#159, #161) ───────────────────────────────────────────────────
@@ -2255,7 +2363,7 @@ def _get_reauth_connections(user_id: Optional[str] = None) -> list[dict]:
             ).fetchall()
         else:
             rows = db.execute(
-                "SELECT id, institution_name FROM bank_connections" " WHERE status = 'needs_reauth'"
+                "SELECT id, institution_name FROM bank_connections WHERE status = 'needs_reauth'"
             ).fetchall()
         return [dict(r) for r in rows]
     finally:
@@ -2340,7 +2448,9 @@ def profile_get(request: Request):
                 "reauth_connections": [c for c in connections if c.get("status") == "needs_reauth"],
             },
         )
-        resp.set_cookie(SESSION_COOKIE, st, httponly=True, samesite="lax")
+        resp.set_cookie(
+            SESSION_COOKIE, st, httponly=True, samesite="lax", secure=_use_secure_cookie(request)
+        )
         resp.delete_cookie(_SETUP_COMPLETE_COOKIE)
         return resp
     resp2 = _redirect("/login")
@@ -2583,6 +2693,14 @@ def ledgers_get(request: Request, period: str = "this_month"):
         if any(sum(li["total"] for li in ldr["line_items"]) != 0 for ldr in fallback_ledgers):
             ledgers = fallback_ledgers
             period = "last_month"
+    # Calculate grand totals across all ledgers
+    grand_totals = {"income": 0.0, "expenses": 0.0, "savings": 0.0, "net": 0.0}
+    for ldr in ledgers:
+        if "totals" in ldr:
+            grand_totals["income"] += ldr["totals"].get("income", 0) or 0
+            grand_totals["expenses"] += ldr["totals"].get("expenses", 0) or 0
+            grand_totals["savings"] += ldr["totals"].get("savings", 0) or 0
+            grand_totals["net"] += ldr["totals"].get("net", 0) or 0
     return templates.TemplateResponse(
         request,
         "ledgers.html",
@@ -2590,6 +2708,7 @@ def ledgers_get(request: Request, period: str = "this_month"):
             "current_page": "ledgers",
             "ledgers": ledgers,
             "period": period,
+            "grand_totals": grand_totals,
             "reauth_connections": _get_reauth_connections(uid),
         },
     )

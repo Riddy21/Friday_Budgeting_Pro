@@ -928,8 +928,7 @@ def retry_pending_revocations() -> dict:
             upd = get_db(server.paths.DB_PATH)
             try:
                 upd.execute(
-                    "UPDATE plaid_revocation_log "
-                    "SET revoked=1, revoked_at=unixepoch() WHERE id=?",
+                    "UPDATE plaid_revocation_log SET revoked=1, revoked_at=unixepoch() WHERE id=?",
                     (item["id"],),
                 )
                 upd.commit()
@@ -1104,13 +1103,12 @@ def _build_ledger_drilldown(
     for item in item_rows:
         txn_sql = (
             "SELECT t.id, t.date, t.merchant, te.amount_home, te.amount, "
-            "       t.currency, b.name AS account_name, t.pending "
+            "       t.currency, b.name AS account_name, b.mask AS account_mask, t.pending, t.notes "
             "FROM transaction_entries te "
             "JOIN transactions t ON te.transaction_id = t.id "
             "LEFT JOIN bank_accounts b ON t.bank_account_id = b.id "
-            "WHERE te.line_item_id = ? AND COALESCE(b.is_duplicate, 0) = 0"
-            + date_filter_sql
-            + " ORDER BY t.date DESC"
+            "WHERE te.line_item_id = ? AND COALESCE(b.is_duplicate, 0) = 0 "
+            "  AND te.entry_type != 'transfer'" + date_filter_sql + " ORDER BY t.date DESC"
         )
         txn_rows = conn.execute(txn_sql, [item["id"]] + date_params).fetchall()
 
@@ -1130,7 +1128,9 @@ def _build_ledger_drilldown(
                     ),
                     "original_currency": tx["currency"] or "CAD",
                     "account_name": tx["account_name"] or "",
+                    "account_mask": tx["account_mask"] or "",
                     "pending": bool(tx["pending"]),
+                    "notes": tx["notes"] or "",
                 }
             )
 
@@ -3302,6 +3302,29 @@ def sync(
                         }
                     )
 
+                # Post-sync fix: Interest transactions should be positive (income).
+                # Plaid sometimes imports them as negative. Flip sign if needed.
+                # Fix BOTH transaction.amount AND transaction_entries.amount (#364).
+                _interest_fixed = db_conn.execute(
+                    "UPDATE transactions SET amount = ABS(amount), amount_home = ABS(amount_home) "
+                    "WHERE LOWER(merchant) = 'interest' AND amount < 0"
+                ).rowcount
+                if _interest_fixed > 0:
+                    _logger.info(
+                        "Post-sync fix: corrected %d Interest transaction sign(s)", _interest_fixed
+                    )
+                    # Also fix the corresponding transaction_entries amounts
+                    _entries_fixed = db_conn.execute(
+                        "UPDATE transaction_entries SET amount = ABS(amount) "
+                        "WHERE transaction_id IN ("
+                        "  SELECT id FROM transactions WHERE LOWER(merchant) = 'interest'"
+                        ") AND amount < 0"
+                    ).rowcount
+                    if _entries_fixed > 0:
+                        _logger.info(
+                            "Post-sync fix: corrected %d Interest entry sign(s)", _entries_fixed
+                        )
+
                 # After all connections are synced, optionally run
                 # auto-classification on any newly inserted (unclassified)
                 # transactions.  Errors are caught so a classification failure
@@ -4296,6 +4319,21 @@ def summary(period: str) -> dict:
             GROUP BY li.item_type
         """
         ytd_rows = conn.execute(ytd_sql, [ytd_start, today_str]).fetchall()
+
+        # Compute total cash on hand (sum of all active bank account balances)
+        # Cash on hand - use the same logic as the Accounts page
+        # Import here to avoid circular dependency
+        try:
+            from ui.server import _get_accounts_by_category
+
+            categories = _get_accounts_by_category()
+            cash_bucket = categories.get("Cash", {})
+            total_cash_on_hand = sum(
+                acct.get("balance_home") or acct.get("balance_current") or 0
+                for acct in cash_bucket.get("accounts", [])
+            )
+        except Exception:
+            total_cash_on_hand = 0.0
     finally:
         conn.close()
 
@@ -4329,8 +4367,10 @@ def summary(period: str) -> dict:
     #                       you explicitly moved into savings)
     #   savings_rate      = savings_contributions / income (share of income you
     #                       actively saved)
+    #   monthly_deficit   = income - expenses (negative indicates overspending)
     savings_contributions = round(savings, 2)
     total_saved = round(income - expenses, 2)  # total net kept
+    monthly_deficit = round(income - expenses, 2)  # income - expenses; negative = overspending
     unspent_balance = round(total_saved - savings_contributions, 2)  # unallocated leftover
     savings_rate_pct = round(savings_contributions / income * 100, 1) if income > 0 else 0.0
     savings_rate = f"{savings_rate_pct}%"
@@ -4354,11 +4394,13 @@ def summary(period: str) -> dict:
         "expenses": round(expenses, 2),
         "savings": savings_contributions,
         "net": total_saved,  # income - expenses (= total_saved alias; expenses excludes savings)
+        "monthly_deficit": monthly_deficit,  # income - expenses; negative = overspending
         "savings_contributions": savings_contributions,
         "unspent_balance": unspent_balance,
         "total_saved": total_saved,
         "savings_rate": savings_rate,
         "savings_rate_ytd": savings_rate_ytd,
+        "total_cash_on_hand": round(total_cash_on_hand, 2),
         "by_line_item": by_line_item,
     }
 
