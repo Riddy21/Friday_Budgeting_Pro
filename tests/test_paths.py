@@ -65,9 +65,9 @@ def test_ensure_app_dir_fixes_wrong_mode(monkeypatch, tmp_path, caplog):
         paths.ensure_app_dir()
 
     assert _mode(fake_app_dir) == 0o700, "APP_DIR mode should be corrected to 0700"
-    assert any("fixing" in record.message for record in caplog.records), (
-        "A warning should be logged when the mode is corrected"
-    )
+    assert any(
+        "fixing" in record.message for record in caplog.records
+    ), "A warning should be logged when the mode is corrected"
 
 
 def test_ensure_app_dir_idempotent(monkeypatch, tmp_path):
@@ -107,9 +107,9 @@ def test_create_file_fixes_wrong_mode(monkeypatch, tmp_path, caplog):
         paths.create_file(target)
 
     assert _mode(target) == 0o600, "File mode should be corrected to 0600"
-    assert any("fixing" in record.message for record in caplog.records), (
-        "A warning should be logged when the mode is corrected"
-    )
+    assert any(
+        "fixing" in record.message for record in caplog.records
+    ), "A warning should be logged when the mode is corrected"
 
 
 def test_create_file_does_not_overwrite_contents(monkeypatch, tmp_path):
@@ -122,9 +122,9 @@ def test_create_file_does_not_overwrite_contents(monkeypatch, tmp_path):
 
     paths.create_file(target)
 
-    assert target.read_text() == "existing content", (
-        "create_file should not overwrite existing file contents"
-    )
+    assert (
+        target.read_text() == "existing content"
+    ), "create_file should not overwrite existing file contents"
 
 
 # ---------------------------------------------------------------------------
@@ -146,9 +146,9 @@ def test_audit_permissions_fixes_file(monkeypatch, tmp_path, caplog):
         paths.audit_permissions()
 
     assert _mode(bad_file) == 0o600, "audit_permissions should fix 0644 → 0600"
-    assert any("fixing" in record.message for record in caplog.records), (
-        "A warning should be logged for the corrected file"
-    )
+    assert any(
+        "fixing" in record.message for record in caplog.records
+    ), "A warning should be logged for the corrected file"
 
 
 def test_audit_permissions_fixes_dir(monkeypatch, tmp_path, caplog):
@@ -164,9 +164,9 @@ def test_audit_permissions_fixes_dir(monkeypatch, tmp_path, caplog):
         paths.audit_permissions()
 
     assert _mode(fake_app_dir) == 0o700, "audit_permissions should fix 0755 → 0700"
-    assert any("fixing" in record.message for record in caplog.records), (
-        "A warning should be logged for the corrected directory"
-    )
+    assert any(
+        "fixing" in record.message for record in caplog.records
+    ), "A warning should be logged for the corrected directory"
 
 
 def test_audit_permissions_no_op_when_correct(monkeypatch, tmp_path, caplog):

@@ -35,9 +35,9 @@ def test_check_script_passes_on_repo():
         text=True,
         cwd=str(_repo_root()),
     )
-    assert result.returncode == 0, (
-        f"check_test_isolation.py reported violations:\n{result.stdout}\n{result.stderr}"
-    )
+    assert (
+        result.returncode == 0
+    ), f"check_test_isolation.py reported violations:\n{result.stdout}\n{result.stderr}"
     assert "OK" in result.stdout
 
 
@@ -57,13 +57,11 @@ def test_check_script_detects_violations(tmp_path: pathlib.Path):
     prod_db = "~/" + ".friday-bp/data.db"  # isolation-check: allow
 
     bad_file = fake_tests / "test_bad.py"
-    bad_file.write_text(
-        textwrap.dedent(f"""\
+    bad_file.write_text(textwrap.dedent(f"""\
             import sqlite3
 
             DB_PATH = "{prod_db}"
-            """)
-    )
+            """))
 
     result = subprocess.run(
         [sys.executable, str(_repo_root() / "scripts" / "check_test_isolation.py")],
@@ -71,9 +69,9 @@ def test_check_script_detects_violations(tmp_path: pathlib.Path):
         text=True,
         cwd=str(tmp_path),
     )
-    assert result.returncode == 1, (
-        f"Expected exit 1 for production path; got:\n{result.stdout}\n{result.stderr}"
-    )
+    assert (
+        result.returncode == 1
+    ), f"Expected exit 1 for production path; got:\n{result.stdout}\n{result.stderr}"
     assert "test_bad.py" in result.stdout
 
 
@@ -89,9 +87,9 @@ def test_isolated_app_dir_patches_env_var(tmp_path: pathlib.Path):
 
     # It must not be the real ~/.friday-bp directory.
     real_friday = str(pathlib.Path.home() / ".friday-bp")
-    assert app_dir_env != real_friday, (
-        "FRIDAY_BP_APP_DIR must not point to the real production directory"
-    )
+    assert (
+        app_dir_env != real_friday
+    ), "FRIDAY_BP_APP_DIR must not point to the real production directory"
 
     # It should be a real, writable path.
     assert pathlib.Path(app_dir_env).exists(), "FRIDAY_BP_APP_DIR should be a real dir"
@@ -100,6 +98,6 @@ def test_isolated_app_dir_patches_env_var(tmp_path: pathlib.Path):
 def test_isolated_app_dir_unique_per_test(tmp_path: pathlib.Path):
     """Each test gets its own unique FRIDAY_BP_APP_DIR (not shared state)."""
     app_dir_env = os.environ.get("FRIDAY_BP_APP_DIR", "")
-    assert "/tmp" in app_dir_env or "pytest" in app_dir_env or "friday_bp_test" in app_dir_env, (
-        f"FRIDAY_BP_APP_DIR does not look like a temp path: {app_dir_env}"
-    )
+    assert (
+        "/tmp" in app_dir_env or "pytest" in app_dir_env or "friday_bp_test" in app_dir_env
+    ), f"FRIDAY_BP_APP_DIR does not look like a temp path: {app_dir_env}"

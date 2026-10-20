@@ -142,9 +142,9 @@ def test_budget_summary_status_on_track(seeded_db):
         ],
     )
     result = budget_summary("2026-06")
-    assert result["savings_section"]["status"] == "on_track", (
-        f"Expected on_track but got: {result['savings_section']}"
-    )
+    assert (
+        result["savings_section"]["status"] == "on_track"
+    ), f"Expected on_track but got: {result['savings_section']}"
 
 
 def test_budget_summary_status_under_saving(seeded_db):
@@ -162,9 +162,9 @@ def test_budget_summary_status_under_saving(seeded_db):
         ],
     )
     result = budget_summary("2026-07")
-    assert result["savings_section"]["status"] == "under_saving", (
-        f"Expected under_saving but got: {result['savings_section']}"
-    )
+    assert (
+        result["savings_section"]["status"] == "under_saving"
+    ), f"Expected under_saving but got: {result['savings_section']}"
 
 
 def test_budget_summary_status_no_income(seeded_db):

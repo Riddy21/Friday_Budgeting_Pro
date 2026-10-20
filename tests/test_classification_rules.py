@@ -107,9 +107,9 @@ def test_list_rules_metadata_fields(tmp_db):
         "created_at",
     }
     for rule in result["rules"]:
-        assert required_fields.issubset(rule.keys()), (
-            f"Missing fields in rule {rule.get('id')}: {required_fields - set(rule.keys())}"
-        )
+        assert required_fields.issubset(
+            rule.keys()
+        ), f"Missing fields in rule {rule.get('id')}: {required_fields - set(rule.keys())}"
 
 
 # ---------------------------------------------------------------------------

@@ -62,9 +62,9 @@ def test_skill_md_exists():
 def test_skill_md_has_pip_hook():
     """SKILL.md metadata must declare a pip install hook."""
     content = _read_skill_md()
-    assert "pip3 install" in content or "pip install" in content, (
-        "SKILL.md missing pip install hook"
-    )
+    assert (
+        "pip3 install" in content or "pip install" in content
+    ), "SKILL.md missing pip install hook"
 
 
 def test_skill_md_has_db_init_hook():
@@ -76,9 +76,9 @@ def test_skill_md_has_db_init_hook():
 def test_skill_md_has_launchd_hook():
     """SKILL.md metadata must declare a launchd/installer hook."""
     content = _read_skill_md()
-    assert "server.installer" in content or "launchd" in content, (
-        "SKILL.md missing launchd/installer hook"
-    )
+    assert (
+        "server.installer" in content or "launchd" in content
+    ), "SKILL.md missing launchd/installer hook"
 
 
 def test_skill_md_install_hooks_count():
@@ -114,14 +114,14 @@ def test_installer_py_referenced_in_skill_md():
 def test_readme_documents_local_install():
     """README must document the local-clone install path."""
     readme = (REPO_ROOT / "README.md").read_text()
-    assert "clawhub install ./" in readme or "clawhub install /" in readme, (
-        "README must document `clawhub install ./` (local clone) flow"
-    )
+    assert (
+        "clawhub install ./" in readme or "clawhub install /" in readme
+    ), "README must document `clawhub install ./` (local clone) flow"
 
 
 def test_readme_documents_registry_install():
     """README must document the registry install path."""
     readme = (REPO_ROOT / "README.md").read_text()
-    assert "clawhub install friday-budgeting-pro" in readme, (
-        "README must document `clawhub install friday-budgeting-pro` (registry) flow"
-    )
+    assert (
+        "clawhub install friday-budgeting-pro" in readme
+    ), "README must document `clawhub install friday-budgeting-pro` (registry) flow"

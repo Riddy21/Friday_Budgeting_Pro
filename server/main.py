@@ -2408,20 +2408,15 @@ def _detect_suspicious_transactions(conn, user_id: str) -> list[dict]:
     }
 
     # Set of transaction IDs classified as transfer/savings/income/skip
-    skip_tx_ids: set[str] = {
-        r[0]
-        for r in conn.execute("""
+    skip_tx_ids: set[str] = {r[0] for r in conn.execute("""
             SELECT DISTINCT te.transaction_id
               FROM transaction_entries te
               JOIN line_items li ON li.id = te.line_item_id
               JOIN classification_rules cr ON cr.rule_type IN ('transfer','savings','income','skip')
              WHERE li.item_type IN ('income')
-            """).fetchall()
-    }
+            """).fetchall()}
     # Also grab entries where source='rule' and the matched rule is a skip/transfer rule
-    skip_tx_ids |= {
-        r[0]
-        for r in conn.execute("""
+    skip_tx_ids |= {r[0] for r in conn.execute("""
             SELECT DISTINCT te.transaction_id
               FROM transaction_entries te
              WHERE te.source = 'rule'
@@ -2429,8 +2424,7 @@ def _detect_suspicious_transactions(conn, user_id: str) -> list[dict]:
                    SELECT 1 FROM classification_rules cr
                     WHERE cr.rule_type IN ('transfer','savings','income','skip')
                )
-            """).fetchall()
-    }
+            """).fetchall()}
 
     # Fetch all non-pending expense transactions for this user
     txns = conn.execute(
@@ -3814,7 +3808,9 @@ def route(transaction_id: str, allocations: List) -> dict:
         entry_type = {
             "expense": "spending",
             "income": "income",
-        }.get(item_type, item_type)  # savings / transfer pass through as-is
+        }.get(
+            item_type, item_type
+        )  # savings / transfer pass through as-is
 
         existing = conn.execute(
             "SELECT id, line_item_id FROM transaction_entries WHERE transaction_id = ?",

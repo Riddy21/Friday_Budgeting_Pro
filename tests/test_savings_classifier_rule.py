@@ -90,9 +90,9 @@ def test_default_savings_hint_seeded_on_setup(tmp_db, monkeypatch):
     conn.close()
 
     hint_texts = [h["text"].lower() for h in hints]
-    assert any("tfsa" in t or "rrsp" in t or "investment" in t for t in hint_texts), (
-        f"Expected investment savings hint, got: {hint_texts}"
-    )
+    assert any(
+        "tfsa" in t or "rrsp" in t or "investment" in t for t in hint_texts
+    ), f"Expected investment savings hint, got: {hint_texts}"
 
 
 def test_migration_updates_transfer_rule_to_savings(tmp_db, monkeypatch):
@@ -119,6 +119,6 @@ def test_migration_updates_transfer_rule_to_savings(tmp_db, monkeypatch):
     conn.close()
 
     assert rule is not None
-    assert rule["rule_type"] == "savings", (
-        f"Expected savings after migration, got {rule['rule_type']}"
-    )
+    assert (
+        rule["rule_type"] == "savings"
+    ), f"Expected savings after migration, got {rule['rule_type']}"

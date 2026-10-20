@@ -64,6 +64,6 @@ def test_accounts_empty_state_hint(page, server_url):
     institution_groups = page.locator(".institution-group")
     has_accounts = institution_groups.count() > 0
     has_hint = empty_hint.count() > 0
-    assert has_accounts or has_hint, (
-        "Expected either account rows or an empty-state hint on /accounts"
-    )
+    assert (
+        has_accounts or has_hint
+    ), "Expected either account rows or an empty-state hint on /accounts"
