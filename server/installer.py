@@ -58,7 +58,8 @@ def _get_public_url() -> str | None:
             import json
             status = json.loads(result.stdout)
             if dns_name := status.get("Self", {}).get("DNSName", "").rstrip("."):
-                return f"http://{dns_name}:6789"
+                # Use HTTPS - Friday uses TLS when certs are available
+                return f"https://{dns_name}:6789"
     except (subprocess.TimeoutExpired, FileNotFoundError, json.JSONDecodeError):
         pass
     

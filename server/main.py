@@ -3302,6 +3302,15 @@ def sync(
                         }
                     )
 
+                # Post-sync fix: Interest transactions should be positive (income).
+                # Plaid sometimes imports them as negative. Flip sign if needed.
+                _interest_fixed = db_conn.execute(
+                    "UPDATE transactions SET amount = ABS(amount), amount_home = ABS(amount_home) "
+                    "WHERE LOWER(merchant) = 'interest' AND amount < 0"
+                ).rowcount
+                if _interest_fixed > 0:
+                    _logger.info("Post-sync fix: corrected %d Interest transaction sign(s)", _interest_fixed)
+
                 # After all connections are synced, optionally run
                 # auto-classification on any newly inserted (unclassified)
                 # transactions.  Errors are caught so a classification failure
@@ -4296,6 +4305,25 @@ def summary(period: str) -> dict:
             GROUP BY li.item_type
         """
         ytd_rows = conn.execute(ytd_sql, [ytd_start, today_str]).fetchall()
+        
+        # Compute total cash on hand (sum of all active bank account balances)
+        # Only count liquid cash - exclude property accounts, investments, GICs
+        cash_sql = """
+            SELECT SUM(COALESCE(balance_current, 0)) AS total_cash
+            FROM bank_accounts
+            WHERE removed_at IS NULL
+              AND COALESCE(is_duplicate, 0) = 0
+              AND type = 'depository'
+              AND LOWER(name) NOT LIKE '%ardsley%'
+              AND LOWER(name) NOT LIKE '%glen everest%'
+              AND LOWER(name) NOT LIKE '%tfsa%'
+              AND LOWER(name) NOT LIKE '%rrsp%'
+              AND LOWER(name) NOT LIKE '%401k%'
+              AND LOWER(name) NOT LIKE '%investing%'
+              AND name NOT GLOB '*[0-9].[0-9][0-9]%*'
+        """
+        cash_row = conn.execute(cash_sql).fetchone()
+        total_cash_on_hand = float(cash_row["total_cash"] or 0.0) if cash_row else 0.0
     finally:
         conn.close()
 
@@ -4329,8 +4357,10 @@ def summary(period: str) -> dict:
     #                       you explicitly moved into savings)
     #   savings_rate      = savings_contributions / income (share of income you
     #                       actively saved)
+    #   monthly_deficit   = income - expenses (negative indicates overspending)
     savings_contributions = round(savings, 2)
     total_saved = round(income - expenses, 2)  # total net kept
+    monthly_deficit = round(income - expenses, 2)  # income - expenses; negative = overspending
     unspent_balance = round(total_saved - savings_contributions, 2)  # unallocated leftover
     savings_rate_pct = round(savings_contributions / income * 100, 1) if income > 0 else 0.0
     savings_rate = f"{savings_rate_pct}%"
@@ -4354,11 +4384,13 @@ def summary(period: str) -> dict:
         "expenses": round(expenses, 2),
         "savings": savings_contributions,
         "net": total_saved,  # income - expenses (= total_saved alias; expenses excludes savings)
+        "monthly_deficit": monthly_deficit,  # income - expenses; negative = overspending
         "savings_contributions": savings_contributions,
         "unspent_balance": unspent_balance,
         "total_saved": total_saved,
         "savings_rate": savings_rate,
         "savings_rate_ytd": savings_rate_ytd,
+        "total_cash_on_hand": round(total_cash_on_hand, 2),
         "by_line_item": by_line_item,
     }
 
