@@ -104,7 +104,8 @@ CREATE TABLE IF NOT EXISTS transactions (
   amount_home REAL,                            -- converted to home currency at sync time (NULL if FX unavailable)
   plaid_category TEXT,                         -- Plaid personal_finance_category primary
   plaid_category_detailed TEXT,                -- Plaid personal_finance_category detailed
-  pending INTEGER DEFAULT 0                    -- 1 = pending, do not classify
+  pending INTEGER DEFAULT 0,                   -- 1 = pending, do not classify
+  notes TEXT                                   -- user note for context (e.g. "Trip to China for grandma")
 );
 
 -- ---------------------------------------------------------------------------

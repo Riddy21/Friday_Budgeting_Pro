@@ -1933,7 +1933,7 @@ def account_transactions_get(request: Request, account_id: str, limit: int = 50)
         rows = conn.execute(
             """
             SELECT t.id, t.date, t.authorized_datetime, t.merchant, t.amount,
-                   t.pending,
+                   t.pending, t.notes,
                    COALESCE(t.currency, 'CAD') AS currency,
                    te.entry_type, te.source, te.uncertain,
                    li.name AS line_item_name,
@@ -2013,6 +2013,68 @@ async def accounts_name_patch(request: Request, account_id: str):
     finally:
         conn.close()
     return JSONResponse({"status": "ok", "account_id": account_id, "name": name})
+
+
+# ── Transaction notes ────────────────────────────────────────────────────────
+
+@app.patch("/api/transactions/{transaction_id}/notes")
+async def transaction_notes_patch(request: Request, transaction_id: str):
+    """Update or clear the notes on a transaction.
+
+    Reads JSON body: {"notes": "<text or null>"}
+    Returns {"status": "ok", "transaction_id": ..., "notes": ...} or 404.
+    """
+    if not _is_authenticated(request):
+        return JSONResponse({"error": "not authenticated"}, status_code=401)
+    body = await request.json()
+    notes = body.get("notes")
+    if notes is not None:
+        notes = notes.strip() or None  # empty string -> NULL
+    conn = get_db(_db_path())
+    try:
+        result = conn.execute(
+            "UPDATE transactions SET notes = ? WHERE id = ?",
+            (notes, transaction_id),
+        )
+        conn.commit()
+        if result.rowcount == 0:
+            return JSONResponse({"error": f"transaction {transaction_id!r} not found"}, status_code=404)
+    finally:
+        conn.close()
+    return JSONResponse({"status": "ok", "transaction_id": transaction_id, "notes": notes})
+
+
+@app.get("/api/transactions/{transaction_id}")
+def transaction_get(request: Request, transaction_id: str):
+    """Get a single transaction with full details including notes."""
+    if not _is_authenticated(request):
+        return JSONResponse({"error": "not authenticated"}, status_code=401)
+    conn = get_db(_db_path())
+    try:
+        row = conn.execute(
+            """
+            SELECT t.id, t.date, t.merchant, t.amount, t.currency, t.notes,
+                   t.plaid_category, t.plaid_category_detailed,
+                   ba.name AS account_name, ba.mask AS account_mask,
+                   bc.institution_name,
+                   te.entry_type, te.source, te.reviewed, te.uncertain,
+                   li.name AS line_item_name,
+                   l.name AS ledger_name
+              FROM transactions t
+              JOIN bank_accounts ba ON ba.id = t.bank_account_id
+              JOIN bank_connections bc ON bc.id = ba.connection_id
+              LEFT JOIN transaction_entries te ON te.transaction_id = t.id
+              LEFT JOIN line_items li ON li.id = te.line_item_id
+              LEFT JOIN ledgers l ON l.id = te.ledger_id
+             WHERE t.id = ?
+            """,
+            (transaction_id,),
+        ).fetchone()
+        if row is None:
+            return JSONResponse({"error": "transaction not found"}, status_code=404)
+        return JSONResponse(dict(row))
+    finally:
+        conn.close()
 
 
 # ── /settings (#159, #161) ───────────────────────────────────────────────────
