@@ -540,9 +540,9 @@ class TestGetAccountsGroupedNoDoubleRender:
                 all_account_ids.append(acct["id"])
 
         # No ID should appear more than once.
-        assert len(all_account_ids) == len(
-            set(all_account_ids)
-        ), f"Duplicate account IDs found: {all_account_ids}"
+        assert len(all_account_ids) == len(set(all_account_ids)), (
+            f"Duplicate account IDs found: {all_account_ids}"
+        )
 
     def test_duplicate_accounts_hidden_not_rendered(self, tmp_path):
         """Accounts with is_duplicate=1 must not appear in the accounts list."""

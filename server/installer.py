@@ -56,6 +56,7 @@ def _get_public_url() -> str | None:
         )
         if result.returncode == 0:
             import json
+
             status = json.loads(result.stdout)
             if dns_name := status.get("Self", {}).get("DNSName", "").rstrip("."):
                 # Use HTTPS - Friday uses TLS when certs are available

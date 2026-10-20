@@ -928,8 +928,7 @@ def retry_pending_revocations() -> dict:
             upd = get_db(server.paths.DB_PATH)
             try:
                 upd.execute(
-                    "UPDATE plaid_revocation_log "
-                    "SET revoked=1, revoked_at=unixepoch() WHERE id=?",
+                    "UPDATE plaid_revocation_log SET revoked=1, revoked_at=unixepoch() WHERE id=?",
                     (item["id"],),
                 )
                 upd.commit()
@@ -1109,9 +1108,7 @@ def _build_ledger_drilldown(
             "JOIN transactions t ON te.transaction_id = t.id "
             "LEFT JOIN bank_accounts b ON t.bank_account_id = b.id "
             "WHERE te.line_item_id = ? AND COALESCE(b.is_duplicate, 0) = 0 "
-            "  AND te.entry_type != 'transfer'"
-            + date_filter_sql
-            + " ORDER BY t.date DESC"
+            "  AND te.entry_type != 'transfer'" + date_filter_sql + " ORDER BY t.date DESC"
         )
         txn_rows = conn.execute(txn_sql, [item["id"]] + date_params).fetchall()
 
@@ -2411,15 +2408,20 @@ def _detect_suspicious_transactions(conn, user_id: str) -> list[dict]:
     }
 
     # Set of transaction IDs classified as transfer/savings/income/skip
-    skip_tx_ids: set[str] = {r[0] for r in conn.execute("""
+    skip_tx_ids: set[str] = {
+        r[0]
+        for r in conn.execute("""
             SELECT DISTINCT te.transaction_id
               FROM transaction_entries te
               JOIN line_items li ON li.id = te.line_item_id
               JOIN classification_rules cr ON cr.rule_type IN ('transfer','savings','income','skip')
              WHERE li.item_type IN ('income')
-            """).fetchall()}
+            """).fetchall()
+    }
     # Also grab entries where source='rule' and the matched rule is a skip/transfer rule
-    skip_tx_ids |= {r[0] for r in conn.execute("""
+    skip_tx_ids |= {
+        r[0]
+        for r in conn.execute("""
             SELECT DISTINCT te.transaction_id
               FROM transaction_entries te
              WHERE te.source = 'rule'
@@ -2427,7 +2429,8 @@ def _detect_suspicious_transactions(conn, user_id: str) -> list[dict]:
                    SELECT 1 FROM classification_rules cr
                     WHERE cr.rule_type IN ('transfer','savings','income','skip')
                )
-            """).fetchall()}
+            """).fetchall()
+    }
 
     # Fetch all non-pending expense transactions for this user
     txns = conn.execute(
@@ -3313,7 +3316,9 @@ def sync(
                     "WHERE LOWER(merchant) = 'interest' AND amount < 0"
                 ).rowcount
                 if _interest_fixed > 0:
-                    _logger.info("Post-sync fix: corrected %d Interest transaction sign(s)", _interest_fixed)
+                    _logger.info(
+                        "Post-sync fix: corrected %d Interest transaction sign(s)", _interest_fixed
+                    )
                     # Also fix the corresponding transaction_entries amounts
                     _entries_fixed = db_conn.execute(
                         "UPDATE transaction_entries SET amount = ABS(amount) "
@@ -3322,7 +3327,9 @@ def sync(
                         ") AND amount < 0"
                     ).rowcount
                     if _entries_fixed > 0:
-                        _logger.info("Post-sync fix: corrected %d Interest entry sign(s)", _entries_fixed)
+                        _logger.info(
+                            "Post-sync fix: corrected %d Interest entry sign(s)", _entries_fixed
+                        )
 
                 # After all connections are synced, optionally run
                 # auto-classification on any newly inserted (unclassified)
@@ -3807,9 +3814,7 @@ def route(transaction_id: str, allocations: List) -> dict:
         entry_type = {
             "expense": "spending",
             "income": "income",
-        }.get(
-            item_type, item_type
-        )  # savings / transfer pass through as-is
+        }.get(item_type, item_type)  # savings / transfer pass through as-is
 
         existing = conn.execute(
             "SELECT id, line_item_id FROM transaction_entries WHERE transaction_id = ?",
@@ -4324,6 +4329,7 @@ def summary(period: str) -> dict:
         # Import here to avoid circular dependency
         try:
             from ui.server import _get_accounts_by_category
+
             categories = _get_accounts_by_category()
             cash_bucket = categories.get("Cash", {})
             total_cash_on_hand = sum(

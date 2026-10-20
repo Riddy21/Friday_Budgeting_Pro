@@ -80,9 +80,9 @@ def test_create_link_token_returns_valid_token(provider: PlaidProvider) -> None:
     """create_link_token() returns a string starting with 'link-sandbox-'."""
     token = provider.create_link_token(user_id="test-user")
     assert isinstance(token, str), "link token must be a string"
-    assert token.startswith(
-        "link-sandbox-"
-    ), f"sandbox link token must start with 'link-sandbox-', got: {token!r}"
+    assert token.startswith("link-sandbox-"), (
+        f"sandbox link token must start with 'link-sandbox-', got: {token!r}"
+    )
 
 
 def test_sandbox_public_token_exchange(provider: PlaidProvider) -> None:
@@ -104,18 +104,18 @@ def test_sandbox_public_token_exchange(provider: PlaidProvider) -> None:
     result = provider.exchange_public_token(public_token)
     assert "access_token" in result, "exchange result must contain 'access_token'"
     assert "item_id" in result, "exchange result must contain 'item_id'"
-    assert result["access_token"].startswith(
-        "access-sandbox-"
-    ), f"sandbox access_token must start with 'access-sandbox-', got: {result['access_token']!r}"
+    assert result["access_token"].startswith("access-sandbox-"), (
+        f"sandbox access_token must start with 'access-sandbox-', got: {result['access_token']!r}"
+    )
     assert result["item_id"], "item_id must be a non-empty string"
 
 
 def test_get_institution_name(provider: PlaidProvider, access_token: str) -> None:
     """get_institution_name() returns a non-empty string for the sandbox item."""
     name = provider.get_institution_name(access_token)
-    assert (
-        isinstance(name, str) and name
-    ), f"institution name must be a non-empty string, got: {name!r}"
+    assert isinstance(name, str) and name, (
+        f"institution name must be a non-empty string, got: {name!r}"
+    )
 
 
 def test_sync_transactions_initial_fetch(provider: PlaidProvider, access_token: str) -> None:
@@ -151,9 +151,9 @@ def test_sync_with_cursor_returns_delta(provider: PlaidProvider, access_token: s
     assert cursor, "first sync must return a non-empty next_cursor"
 
     second = provider.sync_transactions(access_token, cursor=cursor)
-    assert (
-        second["added"] == []
-    ), "second sync with cursor should return no new 'added' transactions"
+    assert second["added"] == [], (
+        "second sync with cursor should return no new 'added' transactions"
+    )
 
 
 def test_get_item_status(provider: PlaidProvider, access_token: str) -> None:
@@ -169,10 +169,10 @@ def test_get_item_status(provider: PlaidProvider, access_token: str) -> None:
     assert "error_message" in status, "status must contain 'error_message'"
     assert "item_id" in status, "status must contain 'item_id'"
 
-    assert (
-        status["error_code"] is None
-    ), f"healthy sandbox item should have error_code=None, got: {status['error_code']!r}"
-    assert (
-        status["error_message"] is None
-    ), f"healthy sandbox item should have error_message=None, got: {status['error_message']!r}"
+    assert status["error_code"] is None, (
+        f"healthy sandbox item should have error_code=None, got: {status['error_code']!r}"
+    )
+    assert status["error_message"] is None, (
+        f"healthy sandbox item should have error_message=None, got: {status['error_message']!r}"
+    )
     assert status["item_id"], "'item_id' must be a non-empty string"

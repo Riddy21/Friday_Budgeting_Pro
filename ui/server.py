@@ -45,6 +45,7 @@ from typing import Optional
 # Secure cookies only in production (HTTPS). Tests use HTTP.
 _SECURE_COOKIES = os.environ.get("FRIDAY_SECURE_COOKIES", "auto").lower()
 
+
 def _use_secure_cookie(request: Optional["Request"] = None) -> bool:
     """Return True if cookies should have secure=True.
 
@@ -59,6 +60,7 @@ def _use_secure_cookie(request: Optional["Request"] = None) -> bool:
     if request is not None:
         return request.url.scheme == "https"
     return False
+
 
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
@@ -531,7 +533,13 @@ async def setup_post(request: Request, step: int):
         # rest of the wizard and lands authenticated on /profile at the end.
         # (Matches the spec in tests/test_setup_wizard.py which asserts
         # friday_bp_session is set after POST /setup/1.)
-        resp.set_cookie(SESSION_COOKIE, stoken, httponly=True, samesite="lax", secure=_use_secure_cookie(request))
+        resp.set_cookie(
+            SESSION_COOKIE,
+            stoken,
+            httponly=True,
+            samesite="lax",
+            secure=_use_secure_cookie(request),
+        )
         return resp
     elif step == 2:
         raw = form.get("notification_channel") or form.get("notification_pref") or "openclaw_chat"
@@ -586,7 +594,14 @@ async def setup_post(request: Request, step: int):
         redir = _redirect("/dashboard")
         st = state.get("session_token")
         if st:
-            redir.set_cookie(_SETUP_COMPLETE_COOKIE, st, httponly=True, samesite="lax", secure=_use_secure_cookie(request), max_age=300)
+            redir.set_cookie(
+                _SETUP_COMPLETE_COOKIE,
+                st,
+                httponly=True,
+                samesite="lax",
+                secure=_use_secure_cookie(request),
+                max_age=300,
+            )
         _clear_wizard(redir, tok)
         return redir
     return HTMLResponse(status_code=404, content="Unknown step.")
@@ -678,7 +693,9 @@ async def login_post(request: Request):
     token = create_session(_db_path(), user_agent=ua, user_id=user["id"])
 
     response = _redirect("/dashboard")
-    response.set_cookie(SESSION_COOKIE, token, httponly=True, samesite="lax", secure=_use_secure_cookie(request))
+    response.set_cookie(
+        SESSION_COOKIE, token, httponly=True, samesite="lax", secure=_use_secure_cookie(request)
+    )
     response.delete_cookie(_SETUP_COMPLETE_COOKIE)
     return response
 
@@ -2036,6 +2053,7 @@ async def accounts_name_patch(request: Request, account_id: str):
 
 # ── Transaction notes ────────────────────────────────────────────────────────
 
+
 @app.patch("/api/transactions/{transaction_id}/notes")
 async def transaction_notes_patch(request: Request, transaction_id: str):
     """Update or clear the notes on a transaction.
@@ -2057,7 +2075,9 @@ async def transaction_notes_patch(request: Request, transaction_id: str):
         )
         conn.commit()
         if result.rowcount == 0:
-            return JSONResponse({"error": f"transaction {transaction_id!r} not found"}, status_code=404)
+            return JSONResponse(
+                {"error": f"transaction {transaction_id!r} not found"}, status_code=404
+            )
     finally:
         conn.close()
     return JSONResponse({"status": "ok", "transaction_id": transaction_id, "notes": notes})
@@ -2343,7 +2363,7 @@ def _get_reauth_connections(user_id: Optional[str] = None) -> list[dict]:
             ).fetchall()
         else:
             rows = db.execute(
-                "SELECT id, institution_name FROM bank_connections" " WHERE status = 'needs_reauth'"
+                "SELECT id, institution_name FROM bank_connections WHERE status = 'needs_reauth'"
             ).fetchall()
         return [dict(r) for r in rows]
     finally:
@@ -2428,7 +2448,9 @@ def profile_get(request: Request):
                 "reauth_connections": [c for c in connections if c.get("status") == "needs_reauth"],
             },
         )
-        resp.set_cookie(SESSION_COOKIE, st, httponly=True, samesite="lax", secure=_use_secure_cookie(request))
+        resp.set_cookie(
+            SESSION_COOKIE, st, httponly=True, samesite="lax", secure=_use_secure_cookie(request)
+        )
         resp.delete_cookie(_SETUP_COMPLETE_COOKIE)
         return resp
     resp2 = _redirect("/login")

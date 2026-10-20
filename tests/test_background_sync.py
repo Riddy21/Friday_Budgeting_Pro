@@ -143,6 +143,6 @@ def test_background_sync_continues_after_exception():
 
     asyncio.run(run())
     # The loop should have attempted sync twice (once per iteration) without crashing.
-    assert (
-        len(sync_attempts) == 2
-    ), f"Expected 2 sync attempts (loop should not crash), got {len(sync_attempts)}"
+    assert len(sync_attempts) == 2, (
+        f"Expected 2 sync attempts (loop should not crash), got {len(sync_attempts)}"
+    )

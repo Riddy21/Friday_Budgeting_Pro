@@ -248,9 +248,9 @@ class TestRowPersistence:
             with patch("subprocess.run", return_value=mock_proc):
                 result = mod.send("Persistence check", urgency="normal")
 
-        assert (
-            _count_notifications(db_path) == 1
-        ), f"Expected 1 notification row for channel={channel}, got 0"
+        assert _count_notifications(db_path) == 1, (
+            f"Expected 1 notification row for channel={channel}, got 0"
+        )
         row = _get_notification(db_path)
         assert row["delivered_via"] == expected_via
         assert uuid.UUID(result["notification_id"])  # valid UUID4

@@ -286,9 +286,9 @@ class TestPageLoads:
         page_desktop.goto(url)
         page_desktop.wait_for_load_state("domcontentloaded")
         _screenshot(page_desktop, f"desktop_{title_fragment.lower()}_load")
-        assert (
-            title_fragment in page_desktop.title()
-        ), f"Expected '{title_fragment}' in page title for {path}, got: {page_desktop.title()}"
+        assert title_fragment in page_desktop.title(), (
+            f"Expected '{title_fragment}' in page title for {path}, got: {page_desktop.title()}"
+        )
 
     @pytest.mark.parametrize("path,title_fragment", PAGES)
     def test_page_loads_mobile(self, page_mobile, live_server, path, title_fragment):
@@ -406,9 +406,9 @@ class TestDashboardPage:
         page_desktop.wait_for_load_state("domcontentloaded")
 
         for label in ["Dashboard", "Accounts", "Ledgers", "Settings"]:
-            assert (
-                page_desktop.locator(f"nav a:has-text('{label}')").count() > 0
-            ), f"Nav link '{label}' not found"
+            assert page_desktop.locator(f"nav a:has-text('{label}')").count() > 0, (
+                f"Nav link '{label}' not found"
+            )
 
     def test_logout_link_present(self, page_desktop, live_server):
         page_desktop.goto(live_server["base_url"] + "/dashboard")
@@ -677,16 +677,16 @@ class TestProfilePage:
     def test_profile_export_excel_link(self, page_desktop, live_server):
         page_desktop.goto(live_server["base_url"] + "/profile")
         page_desktop.wait_for_load_state("domcontentloaded")
-        assert (
-            page_desktop.locator("a[href='/export/excel']").count() > 0
-        ), "Export Excel link not found"
+        assert page_desktop.locator("a[href='/export/excel']").count() > 0, (
+            "Export Excel link not found"
+        )
 
     def test_profile_connect_bank_link(self, page_desktop, live_server):
         page_desktop.goto(live_server["base_url"] + "/profile")
         page_desktop.wait_for_load_state("domcontentloaded")
-        assert (
-            page_desktop.locator("a[href='/link/start']").count() > 0
-        ), "Connect a bank link not found"
+        assert page_desktop.locator("a[href='/link/start']").count() > 0, (
+            "Connect a bank link not found"
+        )
 
     def test_profile_mobile(self, page_mobile, live_server):
         page_mobile.goto(live_server["base_url"] + "/profile")
@@ -818,9 +818,9 @@ class TestResponsiveLayout:
         page.wait_for_load_state("domcontentloaded")
 
         main = page.locator("main")
-        assert (
-            main.count() > 0 and main.is_visible()
-        ), f"Main content not visible at {viewport['name']}"
+        assert main.count() > 0 and main.is_visible(), (
+            f"Main content not visible at {viewport['name']}"
+        )
         ctx.close()
 
 

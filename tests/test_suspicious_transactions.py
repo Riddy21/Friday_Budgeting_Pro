@@ -117,7 +117,7 @@ def test_unusually_large_charge_detected():
 
     # 3 prior ~$10 charges, then one $500 charge
     for i in range(3):
-        _insert_txn(conn, aid, "Starbucks", 10.00, date=f"2024-05-{i+1:02d}")
+        _insert_txn(conn, aid, "Starbucks", 10.00, date=f"2024-05-{i + 1:02d}")
     _insert_txn(conn, aid, "Starbucks", 500.00, date="2024-06-01")
 
     flags = _detect_suspicious_transactions(conn, uid)
@@ -126,9 +126,9 @@ def test_unusually_large_charge_detected():
     merchants = [f["merchant"] for f in flags]
     reasons = [f["reason"] for f in flags]
     assert any("Starbucks" in (m or "") for m in merchants), f"Expected Starbucks in flags: {flags}"
-    assert any(
-        "large" in r.lower() or "unusually" in r.lower() for r in reasons
-    ), f"Expected unusually large reason: {reasons}"
+    assert any("large" in r.lower() or "unusually" in r.lower() for r in reasons), (
+        f"Expected unusually large reason: {reasons}"
+    )
     assert any(f["risk_level"] == "medium" for f in flags), f"Expected medium risk: {flags}"
 
 
@@ -147,9 +147,9 @@ def test_new_merchant_large_amount_detected():
     merchants = [f["merchant"] for f in flags]
     reasons = [f["reason"] for f in flags]
     assert any("AcmeCorp" in (m or "") for m in merchants), f"Expected AcmeCorp in flags: {flags}"
-    assert any(
-        "new merchant" in r.lower() or "first" in r.lower() for r in reasons
-    ), f"Expected new-merchant reason: {reasons}"
+    assert any("new merchant" in r.lower() or "first" in r.lower() for r in reasons), (
+        f"Expected new-merchant reason: {reasons}"
+    )
     assert any(f["risk_level"] == "low" for f in flags), f"Expected low risk: {flags}"
 
 
@@ -171,12 +171,12 @@ def test_card_testing_detected():
 
     merchants = [f["merchant"] for f in flags]
     reasons = [f["reason"] for f in flags]
-    assert any(
-        "ShadyMerchant" in (m or "") for m in merchants
-    ), f"Expected ShadyMerchant in flags: {flags}"
-    assert any(
-        "card" in r.lower() or "micro" in r.lower() for r in reasons
-    ), f"Expected card-testing reason: {reasons}"
+    assert any("ShadyMerchant" in (m or "") for m in merchants), (
+        f"Expected ShadyMerchant in flags: {flags}"
+    )
+    assert any("card" in r.lower() or "micro" in r.lower() for r in reasons), (
+        f"Expected card-testing reason: {reasons}"
+    )
     assert any(f["risk_level"] == "high" for f in flags), f"Expected high risk: {flags}"
 
 
@@ -245,12 +245,12 @@ def test_whitelisted_merchants_not_flagged():
     conn.close()
 
     merchants = [f["merchant"] for f in flags]
-    assert not any(
-        "ADP" in (m or "") for m in merchants
-    ), f"ADP Payroll should not be flagged: {flags}"
-    assert not any(
-        "Rent" in (m or "") for m in merchants
-    ), f"Rent Payment should not be flagged: {flags}"
-    assert not any(
-        "Mortgage" in (m or "") for m in merchants
-    ), f"Mortgage Payment should not be flagged: {flags}"
+    assert not any("ADP" in (m or "") for m in merchants), (
+        f"ADP Payroll should not be flagged: {flags}"
+    )
+    assert not any("Rent" in (m or "") for m in merchants), (
+        f"Rent Payment should not be flagged: {flags}"
+    )
+    assert not any("Mortgage" in (m or "") for m in merchants), (
+        f"Mortgage Payment should not be flagged: {flags}"
+    )

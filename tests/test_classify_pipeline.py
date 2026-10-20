@@ -129,7 +129,7 @@ def test_rule_match_writes_single_entry(db_path, monkeypatch):
 
     # Insert a routing_rule that matches "Starbucks"
     conn.execute(
-        "INSERT INTO routing_rules (id, merchant_pattern, line_item_id)" " VALUES (?, ?, ?)",
+        "INSERT INTO routing_rules (id, merchant_pattern, line_item_id) VALUES (?, ?, ?)",
         (RULE_ID, "starbucks", LI_GROCERIES),
     )
     # Insert a pre-classified entry (simulating apply_rules during sync)

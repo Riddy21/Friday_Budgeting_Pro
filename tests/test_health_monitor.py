@@ -390,12 +390,12 @@ def test_db_credentials_used_when_no_provider_passed(tmp_path, monkeypatch):
 
     # A PlaidProvider should have been built with the DB credentials, not empty ones
     assert len(built_providers) == 1, "expected exactly one PlaidProvider to be built"
-    assert (
-        built_providers[0]["client_id"] == "db-client-id"
-    ), "health monitor should use DB client_id, not env var / empty string"
-    assert (
-        built_providers[0]["secret"] == "db-secret"
-    ), "health monitor should use DB secret, not env var / empty string"
+    assert built_providers[0]["client_id"] == "db-client-id", (
+        "health monitor should use DB client_id, not env var / empty string"
+    )
+    assert built_providers[0]["secret"] == "db-secret", (
+        "health monitor should use DB secret, not env var / empty string"
+    )
 
 
 def test_sync_passes_none_not_module_singleton_to_health_monitor(monkeypatch):

@@ -22,9 +22,9 @@ def test_root_redirects_to_login_when_setup_complete(page, server_url):
     """GET / → /login (not /setup) because the DB already has a user."""
     page.goto(server_url + "/")
     # Should redirect to /login since testuser exists and is not authenticated
-    assert (
-        "/login" in page.url or "/dashboard" in page.url
-    ), f"Expected /login or /dashboard after /, got {page.url}"
+    assert "/login" in page.url or "/dashboard" in page.url, (
+        f"Expected /login or /dashboard after /, got {page.url}"
+    )
 
 
 def test_setup_returns_404_when_complete(page, server_url):
@@ -32,9 +32,9 @@ def test_setup_returns_404_when_complete(page, server_url):
     response = page.goto(server_url + "/setup")
     assert response is not None
     # When setup is complete the server responds with 404
-    assert (
-        response.status == 404
-    ), f"Expected 404 from /setup (setup already complete), got {response.status}"
+    assert response.status == 404, (
+        f"Expected 404 from /setup (setup already complete), got {response.status}"
+    )
 
 
 def test_login_page_accessible_after_setup(page, server_url):

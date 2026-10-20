@@ -102,8 +102,7 @@ def _revoke_on_plaid(connection: dict, dry_run: bool) -> dict:
             try:
                 _db = get_db(server.paths.DB_PATH)
                 _db.execute(
-                    "UPDATE plaid_revocation_log "
-                    "SET revoked=1, revoked_at=unixepoch() WHERE id=?",
+                    "UPDATE plaid_revocation_log SET revoked=1, revoked_at=unixepoch() WHERE id=?",
                     (cid,),
                 )
                 _db.commit()

@@ -57,6 +57,6 @@ def test_tool_registered(tool_names: list[str], name: str) -> None:
 
 def test_all_tools_count(tool_names: list[str]) -> None:
     """Sanity check: at least as many tools as our expected list."""
-    assert len(tool_names) >= len(
-        EXPECTED_TOOLS
-    ), f"Expected at least {len(EXPECTED_TOOLS)} tools, found {len(tool_names)}: {tool_names}"
+    assert len(tool_names) >= len(EXPECTED_TOOLS), (
+        f"Expected at least {len(EXPECTED_TOOLS)} tools, found {len(tool_names)}: {tool_names}"
+    )

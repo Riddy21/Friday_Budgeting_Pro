@@ -208,9 +208,9 @@ def test_savings_trend_cumulative(seeded_db):
     running = 0.0
     for entry in months:
         running = round(running + entry["total_saved"], 2)
-        assert (
-            abs(entry["cumulative_saved"] - running) < 0.01
-        ), f"Cumulative mismatch: {entry['cumulative_saved']} != {running}"
+        assert abs(entry["cumulative_saved"] - running) < 0.01, (
+            f"Cumulative mismatch: {entry['cumulative_saved']} != {running}"
+        )
 
 
 def test_savings_trend_oldest_first(seeded_db):

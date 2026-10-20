@@ -491,15 +491,15 @@ def _verify(db_path: Path) -> None:
         print(f"     unspent  = ${result['unspent_balance']:,.2f}")
 
         # Validate math
-        assert (
-            abs(result["net"] - (result["income"] - result["expenses"])) < 0.01
-        ), f"Net mismatch: {result['net']} != income({result['income']}) - expenses({result['expenses']})"
-        assert (
-            abs(result["total_saved"] - result["net"]) < 0.01
-        ), f"total_saved mismatch: {result['total_saved']} != net({result['net']})"
-        assert (
-            abs(result["unspent_balance"] - (result["net"] - result["savings"])) < 0.01
-        ), f"unspent mismatch: {result['unspent_balance']} != net({result['net']}) - savings({result['savings']})"
+        assert abs(result["net"] - (result["income"] - result["expenses"])) < 0.01, (
+            f"Net mismatch: {result['net']} != income({result['income']}) - expenses({result['expenses']})"
+        )
+        assert abs(result["total_saved"] - result["net"]) < 0.01, (
+            f"total_saved mismatch: {result['total_saved']} != net({result['net']})"
+        )
+        assert abs(result["unspent_balance"] - (result["net"] - result["savings"])) < 0.01, (
+            f"unspent mismatch: {result['unspent_balance']} != net({result['net']}) - savings({result['savings']})"
+        )
         print("\n   ✅ All math checks passed!")
     except Exception as e:
         print(f"\n   ❌ Verification failed: {e}")

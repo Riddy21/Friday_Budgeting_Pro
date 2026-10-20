@@ -240,9 +240,9 @@ def test_install_is_idempotent(tmp_path: Path) -> None:
 
     config_path = tmp_path / ".openclaw" / "config.json"
     data = json.loads(config_path.read_text())
-    assert isinstance(
-        data["mcp"]["servers"]["friday-budgeting-pro"], dict
-    ), "Re-running install() corrupted the mcpServers entry"
+    assert isinstance(data["mcp"]["servers"]["friday-budgeting-pro"], dict), (
+        "Re-running install() corrupted the mcpServers entry"
+    )
     # Ensure there's exactly one top-level "mcp" key (no duplication).
     raw = config_path.read_text()
     assert raw.count('"mcp"') == 1, "mcpServers key duplicated"

@@ -104,9 +104,9 @@ def test_data_utc_attribute_in_html(monkeypatch):
         }
     ]
     html = _render_profile_html(monkeypatch, connections)
-    assert (
-        f'data-utc="{FAKE_TS}"' in html
-    ), f'data-utc attribute not found in profile HTML (expected data-utc="{FAKE_TS}")'
+    assert f'data-utc="{FAKE_TS}"' in html, (
+        f'data-utc attribute not found in profile HTML (expected data-utc="{FAKE_TS}")'
+    )
 
 
 def test_last_synced_shows_never_when_none(monkeypatch):

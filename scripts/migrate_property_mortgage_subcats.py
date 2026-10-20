@@ -50,8 +50,7 @@ def main() -> int:
                 if name in existing:
                     continue
                 conn.execute(
-                    "INSERT INTO line_items (id, ledger_id, name, item_type) "
-                    "VALUES (?, ?, ?, ?)",
+                    "INSERT INTO line_items (id, ledger_id, name, item_type) VALUES (?, ?, ?, ?)",
                     (str(uuid.uuid4()), led["id"], name, item_type),
                 )
                 added_here.append(name)
@@ -63,10 +62,7 @@ def main() -> int:
             else:
                 print(f"  {led['name']}: already up to date")
         conn.commit()
-        print(
-            f"\nDone. Added {total_added} line item(s) across "
-            f"{len(ledgers)} property ledger(s)."
-        )
+        print(f"\nDone. Added {total_added} line item(s) across {len(ledgers)} property ledger(s).")
         print("Existing 'Mortgage'/'Loan' lines and their entries were left intact.")
         return 0
     finally:

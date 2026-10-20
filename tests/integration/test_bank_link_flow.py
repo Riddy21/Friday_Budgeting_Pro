@@ -167,9 +167,9 @@ def test_complete_link_triggers_sync_and_populates_accounts():
                         "populate accounts.  The /accounts page would show nothing."
                     )
                     account_names = [a["name"] for a in accounts]
-                    assert any(
-                        "Plaid" in n or "Checking" in n for n in account_names
-                    ), f"Expected an account with Plaid/Checking in bank_accounts, got: {account_names}"
+                    assert any("Plaid" in n or "Checking" in n for n in account_names), (
+                        f"Expected an account with Plaid/Checking in bank_accounts, got: {account_names}"
+                    )
 
             finally:
                 _paths.DB_PATH = orig_db

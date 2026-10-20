@@ -310,6 +310,6 @@ class TestLinkComplete:
         )
         # Should redirect to the accounts page (with or without query params).
         location = r.headers.get("location", "")
-        assert (
-            "/accounts" in location
-        ), f"POST /link/complete redirected to unexpected location: '{location}'"
+        assert "/accounts" in location, (
+            f"POST /link/complete redirected to unexpected location: '{location}'"
+        )

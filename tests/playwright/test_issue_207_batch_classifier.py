@@ -291,13 +291,13 @@ def test_issue_207_batch_classifier_end_to_end(tmp_app_dir, monkeypatch):
             "Classification Hints",
             "Transactions To Classify",
         ):
-            assert (
-                section in prompt
-            ), f"batch prompt missing section {section!r}\n--- prompt ---\n{prompt[:800]}"
+            assert section in prompt, (
+                f"batch prompt missing section {section!r}\n--- prompt ---\n{prompt[:800]}"
+            )
         # Indexed transaction header format introduced in #207.
-        assert (
-            "### Transaction 0" in prompt
-        ), f"batch prompt missing '### Transaction 0' header\n--- prompt ---\n{prompt[:800]}"
+        assert "### Transaction 0" in prompt, (
+            f"batch prompt missing '### Transaction 0' header\n--- prompt ---\n{prompt[:800]}"
+        )
 
     # ------------------------------------------------------------------
     # 5. Boot the UI and capture a Playwright screenshot.
@@ -344,9 +344,9 @@ def test_issue_207_batch_classifier_end_to_end(tmp_app_dir, monkeypatch):
 
     print(f"\nScreenshot: {screenshot_path}\nTitle: {title!r}\nBody chars: {len(body_text)}\n")
 
-    assert (
-        screenshot_path.exists() and screenshot_path.stat().st_size > 1000
-    ), f"screenshot missing or too small: {screenshot_path}"
+    assert screenshot_path.exists() and screenshot_path.stat().st_size > 1000, (
+        f"screenshot missing or too small: {screenshot_path}"
+    )
 
     server_obj.should_exit = True
     t.join(timeout=5)
@@ -481,7 +481,7 @@ def test_classify_batch_sub_batching(tmp_app_dir, monkeypatch):
     # With MAX_BATCH_CHARS=100, each transaction should be in its own sub-batch.
     assert len(results) == 4
     assert chat_calls["count"] > 1, (
-        f"Expected multiple chat calls with tiny MAX_BATCH_CHARS=100, " f"got {chat_calls['count']}"
+        f"Expected multiple chat calls with tiny MAX_BATCH_CHARS=100, got {chat_calls['count']}"
     )
 
 

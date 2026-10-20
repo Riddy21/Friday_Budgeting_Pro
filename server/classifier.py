@@ -114,8 +114,8 @@ def _build_batch_user_msg(
             li_note = f" -> line_item_id={r['line_item_id']}" if r.get("line_item_id") else ""
             rules_lines.append(
                 f"  [{r['priority']:>3}] id={r['id']}  type={r['rule_type']}"
-                f"  name=\"{r['name']}\""
-                f"  desc=\"{r['description']}\"{li_note}"
+                f'  name="{r["name"]}"'
+                f'  desc="{r["description"]}"{li_note}'
             )
         rules_text = "\n".join(rules_lines)
     else:

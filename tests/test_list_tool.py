@@ -322,6 +322,6 @@ def test_get_needs_review_shape(needs_review_db):
         "reasoning",
     }
     for txn in transactions:
-        assert required_fields.issubset(
-            txn.keys()
-        ), f"Missing fields: {required_fields - txn.keys()}"
+        assert required_fields.issubset(txn.keys()), (
+            f"Missing fields: {required_fields - txn.keys()}"
+        )
