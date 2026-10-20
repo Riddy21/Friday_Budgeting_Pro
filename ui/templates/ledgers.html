@@ -56,6 +56,14 @@
     <button class="btn-secondary" id="btn-add-ledger-cancel">Cancel</button>
   </div>
   <div id="error-banner" style="display:none;" class="alert alert-error"></div>
+  {% if grand_totals %}
+  <div class="grand-totals" style="display:grid;grid-template-columns:repeat(4,1fr);gap:.75rem;margin-bottom:1.5rem;padding:1rem;background:linear-gradient(135deg,rgba(99,102,241,.15),rgba(139,92,246,.1));border-radius:1rem;border:1px solid rgba(99,102,241,.25)">
+    <div class="summary-cell"><span class="summary-label">Total Income</span><span class="summary-value" style="color:#4ade80">C${{ "%.2f"|format(grand_totals.income) }}</span></div>
+    <div class="summary-cell"><span class="summary-label">Total Expenses</span><span class="summary-value" style="color:#f87171">C${{ "%.2f"|format(grand_totals.expenses) }}</span></div>
+    <div class="summary-cell"><span class="summary-label">Total Savings</span><span class="summary-value" style="color:#60a5fa">C${{ "%.2f"|format(grand_totals.savings) }}</span></div>
+    <div class="summary-cell"><span class="summary-label">Net</span><span class="summary-value {% if grand_totals.net > 0 %}net-positive{% elif grand_totals.net < 0 %}net-negative{% endif %}">C${{ "%.2f"|format(grand_totals.net) }}</span></div>
+  </div>
+  {% endif %}
   <div id="ledgers-list">
     {% if ledgers %}
       {% for ledger in ledgers %}

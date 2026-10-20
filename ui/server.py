@@ -2670,6 +2670,14 @@ def ledgers_get(request: Request, period: str = "this_month"):
         if any(sum(li["total"] for li in ldr["line_items"]) != 0 for ldr in fallback_ledgers):
             ledgers = fallback_ledgers
             period = "last_month"
+    # Calculate grand totals across all ledgers
+    grand_totals = {"income": 0.0, "expenses": 0.0, "savings": 0.0, "net": 0.0}
+    for ldr in ledgers:
+        if "totals" in ldr:
+            grand_totals["income"] += ldr["totals"].get("income", 0) or 0
+            grand_totals["expenses"] += ldr["totals"].get("expenses", 0) or 0
+            grand_totals["savings"] += ldr["totals"].get("savings", 0) or 0
+            grand_totals["net"] += ldr["totals"].get("net", 0) or 0
     return templates.TemplateResponse(
         request,
         "ledgers.html",
@@ -2677,6 +2685,7 @@ def ledgers_get(request: Request, period: str = "this_month"):
             "current_page": "ledgers",
             "ledgers": ledgers,
             "period": period,
+            "grand_totals": grand_totals,
             "reauth_connections": _get_reauth_connections(uid),
         },
     )
