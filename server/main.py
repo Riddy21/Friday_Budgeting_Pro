@@ -751,7 +751,8 @@ def _cleanup_orphaned_transactions(db_conn) -> int:
     Uses SELECT-then-DELETE so it works with both real and mock connections.
     """
     orphan_ids = [
-        r[0] for r in db_conn.execute(
+        r[0]
+        for r in db_conn.execute(
             "SELECT t.id FROM transactions t"
             " LEFT JOIN bank_accounts ba ON t.bank_account_id = ba.id"
             " WHERE ba.id IS NULL"
