@@ -103,7 +103,7 @@
       <span class="txn-date">{{ tx.date }}</span>
       <span class="txn-merchant">{{ tx.merchant or '(unknown)' }}</span>
       <span class="txn-amt">{{ tx.original_currency|default('CAD') }} {{ "%.2f"|format(tx.original_amount|default(tx.amount)) }}</span>
-      <span class="txn-account">{{ tx.account_name or '' }}{% if tx.notes %} · <em class="txn-note">{{ tx.notes }}</em>{% endif %}</span>
+      <span class="txn-account">{{ tx.account_name or '' }}{% if tx.account_mask %} ({{ tx.account_mask }}){% endif %}{% if tx.notes %} · <em class="txn-note">{{ tx.notes }}</em>{% endif %}</span>
     </li>
     {% endfor %}
   </ul>
@@ -130,7 +130,7 @@
       <span class="txn-date">{{ tx.date }}</span>
       <span class="txn-merchant">{{ tx.merchant or '(unknown)' }}</span>
       <span class="txn-amt">{{ tx.original_currency|default('CAD') }} {{ "%.2f"|format(tx.original_amount|default(tx.amount)) }}</span>
-      <span class="txn-account">{{ tx.account_name or '' }}{% if tx.notes %} · <em class="txn-note">{{ tx.notes }}</em>{% endif %}</span>
+      <span class="txn-account">{{ tx.account_name or '' }}{% if tx.account_mask %} ({{ tx.account_mask }}){% endif %}{% if tx.notes %} · <em class="txn-note">{{ tx.notes }}</em>{% endif %}</span>
     </li>
     {% endfor %}
   </ul>
@@ -157,7 +157,7 @@
       <span class="txn-date">{{ tx.date }}</span>
       <span class="txn-merchant">{{ tx.merchant or '(unknown)' }}</span>
       <span class="txn-amt sav-amt">{{ tx.original_currency|default('CAD') }} {{ "%.2f"|format(tx.original_amount|default(tx.amount)) }}</span>
-      <span class="txn-account">{{ tx.account_name or '' }}{% if tx.notes %} · <em class="txn-note">{{ tx.notes }}</em>{% endif %}</span>
+      <span class="txn-account">{{ tx.account_name or '' }}{% if tx.account_mask %} ({{ tx.account_mask }}){% endif %}{% if tx.notes %} · <em class="txn-note">{{ tx.notes }}</em>{% endif %}</span>
     </li>
     {% endfor %}
   </ul>
