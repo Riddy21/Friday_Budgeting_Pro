@@ -32,9 +32,7 @@ def main() -> int:
     conn = sqlite3.connect(paths.DB_PATH)
     conn.row_factory = sqlite3.Row
     try:
-        ledgers = conn.execute(
-            "SELECT id, name FROM ledgers WHERE type = 'property'"
-        ).fetchall()
+        ledgers = conn.execute("SELECT id, name FROM ledgers WHERE type = 'property'").fetchall()
         if not ledgers:
             print("No property ledgers found — nothing to migrate.")
             return 0
@@ -65,8 +63,10 @@ def main() -> int:
             else:
                 print(f"  {led['name']}: already up to date")
         conn.commit()
-        print(f"\nDone. Added {total_added} line item(s) across "
-              f"{len(ledgers)} property ledger(s).")
+        print(
+            f"\nDone. Added {total_added} line item(s) across "
+            f"{len(ledgers)} property ledger(s)."
+        )
         print("Existing 'Mortgage'/'Loan' lines and their entries were left intact.")
         return 0
     finally:

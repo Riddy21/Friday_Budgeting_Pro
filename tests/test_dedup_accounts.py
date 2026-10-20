@@ -295,9 +295,13 @@ class TestDeduplicateAccounts:
         aid_b = "b0000000-0000-0000-0000-000000000002"
         for aid in (aid_a, aid_b):
             _mk_account(
-                db, cid, acct_id=aid, mask=None,  # type: ignore[arg-type]
+                db,
+                cid,
+                acct_id=aid,
+                mask=None,  # type: ignore[arg-type]
                 name="RBC High Interest eSavings (1822)",
-                acct_type="depository", subtype=None,  # type: ignore[arg-type]
+                acct_type="depository",
+                subtype=None,  # type: ignore[arg-type]
             )
         db.execute("UPDATE bank_accounts SET mask = NULL, subtype = NULL")
         db.commit()
@@ -327,9 +331,13 @@ class TestDeduplicateAccounts:
         aid_b = "b0000000-0000-0000-0000-00000000000b"
         for aid in (aid_a, aid_b):
             _mk_account(
-                db, cid, acct_id=aid, mask=None,  # type: ignore[arg-type]
+                db,
+                cid,
+                acct_id=aid,
+                mask=None,  # type: ignore[arg-type]
                 name="RBC Chequing (9999)",
-                acct_type="depository", subtype=None,  # type: ignore[arg-type]
+                acct_type="depository",
+                subtype=None,  # type: ignore[arg-type]
             )
         db.execute("UPDATE bank_accounts SET mask = NULL, subtype = NULL")
         # aid_b has a transaction -> not an empty-sibling case

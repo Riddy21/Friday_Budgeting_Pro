@@ -30,6 +30,7 @@ def _recent(days_ago: int) -> str:
     """
     return (date.today() - timedelta(days=days_ago)).isoformat()
 
+
 from server.db import get_db, init_db
 from server.transfer_detect import (
     detect_internal_transfers,

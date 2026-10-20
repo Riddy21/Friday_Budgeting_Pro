@@ -223,9 +223,7 @@ class _UnparseableResponseError(Exception):
     """Raised when the OpenClaw response body cannot be parsed."""
 
 
-def _chat_openclaw(
-    messages: list[dict], temperature: float, model: str | None = None
-) -> str:
+def _chat_openclaw(messages: list[dict], temperature: float, model: str | None = None) -> str:
     """POST to OpenClaw local completions endpoint and parse the reply.
 
     When *model* is provided it overrides the ``OPENCLAW_LLM_MODEL`` default.

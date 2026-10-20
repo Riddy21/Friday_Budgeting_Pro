@@ -76,14 +76,18 @@ class TestSplitMortgagePayment:
     def test_negative_amount_normalised(self):
         from server.main import split_mortgage_payment
 
-        split = split_mortgage_payment(-2200.0, {"interest_rate": 5.0, "outstanding_principal": 400000.0})
+        split = split_mortgage_payment(
+            -2200.0, {"interest_rate": 5.0, "outstanding_principal": 400000.0}
+        )
         assert split["principal"] >= 0
         assert split["interest"] >= 0
 
     def test_zero_payment(self):
         from server.main import split_mortgage_payment
 
-        split = split_mortgage_payment(0.0, {"interest_rate": 5.0, "outstanding_principal": 400000.0})
+        split = split_mortgage_payment(
+            0.0, {"interest_rate": 5.0, "outstanding_principal": 400000.0}
+        )
         assert split["principal"] == 0.0
         assert split["interest"] == 0.0
 
@@ -121,9 +125,7 @@ class TestMortgageAccountStorage:
         self._make_account(db_path)
         # create a real property ledger so the ledger_id FK is satisfied
         conn = get_db(db_path)
-        conn.execute(
-            "INSERT INTO ledgers (id, name, type) VALUES ('ledger-x', 'Prop', 'property')"
-        )
+        conn.execute("INSERT INTO ledgers (id, name, type) VALUES ('ledger-x', 'Prop', 'property')")
         conn.commit()
         conn.close()
         upsert_mortgage_account(
@@ -148,9 +150,7 @@ class TestMortgageAccountStorage:
         from server.main import get_mortgage_for_account, upsert_mortgage_account
 
         self._make_account(db_path)
-        upsert_mortgage_account(
-            "acct1", {"interest_rate": 4.75, "outstanding_principal": 398500.0}
-        )
+        upsert_mortgage_account("acct1", {"interest_rate": 4.75, "outstanding_principal": 398500.0})
         upsert_mortgage_account("acct1", {"outstanding_principal": 397000.0})
         got = get_mortgage_for_account("acct1")
         assert got["interest_rate"] == 4.75  # preserved

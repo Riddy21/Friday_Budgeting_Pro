@@ -34,69 +34,263 @@ DB_PATH = Path(os.environ.get("TEST_DB", "/tmp/friday-test-seed.db"))
 
 # ── Expected totals (document these so tests can assert against them) ─────────
 EXPECTED = {
-    "income":    7600.00,
-    "expenses":  1997.90,   # groceries(725.41) + dining(263.10) + transport(283.40)
-                            # + shopping(437.53) + subscriptions(83.96) + utilities(204.50)
-    "savings":    800.00,   # Wealthsimple TFSA(500) + RRSP(300)
-    "net":       5602.10,   # income - expenses = 7600 - 1997.90
-    "unspent":   4802.10,   # net - savings = 5602.10 - 800
-    "transfers": 1000.00,   # internal chequing-to-chequing — excluded from totals
+    "income": 7600.00,
+    "expenses": 1997.90,  # groceries(725.41) + dining(263.10) + transport(283.40)
+    # + shopping(437.53) + subscriptions(83.96) + utilities(204.50)
+    "savings": 800.00,  # Wealthsimple TFSA(500) + RRSP(300)
+    "net": 5602.10,  # income - expenses = 7600 - 1997.90
+    "unspent": 4802.10,  # net - savings = 5602.10 - 800
+    "transfers": 1000.00,  # internal chequing-to-chequing — excluded from totals
 }
 
 # Transactions to seed (sign convention: negative = money IN like Plaid)
 TRANSACTIONS = [
     # ── Income: 2× bi-weekly Tenstorrent paycheques ──────────────────────────
-    dict(date="2026-05-01", merchant="TENSTORRENT AI - Direct deposit",  amount=-3800.00, category="INCOME_WAGES",    line_item="salary"),
-    dict(date="2026-05-15", merchant="TENSTORRENT AI - Direct deposit",  amount=-3800.00, category="INCOME_WAGES",    line_item="salary"),
-
+    dict(
+        date="2026-05-01",
+        merchant="TENSTORRENT AI - Direct deposit",
+        amount=-3800.00,
+        category="INCOME_WAGES",
+        line_item="salary",
+    ),
+    dict(
+        date="2026-05-15",
+        merchant="TENSTORRENT AI - Direct deposit",
+        amount=-3800.00,
+        category="INCOME_WAGES",
+        line_item="salary",
+    ),
     # ── Groceries ─────────────────────────────────────────────────────────────
-    dict(date="2026-05-02", merchant="Loblaws",       amount=92.34,  category="GROCERIES", line_item="groceries"),
-    dict(date="2026-05-05", merchant="Metro",          amount=67.89,  category="GROCERIES", line_item="groceries"),
-    dict(date="2026-05-09", merchant="Costco",         amount=178.45, category="GROCERIES", line_item="groceries"),
-    dict(date="2026-05-12", merchant="FreshCo",        amount=41.22,  category="GROCERIES", line_item="groceries"),
-    dict(date="2026-05-16", merchant="Loblaws",        amount=55.67,  category="GROCERIES", line_item="groceries"),
-    dict(date="2026-05-20", merchant="Metro",          amount=83.10,  category="GROCERIES", line_item="groceries"),
-    dict(date="2026-05-23", merchant="No Frills",      amount=49.99,  category="GROCERIES", line_item="groceries"),
-    dict(date="2026-05-28", merchant="Costco",         amount=156.75, category="GROCERIES", line_item="groceries"),
-
+    dict(
+        date="2026-05-02",
+        merchant="Loblaws",
+        amount=92.34,
+        category="GROCERIES",
+        line_item="groceries",
+    ),
+    dict(
+        date="2026-05-05",
+        merchant="Metro",
+        amount=67.89,
+        category="GROCERIES",
+        line_item="groceries",
+    ),
+    dict(
+        date="2026-05-09",
+        merchant="Costco",
+        amount=178.45,
+        category="GROCERIES",
+        line_item="groceries",
+    ),
+    dict(
+        date="2026-05-12",
+        merchant="FreshCo",
+        amount=41.22,
+        category="GROCERIES",
+        line_item="groceries",
+    ),
+    dict(
+        date="2026-05-16",
+        merchant="Loblaws",
+        amount=55.67,
+        category="GROCERIES",
+        line_item="groceries",
+    ),
+    dict(
+        date="2026-05-20",
+        merchant="Metro",
+        amount=83.10,
+        category="GROCERIES",
+        line_item="groceries",
+    ),
+    dict(
+        date="2026-05-23",
+        merchant="No Frills",
+        amount=49.99,
+        category="GROCERIES",
+        line_item="groceries",
+    ),
+    dict(
+        date="2026-05-28",
+        merchant="Costco",
+        amount=156.75,
+        category="GROCERIES",
+        line_item="groceries",
+    ),
     # ── Dining ────────────────────────────────────────────────────────────────
-    dict(date="2026-05-03", merchant="Banjara Indian Cuisine", amount=47.80, category="FOOD_AND_DRINK", line_item="dining"),
-    dict(date="2026-05-07", merchant="Tim Hortons",            amount=15.25, category="FOOD_AND_DRINK", line_item="dining"),
-    dict(date="2026-05-11", merchant="Mandarin Restaurant",    amount=85.40, category="FOOD_AND_DRINK", line_item="dining"),
-    dict(date="2026-05-14", merchant="Harvey's",               amount=22.15, category="FOOD_AND_DRINK", line_item="dining"),
-    dict(date="2026-05-19", merchant="Kinka Izakaya",          amount=73.60, category="FOOD_AND_DRINK", line_item="dining"),
-    dict(date="2026-05-25", merchant="McDonald's",             amount=18.90, category="FOOD_AND_DRINK", line_item="dining"),
-
+    dict(
+        date="2026-05-03",
+        merchant="Banjara Indian Cuisine",
+        amount=47.80,
+        category="FOOD_AND_DRINK",
+        line_item="dining",
+    ),
+    dict(
+        date="2026-05-07",
+        merchant="Tim Hortons",
+        amount=15.25,
+        category="FOOD_AND_DRINK",
+        line_item="dining",
+    ),
+    dict(
+        date="2026-05-11",
+        merchant="Mandarin Restaurant",
+        amount=85.40,
+        category="FOOD_AND_DRINK",
+        line_item="dining",
+    ),
+    dict(
+        date="2026-05-14",
+        merchant="Harvey's",
+        amount=22.15,
+        category="FOOD_AND_DRINK",
+        line_item="dining",
+    ),
+    dict(
+        date="2026-05-19",
+        merchant="Kinka Izakaya",
+        amount=73.60,
+        category="FOOD_AND_DRINK",
+        line_item="dining",
+    ),
+    dict(
+        date="2026-05-25",
+        merchant="McDonald's",
+        amount=18.90,
+        category="FOOD_AND_DRINK",
+        line_item="dining",
+    ),
     # ── Transportation ────────────────────────────────────────────────────────
-    dict(date="2026-05-01", merchant="TTC Monthly Pass",       amount=156.00, category="TRANSPORTATION", line_item="transport"),
-    dict(date="2026-05-06", merchant="Uber",                   amount=22.40,  category="TRANSPORTATION", line_item="transport"),
-    dict(date="2026-05-13", merchant="Shell Gas Station",      amount=80.00,  category="TRANSPORTATION", line_item="transport"),
-    dict(date="2026-05-22", merchant="Green P Parking",        amount=25.00,  category="TRANSPORTATION", line_item="transport"),
-
+    dict(
+        date="2026-05-01",
+        merchant="TTC Monthly Pass",
+        amount=156.00,
+        category="TRANSPORTATION",
+        line_item="transport",
+    ),
+    dict(
+        date="2026-05-06",
+        merchant="Uber",
+        amount=22.40,
+        category="TRANSPORTATION",
+        line_item="transport",
+    ),
+    dict(
+        date="2026-05-13",
+        merchant="Shell Gas Station",
+        amount=80.00,
+        category="TRANSPORTATION",
+        line_item="transport",
+    ),
+    dict(
+        date="2026-05-22",
+        merchant="Green P Parking",
+        amount=25.00,
+        category="TRANSPORTATION",
+        line_item="transport",
+    ),
     # ── Shopping ──────────────────────────────────────────────────────────────
-    dict(date="2026-05-04", merchant="Amazon",        amount=89.99,  category="SHOPPING", line_item="shopping"),
-    dict(date="2026-05-08", merchant="Best Buy",      amount=199.99, category="SHOPPING", line_item="shopping"),
-    dict(date="2026-05-17", merchant="H&M",           amount=65.50,  category="SHOPPING", line_item="shopping"),
-    dict(date="2026-05-21", merchant="Canadian Tire", amount=47.30,  category="SHOPPING", line_item="shopping"),
-    dict(date="2026-05-27", merchant="IKEA",          amount=34.75,  category="SHOPPING", line_item="shopping"),
-
+    dict(
+        date="2026-05-04",
+        merchant="Amazon",
+        amount=89.99,
+        category="SHOPPING",
+        line_item="shopping",
+    ),
+    dict(
+        date="2026-05-08",
+        merchant="Best Buy",
+        amount=199.99,
+        category="SHOPPING",
+        line_item="shopping",
+    ),
+    dict(
+        date="2026-05-17", merchant="H&M", amount=65.50, category="SHOPPING", line_item="shopping"
+    ),
+    dict(
+        date="2026-05-21",
+        merchant="Canadian Tire",
+        amount=47.30,
+        category="SHOPPING",
+        line_item="shopping",
+    ),
+    dict(
+        date="2026-05-27", merchant="IKEA", amount=34.75, category="SHOPPING", line_item="shopping"
+    ),
     # ── Subscriptions ─────────────────────────────────────────────────────────
-    dict(date="2026-05-01", merchant="Netflix",        amount=17.99, category="SUBSCRIPTION", line_item="subscriptions"),
-    dict(date="2026-05-01", merchant="Spotify",        amount=11.99, category="SUBSCRIPTION", line_item="subscriptions"),
-    dict(date="2026-05-01", merchant="Apple iCloud+",  amount=3.99,  category="SUBSCRIPTION", line_item="subscriptions"),
-    dict(date="2026-05-03", merchant="GoodLife Fitness", amount=49.99, category="SUBSCRIPTION", line_item="subscriptions"),
-
+    dict(
+        date="2026-05-01",
+        merchant="Netflix",
+        amount=17.99,
+        category="SUBSCRIPTION",
+        line_item="subscriptions",
+    ),
+    dict(
+        date="2026-05-01",
+        merchant="Spotify",
+        amount=11.99,
+        category="SUBSCRIPTION",
+        line_item="subscriptions",
+    ),
+    dict(
+        date="2026-05-01",
+        merchant="Apple iCloud+",
+        amount=3.99,
+        category="SUBSCRIPTION",
+        line_item="subscriptions",
+    ),
+    dict(
+        date="2026-05-03",
+        merchant="GoodLife Fitness",
+        amount=49.99,
+        category="SUBSCRIPTION",
+        line_item="subscriptions",
+    ),
     # ── Utilities ─────────────────────────────────────────────────────────────
-    dict(date="2026-05-10", merchant="Toronto Hydro",     amount=94.50, category="UTILITIES", line_item="utilities"),
-    dict(date="2026-05-10", merchant="Rogers Internet",   amount=65.00, category="UTILITIES", line_item="utilities"),
-    dict(date="2026-05-10", merchant="Fizz Mobile",       amount=45.00, category="UTILITIES", line_item="utilities"),
-
+    dict(
+        date="2026-05-10",
+        merchant="Toronto Hydro",
+        amount=94.50,
+        category="UTILITIES",
+        line_item="utilities",
+    ),
+    dict(
+        date="2026-05-10",
+        merchant="Rogers Internet",
+        amount=65.00,
+        category="UTILITIES",
+        line_item="utilities",
+    ),
+    dict(
+        date="2026-05-10",
+        merchant="Fizz Mobile",
+        amount=45.00,
+        category="UTILITIES",
+        line_item="utilities",
+    ),
     # ── Savings/Investments ───────────────────────────────────────────────────
-    dict(date="2026-05-05", merchant="Wealthsimple TFSA",  amount=500.00, category="TRANSFER_OUT", line_item="savings"),
-    dict(date="2026-05-20", merchant="Wealthsimple RRSP",  amount=300.00, category="TRANSFER_OUT", line_item="savings"),
-
+    dict(
+        date="2026-05-05",
+        merchant="Wealthsimple TFSA",
+        amount=500.00,
+        category="TRANSFER_OUT",
+        line_item="savings",
+    ),
+    dict(
+        date="2026-05-20",
+        merchant="Wealthsimple RRSP",
+        amount=300.00,
+        category="TRANSFER_OUT",
+        line_item="savings",
+    ),
     # ── Internal transfer (excluded from totals) ──────────────────────────────
-    dict(date="2026-05-15", merchant="Transfer to Savings Account", amount=1000.00, category="TRANSFER_OUT", line_item="transfer"),
+    dict(
+        date="2026-05-15",
+        merchant="Transfer to Savings Account",
+        amount=1000.00,
+        category="TRANSFER_OUT",
+        line_item="transfer",
+    ),
 ]
 
 
@@ -123,6 +317,7 @@ def seed(db_path: Path) -> None:
             del sys.modules[mod_name]
 
     import server.paths
+
     server.paths.APP_DIR = db_path.parent
     server.paths.DB_PATH = db_path
 
@@ -133,6 +328,7 @@ def seed(db_path: Path) -> None:
     create_user(db_path, "testuser", "testpass123")
 
     from server.main import apply_initial_setup
+
     apply_initial_setup(banks_to_link=[], extra_ledgers=[], hints=[])
 
     conn = get_db(db_path)
@@ -167,7 +363,7 @@ def seed(db_path: Path) -> None:
             "shopping": ["shopping"],
             "subscriptions": ["subscriptions", "misc / incidents", "misc", "other"],
             "utilities": ["utilities", "home & maintenance", "misc", "other"],
-            "savings": [],   # handled separately
+            "savings": [],  # handled separately
             "transfer": [],  # handled separately
         }
         candidates = fallbacks.get(key, [key])
@@ -246,7 +442,9 @@ def seed(db_path: Path) -> None:
         else:
             li_id = resolve_line_item(key)
             if not li_id:
-                print(f"WARNING: no line item for key={key!r}, skipping entry for {txn['merchant']!r}")
+                print(
+                    f"WARNING: no line item for key={key!r}, skipping entry for {txn['merchant']!r}"
+                )
                 continue
             conn.execute(
                 "INSERT INTO transaction_entries "
@@ -260,7 +458,9 @@ def seed(db_path: Path) -> None:
     conn.close()
 
     print(f"\n✅ Seeded {db_path}")
-    print(f"   Transactions: {len(TRANSACTIONS)} ({inserted} with entries, {skipped_transfers} transfers)")
+    print(
+        f"   Transactions: {len(TRANSACTIONS)} ({inserted} with entries, {skipped_transfers} transfers)"
+    )
     print("\n   Expected totals for 2026-05:")
     print(f"     income   = ${EXPECTED['income']:,.2f}")
     print(f"     expenses = ${EXPECTED['expenses']:,.2f}")
@@ -276,9 +476,11 @@ def seed(db_path: Path) -> None:
 def _verify(db_path: Path) -> None:
     """Run summary() and print actual vs expected totals."""
     import server.paths
+
     server.paths.DB_PATH = db_path
 
     from server.main import summary
+
     try:
         result = summary("2026-05")
         print("\n   Actual totals from summary():")
@@ -289,16 +491,20 @@ def _verify(db_path: Path) -> None:
         print(f"     unspent  = ${result['unspent_balance']:,.2f}")
 
         # Validate math
-        assert abs(result["net"] - (result["income"] - result["expenses"])) < 0.01, \
-            f"Net mismatch: {result['net']} != income({result['income']}) - expenses({result['expenses']})"
-        assert abs(result["total_saved"] - result["net"]) < 0.01, \
-            f"total_saved mismatch: {result['total_saved']} != net({result['net']})"
-        assert abs(result["unspent_balance"] - (result["net"] - result["savings"])) < 0.01, \
-            f"unspent mismatch: {result['unspent_balance']} != net({result['net']}) - savings({result['savings']})"
+        assert (
+            abs(result["net"] - (result["income"] - result["expenses"])) < 0.01
+        ), f"Net mismatch: {result['net']} != income({result['income']}) - expenses({result['expenses']})"
+        assert (
+            abs(result["total_saved"] - result["net"]) < 0.01
+        ), f"total_saved mismatch: {result['total_saved']} != net({result['net']})"
+        assert (
+            abs(result["unspent_balance"] - (result["net"] - result["savings"])) < 0.01
+        ), f"unspent mismatch: {result['unspent_balance']} != net({result['net']}) - savings({result['savings']})"
         print("\n   ✅ All math checks passed!")
     except Exception as e:
         print(f"\n   ❌ Verification failed: {e}")
         import traceback
+
         traceback.print_exc()
 
 

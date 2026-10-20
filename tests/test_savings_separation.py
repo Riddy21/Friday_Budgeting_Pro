@@ -91,13 +91,13 @@ def seeded_db(tmp_db, monkeypatch):
         ("2026-05-15", "TENSTORRENT AI", -3800.00),
     ]
     expense_txns = [
-        ("2026-05-02", "Loblaws",       92.34),
-        ("2026-05-05", "Metro",         67.89),
-        ("2026-05-09", "Costco",       178.45),
-        ("2026-05-03", "Tim Hortons",   15.25),
-        ("2026-05-01", "TTC",          156.00),
-        ("2026-05-04", "Amazon",        89.99),
-        ("2026-05-01", "Netflix",       17.99),
+        ("2026-05-02", "Loblaws", 92.34),
+        ("2026-05-05", "Metro", 67.89),
+        ("2026-05-09", "Costco", 178.45),
+        ("2026-05-03", "Tim Hortons", 15.25),
+        ("2026-05-01", "TTC", 156.00),
+        ("2026-05-04", "Amazon", 89.99),
+        ("2026-05-01", "Netflix", 17.99),
         ("2026-05-10", "Toronto Hydro", 94.50),
         # ... simplified but enough to be non-trivial
     ]
@@ -170,9 +170,9 @@ def test_savings_not_in_expense_total(seeded_db):
     )
 
     # Savings tracked separately
-    assert result["savings"] == pytest.approx(exp_savings, abs=0.01), (
-        f"savings total {result['savings']:.2f} should be {exp_savings:.2f}"
-    )
+    assert result["savings"] == pytest.approx(
+        exp_savings, abs=0.01
+    ), f"savings total {result['savings']:.2f} should be {exp_savings:.2f}"
     assert result["savings_contributions"] == pytest.approx(exp_savings, abs=0.01)
 
     # Net = income - expenses ONLY (savings not subtracted from net)
@@ -206,18 +206,18 @@ def test_savings_excluded_from_ledger_totals(seeded_db):
     )
 
     # Savings tracked separately
-    assert totals["savings"] == pytest.approx(exp_savings, abs=0.01), (
-        f"ledger savings total {totals['savings']:.2f} should be {exp_savings:.2f}"
-    )
+    assert totals["savings"] == pytest.approx(
+        exp_savings, abs=0.01
+    ), f"ledger savings total {totals['savings']:.2f} should be {exp_savings:.2f}"
 
     # Income correct
     assert totals["income"] == pytest.approx(exp_income, abs=0.01)
 
     # Net = income - expenses (savings NOT deducted from net)
     expected_net = exp_income - exp_expenses
-    assert totals["net"] == pytest.approx(expected_net, abs=0.01), (
-        f"ledger net {totals['net']:.2f} should be {expected_net:.2f} (income - expenses, not savings)"
-    )
+    assert totals["net"] == pytest.approx(
+        expected_net, abs=0.01
+    ), f"ledger net {totals['net']:.2f} should be {expected_net:.2f} (income - expenses, not savings)"
 
 
 def test_savings_line_items_not_in_expense_list(seeded_db):
@@ -314,17 +314,17 @@ def test_summary_math_invariants(seeded_db):
     total_saved = result["total_saved"]
 
     # net = income - expenses (savings NOT subtracted)
-    assert net == pytest.approx(income - expenses, abs=0.01), (
-        f"net ({net}) should equal income ({income}) - expenses ({expenses})"
-    )
+    assert net == pytest.approx(
+        income - expenses, abs=0.01
+    ), f"net ({net}) should equal income ({income}) - expenses ({expenses})"
 
     # total_saved = net (alias)
     assert total_saved == pytest.approx(net, abs=0.01)
 
     # unspent = net - savings_contributions
-    assert unspent == pytest.approx(net - savings, abs=0.01), (
-        f"unspent ({unspent}) should equal net ({net}) - savings ({savings})"
-    )
+    assert unspent == pytest.approx(
+        net - savings, abs=0.01
+    ), f"unspent ({unspent}) should equal net ({net}) - savings ({savings})"
 
     # Savings must be positive (outflows are positive)
     assert savings >= 0.0

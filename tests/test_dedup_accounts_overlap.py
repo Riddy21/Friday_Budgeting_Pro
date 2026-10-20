@@ -44,8 +44,16 @@ def _mk_connection(conn, user_id, conn_id=None):
     return cid
 
 
-def _mk_account(conn, connection_id, *, acct_id=None, name="Chequing",
-                mask=None, acct_type="depository", subtype="checking"):
+def _mk_account(
+    conn,
+    connection_id,
+    *,
+    acct_id=None,
+    name="Chequing",
+    mask=None,
+    acct_type="depository",
+    subtype="checking",
+):
     aid = acct_id or str(uuid.uuid4())
     conn.execute(
         "INSERT INTO bank_accounts "
@@ -90,10 +98,20 @@ class TestPass3StaleReissue:
         uid = _mk_user(db)
         cid = _mk_connection(db, uid)
         # Same name, same connection, NO mask -> Passes 1-2 skip.
-        stale = _mk_account(db, cid, acct_id="aaaa0000-0000-0000-0000-000000000001",
-                            name="Primary Chequing Account", mask=None)
-        live = _mk_account(db, cid, acct_id="bbbb0000-0000-0000-0000-000000000002",
-                           name="Primary Chequing Account", mask=None)
+        stale = _mk_account(
+            db,
+            cid,
+            acct_id="aaaa0000-0000-0000-0000-000000000001",
+            name="Primary Chequing Account",
+            mask=None,
+        )
+        live = _mk_account(
+            db,
+            cid,
+            acct_id="bbbb0000-0000-0000-0000-000000000002",
+            name="Primary Chequing Account",
+            mask=None,
+        )
         # stale: last txn 2026-07-31 ; live: last txn 2026-10-15 (>30d gap)
         _mk_txn(db, stale, date="2026-07-31", amount=30.95, merchant="Fee")
         _mk_txn(db, live, date="2026-10-01", amount=10.0, merchant="A")
@@ -110,10 +128,12 @@ class TestPass3StaleReissue:
         """Two same-name accounts both recently active, no shared txns -> keep both."""
         uid = _mk_user(db)
         cid = _mk_connection(db, uid)
-        a = _mk_account(db, cid, acct_id="aaaa1111-0000-0000-0000-000000000001",
-                        name="Savings", mask=None)
-        b = _mk_account(db, cid, acct_id="bbbb1111-0000-0000-0000-000000000002",
-                        name="Savings", mask=None)
+        a = _mk_account(
+            db, cid, acct_id="aaaa1111-0000-0000-0000-000000000001", name="Savings", mask=None
+        )
+        b = _mk_account(
+            db, cid, acct_id="bbbb1111-0000-0000-0000-000000000002", name="Savings", mask=None
+        )
         _mk_txn(db, a, date="2026-10-10", amount=1.0, merchant="X")
         _mk_txn(db, b, date="2026-10-12", amount=2.0, merchant="Y")
         db.commit()
@@ -130,10 +150,20 @@ class TestPass4NameIndependentOverlap:
         uid = _mk_user(db)
         cid = _mk_connection(db, uid)
         # Same account imported under two names (RBC/SimpleFIN case).
-        friendly = _mk_account(db, cid, acct_id="cccc0000-0000-0000-0000-000000000001",
-                               name="RBC Day to Day Banking (7077)", mask=None)
-        raw = _mk_account(db, cid, acct_id="dddd0000-0000-0000-0000-000000000002",
-                          name="Chequing 018225247077 (7077)", mask=None)
+        friendly = _mk_account(
+            db,
+            cid,
+            acct_id="cccc0000-0000-0000-0000-000000000001",
+            name="RBC Day to Day Banking (7077)",
+            mask=None,
+        )
+        raw = _mk_account(
+            db,
+            cid,
+            acct_id="dddd0000-0000-0000-0000-000000000002",
+            name="Chequing 018225247077 (7077)",
+            mask=None,
+        )
         for d, amt, m in [
             ("2026-10-15", -5139.89, "Payroll Deposit"),
             ("2026-10-15", 191.0, "Property Tax"),
@@ -155,10 +185,12 @@ class TestPass4NameIndependentOverlap:
     def test_distinct_accounts_no_overlap_not_flagged(self, db):
         uid = _mk_user(db)
         cid = _mk_connection(db, uid)
-        chk = _mk_account(db, cid, acct_id="eeee0000-0000-0000-0000-000000000001",
-                          name="Chequing", mask=None)
-        sav = _mk_account(db, cid, acct_id="ffff0000-0000-0000-0000-000000000002",
-                          name="Savings", mask=None)
+        chk = _mk_account(
+            db, cid, acct_id="eeee0000-0000-0000-0000-000000000001", name="Chequing", mask=None
+        )
+        sav = _mk_account(
+            db, cid, acct_id="ffff0000-0000-0000-0000-000000000002", name="Savings", mask=None
+        )
         _mk_txn(db, chk, date="2026-10-10", amount=100.0, merchant="Grocery")
         _mk_txn(db, sav, date="2026-10-11", amount=200.0, merchant="Deposit")
         db.commit()
@@ -175,10 +207,12 @@ class TestPass4NameIndependentOverlap:
         uid = _mk_user(db)
         c1 = _mk_connection(db, uid)
         c2 = _mk_connection(db, uid)
-        a = _mk_account(db, c1, acct_id="a1110000-0000-0000-0000-000000000001",
-                        name="Acct", mask=None)
-        b = _mk_account(db, c2, acct_id="b2220000-0000-0000-0000-000000000002",
-                        name="Acct", mask=None)
+        a = _mk_account(
+            db, c1, acct_id="a1110000-0000-0000-0000-000000000001", name="Acct", mask=None
+        )
+        b = _mk_account(
+            db, c2, acct_id="b2220000-0000-0000-0000-000000000002", name="Acct", mask=None
+        )
         for d, amt, m in [("2026-10-01", 1.0, "X"), ("2026-10-02", 2.0, "Y")]:
             _mk_txn(db, a, date=d, amount=amt, merchant=m)
             _mk_txn(db, b, date=d, amount=amt, merchant=m)

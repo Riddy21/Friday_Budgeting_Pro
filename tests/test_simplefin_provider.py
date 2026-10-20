@@ -47,14 +47,14 @@ ACCOUNTS_PAYLOAD = {
             "transactions": [
                 {
                     "id": "txn-debit",
-                    "posted": 1700000000,   # 2023-11-14T22:13:20Z
-                    "amount": "-50.25",     # debit: money out
+                    "posted": 1700000000,  # 2023-11-14T22:13:20Z
+                    "amount": "-50.25",  # debit: money out
                     "description": "Grocery Store",
                 },
                 {
                     "id": "txn-credit",
                     "posted": 1700100000,
-                    "amount": "2000.00",    # credit: money in (payroll)
+                    "amount": "2000.00",  # credit: money in (payroll)
                     "description": "Payroll Deposit",
                 },
             ],
@@ -83,6 +83,7 @@ FAKE_SETUP_TOKEN = base64.b64encode(FAKE_CLAIM_URL.encode()).decode()
 # ---------------------------------------------------------------------------
 # Helper: build a provider whose _request method returns a canned response
 # ---------------------------------------------------------------------------
+
 
 def _provider_with_response(status: int, body: bytes | dict | str) -> SimpleFINProvider:
     """Return a SimpleFINProvider whose ``_request`` always returns the given response."""

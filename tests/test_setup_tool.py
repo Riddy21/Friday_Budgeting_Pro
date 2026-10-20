@@ -132,7 +132,9 @@ def test_apply_with_hints_creates_classification_hints(tmp_db):
     texts = [r["text"] for r in rows]
     assert "Amazon is usually Shopping" in texts
     assert "Starbucks is Dining" in texts
-    assert any("TFSA" in t or "investment" in t.lower() for t in texts), "Default savings hint missing"
+    assert any(
+        "TFSA" in t or "investment" in t.lower() for t in texts
+    ), "Default savings hint missing"
     conn.close()
 
 
@@ -206,9 +208,9 @@ def test_apply_cron_registered_false_regardless_of_openclaw_dir(tmp_db, monkeypa
 
     # The cron file should NOT be written by apply_initial_setup anymore.
     cron_file = oc_dir / "cron" / "friday-budgeting-pro-sync.json"
-    assert not cron_file.exists(), (
-        "apply_initial_setup should not write the cron file (deprecated approach)"
-    )
+    assert (
+        not cron_file.exists()
+    ), "apply_initial_setup should not write the cron file (deprecated approach)"
 
 
 def test_apply_cron_no_file_on_second_call(tmp_db, monkeypatch, tmp_path):

@@ -114,8 +114,13 @@ def test_budget_summary_has_savings_section(seeded_db):
 
     section = result["savings_section"]
     required = [
-        "savings_contributions", "unspent_balance", "total_saved",
-        "savings_rate", "status", "benchmark", "benchmark_note",
+        "savings_contributions",
+        "unspent_balance",
+        "total_saved",
+        "savings_rate",
+        "status",
+        "benchmark",
+        "benchmark_note",
     ]
     for field in required:
         assert field in section, f"Field '{field}' missing from savings_section"
@@ -137,9 +142,9 @@ def test_budget_summary_status_on_track(seeded_db):
         ],
     )
     result = budget_summary("2026-06")
-    assert result["savings_section"]["status"] == "on_track", (
-        f"Expected on_track but got: {result['savings_section']}"
-    )
+    assert (
+        result["savings_section"]["status"] == "on_track"
+    ), f"Expected on_track but got: {result['savings_section']}"
 
 
 def test_budget_summary_status_under_saving(seeded_db):
@@ -152,14 +157,14 @@ def test_budget_summary_status_under_saving(seeded_db):
         seeded_db["db_path"],
         seeded_db,
         [
-            (1000.0, seeded_db["income_li"],  "2026-07-10"),
-            (850.0,  seeded_db["expense_li"], "2026-07-11"),
+            (1000.0, seeded_db["income_li"], "2026-07-10"),
+            (850.0, seeded_db["expense_li"], "2026-07-11"),
         ],
     )
     result = budget_summary("2026-07")
-    assert result["savings_section"]["status"] == "under_saving", (
-        f"Expected under_saving but got: {result['savings_section']}"
-    )
+    assert (
+        result["savings_section"]["status"] == "under_saving"
+    ), f"Expected under_saving but got: {result['savings_section']}"
 
 
 def test_budget_summary_status_no_income(seeded_db):
@@ -168,9 +173,10 @@ def test_budget_summary_status_no_income(seeded_db):
 
     result = budget_summary("2026-03")
     section = result["savings_section"]
-    assert section["status"] in ("under_saving", "on_track"), (
-        f"Unexpected status with no data: {section['status']}"
-    )
+    assert section["status"] in (
+        "under_saving",
+        "on_track",
+    ), f"Unexpected status with no data: {section['status']}"
 
 
 def test_summary_not_broken_by_budget_summary(seeded_db):
@@ -179,8 +185,16 @@ def test_summary_not_broken_by_budget_summary(seeded_db):
 
     result = summary("2026-01")
     # Must still have the core fields
-    for field in ["period", "income", "expenses", "savings", "net",
-                  "savings_rate", "savings_rate_ytd", "by_line_item"]:
+    for field in [
+        "period",
+        "income",
+        "expenses",
+        "savings",
+        "net",
+        "savings_rate",
+        "savings_rate_ytd",
+        "by_line_item",
+    ]:
         assert field in result, f"summary() missing '{field}' after #237"
 
     # Must NOT have savings_section (that's budget_summary only)

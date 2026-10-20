@@ -368,9 +368,7 @@ class PlaidProvider(BankProvider):
 
         client = self._build_client()
         try:
-            resp = client.liabilities_get(
-                LiabilitiesGetRequest(access_token=access_token)
-            )
+            resp = client.liabilities_get(LiabilitiesGetRequest(access_token=access_token))
         except ApiException as exc:  # product not available / not ready
             body = getattr(exc, "body", "") or ""
             if any(
@@ -389,6 +387,7 @@ class PlaidProvider(BankProvider):
         mortgages = liabilities.get("mortgage") or []
         out: list[dict] = []
         for m in mortgages:
+
             def _g(key, default=None):
                 try:
                     val = m[key]
@@ -469,6 +468,7 @@ class PlaidProvider(BankProvider):
 
         out: list[dict] = []
         for a in resp.get("accounts") or []:
+
             def _attr(obj, key, default=None):
                 try:
                     val = obj[key]
