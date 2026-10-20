@@ -1125,7 +1125,9 @@ def _build_ledger_drilldown(
                     "date": tx["date"],
                     "merchant": tx["merchant"] or "",
                     "amount": round(amt, 2),
-                    "original_amount": round(tx["amount"], 2) if tx["amount"] is not None else round(amt, 2),
+                    "original_amount": (
+                        round(tx["amount"], 2) if tx["amount"] is not None else round(amt, 2)
+                    ),
                     "original_currency": tx["currency"] or "CAD",
                     "account_name": tx["account_name"] or "",
                     "pending": bool(tx["pending"]),
