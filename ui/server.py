@@ -1242,6 +1242,7 @@ def _get_dashboard_widgets() -> dict:
                   LEFT JOIN transaction_entries te ON te.transaction_id = t.id
                   LEFT JOIN line_items li ON li.id = te.line_item_id
                  WHERE bc.user_id = ?
+                   AND (te.entry_type IS NULL OR te.entry_type != 'transfer')
                  ORDER BY t.date DESC, t.id DESC
                  LIMIT 8
                 """,

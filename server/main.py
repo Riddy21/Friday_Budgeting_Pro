@@ -1108,7 +1108,8 @@ def _build_ledger_drilldown(
             "FROM transaction_entries te "
             "JOIN transactions t ON te.transaction_id = t.id "
             "LEFT JOIN bank_accounts b ON t.bank_account_id = b.id "
-            "WHERE te.line_item_id = ? AND COALESCE(b.is_duplicate, 0) = 0"
+            "WHERE te.line_item_id = ? AND COALESCE(b.is_duplicate, 0) = 0 "
+            "  AND te.entry_type != 'transfer'"
             + date_filter_sql
             + " ORDER BY t.date DESC"
         )
