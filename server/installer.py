@@ -34,10 +34,62 @@ def _openclaw_config_path() -> Path:
     return Path.home() / ".openclaw" / "openclaw.json"
 
 
-def _render_plist(install_dir: Path) -> str:
-    """Return the launchd plist XML for the daemon."""
+def _get_public_url() -> str | None:
+    """Detect the best public URL for this machine.
+    
+    Checks in order:
+    1. FRIDAY_BP_PUBLIC_URL env var (explicit override)
+    2. Tailscale hostname (if tailscale is available)
+    3. None (falls back to localhost in the app)
+    """
+    # Check explicit override first
+    if url := os.environ.get("FRIDAY_BP_PUBLIC_URL"):
+        return url
+    
+    # Try to detect Tailscale hostname
+    try:
+        result = subprocess.run(
+            ["tailscale", "status", "--json"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        if result.returncode == 0:
+            import json
+            status = json.loads(result.stdout)
+            if dns_name := status.get("Self", {}).get("DNSName", "").rstrip("."):
+                return f"http://{dns_name}:6789"
+    except (subprocess.TimeoutExpired, FileNotFoundError, json.JSONDecodeError):
+        pass
+    
+    return None
+
+
+def _render_plist(install_dir: Path, public_url: str | None = None) -> str:
+    """Return the launchd plist XML for the daemon.
+    
+    Parameters
+    ----------
+    install_dir:
+        The directory where the server package is installed.
+    public_url:
+        Optional public URL for remote access (e.g. via Tailscale).
+        If provided, sets FRIDAY_BP_PUBLIC_URL so reconnect links work remotely.
+    """
     log_path = Path.home() / ".friday-bp" / "daemon.log"
     python_bin = sys.executable
+    
+    # Build environment variables section if needed
+    env_section = ""
+    if public_url:
+        env_section = f"""
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>FRIDAY_BP_PUBLIC_URL</key>
+        <string>{public_url}</string>
+    </dict>
+"""
+    
     return f"""<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -54,7 +106,7 @@ def _render_plist(install_dir: Path) -> str:
 
     <key>WorkingDirectory</key>
     <string>{install_dir}</string>
-
+{env_section}
     <key>StandardOutPath</key>
     <string>{log_path}</string>
 
@@ -110,9 +162,12 @@ def install(install_dir: Path | None = None) -> None:
 
     plist_path = _plist_path()
 
+    # Detect public URL for remote access (e.g. Tailscale)
+    public_url = _get_public_url()
+
     # 1. Ensure the LaunchAgents directory exists and write the plist.
     plist_path.parent.mkdir(parents=True, exist_ok=True)
-    plist_path.write_text(_render_plist(install_dir))
+    plist_path.write_text(_render_plist(install_dir, public_url=public_url))
     plist_path.chmod(0o644)
 
     # 2. Register with launchd — ignore errors (already loaded is harmless).
@@ -124,7 +179,13 @@ def install(install_dir: Path | None = None) -> None:
     # 3. Register MCP server in OpenClaw config.
     _register_mcp(install_dir)
 
-    print("✓ Friday Budgeting Pro installed. Open http://127.0.0.1:6789 to finish setup.")
+    # Show the appropriate URL based on whether we detected a public URL
+    setup_url = public_url or "http://127.0.0.1:6789"
+    print(f"✓ Friday Budgeting Pro installed. Open {setup_url} to finish setup.")
+    if public_url:
+        print(f"  (Remote access enabled via {public_url})")
+    else:
+        print("  (Tip: Install Tailscale for remote access support)")
 
 
 def uninstall() -> None:
