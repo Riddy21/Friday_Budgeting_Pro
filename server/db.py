@@ -374,6 +374,21 @@ def init_db(path: str | Path) -> None:
         _add_col_if_missing(conn, "bank_accounts", "inferred_type", "TEXT")
         conn.commit()
 
+        # Migration: content_hash for cross-connection transaction deduplication
+        # (#SimpleFIN migration) — SHA256(mask|date|normalized_merchant|amount)
+        # allows detecting duplicate transactions even when switching providers
+        # (e.g. Plaid → SimpleFIN) without losing notes or categorizations.
+        _add_col_if_missing(conn, "transactions", "content_hash", "TEXT")
+        # Create index if it doesn't exist
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_transactions_content_hash ON transactions(content_hash)"
+        )
+        conn.commit()
+
+        # Backfill content_hash for existing transactions that don't have one
+        _backfill_content_hashes(conn)
+        conn.commit()
+
         # Migration: create default user only when there is existing data to migrate
         # (i.e. rows exist that need a user_id) but no users have been created yet.
         # On truly fresh DBs, we leave users empty so the setup wizard can create
@@ -450,6 +465,63 @@ def _add_col_if_missing(conn: sqlite3.Connection, table: str, col: str, col_type
     if col not in existing:
         conn.execute(f"ALTER TABLE {table} ADD COLUMN {col} {col_type}")
         conn.commit()
+
+
+def compute_content_hash(
+    mask: str | None, date: str | None, merchant: str | None, amount: float | None
+) -> str:
+    """Compute a stable content hash for cross-connection transaction deduplication.
+
+    The hash is based on:
+    - Account mask (last 4 digits) — stable across connections
+    - Transaction date (YYYY-MM-DD)
+    - Normalized merchant name (lowercase, stripped)
+    - Amount (rounded to 2 decimal places)
+
+    This allows detecting duplicate transactions even when switching providers
+    (e.g. Plaid → SimpleFIN) without losing notes or categorizations.
+    """
+    import hashlib
+
+    # Normalize inputs
+    mask_norm = (mask or "").strip().upper()
+    date_norm = (date or "").strip()
+    merchant_norm = (merchant or "").strip().lower()
+    amount_norm = f"{float(amount or 0):.2f}"
+
+    # Create hash input
+    hash_input = f"{mask_norm}|{date_norm}|{merchant_norm}|{amount_norm}"
+    return hashlib.sha256(hash_input.encode("utf-8")).hexdigest()[:32]
+
+
+def _backfill_content_hashes(conn: sqlite3.Connection) -> int:
+    """Backfill content_hash for existing transactions that don't have one.
+
+    Returns the number of transactions updated.
+    """
+    # Find transactions without content_hash, joined with their account's mask
+    rows = conn.execute("""
+        SELECT t.id, t.date, t.merchant, t.amount, ba.mask
+        FROM transactions t
+        JOIN bank_accounts ba ON ba.id = t.bank_account_id
+        WHERE t.content_hash IS NULL
+        """).fetchall()
+
+    updated = 0
+    for row in rows:
+        content_hash = compute_content_hash(
+            mask=row["mask"],
+            date=row["date"],
+            merchant=row["merchant"],
+            amount=row["amount"],
+        )
+        conn.execute(
+            "UPDATE transactions SET content_hash = ? WHERE id = ?",
+            (content_hash, row["id"]),
+        )
+        updated += 1
+
+    return updated
 
 
 @contextmanager

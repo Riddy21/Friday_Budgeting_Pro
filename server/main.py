@@ -3098,7 +3098,28 @@ def sync(
                                 amount_home = (
                                     round(amount * _fx_row["rate"], 2) if _fx_row else None
                                 )
-                            # Dedup guard: skip if identical (date, merchant, amount, bank_account_id) exists
+                            # Cross-connection dedup: compute content_hash and check
+                            # for existing transaction with same hash across ALL accounts.
+                            # This allows provider migration (Plaid → SimpleFIN) without
+                            # duplicating transactions or losing notes/categorizations.
+                            from server.db import compute_content_hash
+
+                            _acct_mask = account_meta.get(plaid_account_id, {}).get("mask")
+                            content_hash = compute_content_hash(
+                                mask=_acct_mask,
+                                date=str(date) if date is not None else None,
+                                merchant=merchant,
+                                amount=amount,
+                            )
+                            # Check for existing transaction with same content_hash
+                            _dup_hash = db_conn.execute(
+                                "SELECT id FROM transactions WHERE content_hash = ?",
+                                (content_hash,),
+                            ).fetchone()
+                            if _dup_hash is not None:
+                                continue
+                            # Legacy dedup guard: also skip if identical (date, merchant, amount, bank_account_id) exists
+                            # (for transactions inserted before content_hash was added)
                             _dup = db_conn.execute(
                                 "SELECT id FROM transactions WHERE date=? AND merchant=? AND amount=? AND bank_account_id=?",
                                 (
@@ -3112,8 +3133,8 @@ def sync(
                                 continue
                             cur = db_conn.execute(
                                 "INSERT OR IGNORE INTO transactions "
-                                "(id, bank_account_id, plaid_transaction_id, date, authorized_datetime, merchant, amount, currency, amount_home, pending) "
-                                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                                "(id, bank_account_id, plaid_transaction_id, date, authorized_datetime, merchant, amount, currency, amount_home, pending, content_hash) "
+                                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                                 (
                                     txn_id,
                                     bank_account_id,
@@ -3129,6 +3150,7 @@ def sync(
                                     acct_currency,
                                     amount_home,
                                     1 if pending else 0,
+                                    content_hash,
                                 ),
                             )
 
