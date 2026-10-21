@@ -3103,6 +3103,7 @@ def sync(
                             # This allows provider migration (Plaid → SimpleFIN) without
                             # duplicating transactions or losing notes/categorizations.
                             from server.db import compute_content_hash
+
                             _acct_mask = account_meta.get(plaid_account_id, {}).get("mask")
                             content_hash = compute_content_hash(
                                 mask=_acct_mask,

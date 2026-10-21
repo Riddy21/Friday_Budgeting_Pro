@@ -467,7 +467,9 @@ def _add_col_if_missing(conn: sqlite3.Connection, table: str, col: str, col_type
         conn.commit()
 
 
-def compute_content_hash(mask: str | None, date: str | None, merchant: str | None, amount: float | None) -> str:
+def compute_content_hash(
+    mask: str | None, date: str | None, merchant: str | None, amount: float | None
+) -> str:
     """Compute a stable content hash for cross-connection transaction deduplication.
 
     The hash is based on:
@@ -498,14 +500,12 @@ def _backfill_content_hashes(conn: sqlite3.Connection) -> int:
     Returns the number of transactions updated.
     """
     # Find transactions without content_hash, joined with their account's mask
-    rows = conn.execute(
-        """
+    rows = conn.execute("""
         SELECT t.id, t.date, t.merchant, t.amount, ba.mask
         FROM transactions t
         JOIN bank_accounts ba ON ba.id = t.bank_account_id
         WHERE t.content_hash IS NULL
-        """
-    ).fetchall()
+        """).fetchall()
 
     updated = 0
     for row in rows:
