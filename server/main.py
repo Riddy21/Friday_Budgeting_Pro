@@ -2776,40 +2776,71 @@ def sync(
                             }
                         )
 
-                    try:
-                        result = conn_provider.sync_transactions(sync_token, cursor)
-                    except Exception as e:
-                        if _is_reauth_error(e):
-                            with db_txn(db_conn):
-                                db_conn.execute(
-                                    "UPDATE bank_connections SET status='needs_reauth' WHERE id=?",
-                                    (connection_id,),
-                                )
-                            continue
-                        if _is_mutation_during_pagination_error(e):
-                            # Plaid data changed mid-page — reset cursor and retry once from scratch
-                            _logger.warning(
-                                "TRANSACTIONS_SYNC_MUTATION_DURING_PAGINATION for connection %s — "
-                                "resetting cursor and retrying from scratch.",
-                                connection_id,
-                            )
-                            with db_txn(db_conn):
-                                db_conn.execute(
-                                    "DELETE FROM sync_cursors WHERE connection_id = ?",
-                                    (connection_id,),
-                                )
-                            cursor = None
-                            try:
-                                result = conn_provider.sync_transactions(sync_token, None)
-                            except Exception as retry_exc:
-                                _logger.error(
-                                    "Sync retry after cursor reset also failed for connection %s: %s",
+                    # Retry logic with exponential backoff for transient failures
+                    import time as _sync_time
+
+                    max_retries = 3
+                    result = None
+                    last_error = None
+                    for attempt in range(max_retries):
+                        try:
+                            result = conn_provider.sync_transactions(sync_token, cursor)
+                            break  # Success — exit retry loop
+                        except Exception as e:
+                            last_error = e
+                            if _is_reauth_error(e):
+                                with db_txn(db_conn):
+                                    db_conn.execute(
+                                        "UPDATE bank_connections SET status='needs_reauth' WHERE id=?",
+                                        (connection_id,),
+                                    )
+                                break  # Don't retry reauth errors
+                            if _is_mutation_during_pagination_error(e):
+                                # Plaid data changed mid-page — reset cursor and retry once from scratch
+                                _logger.warning(
+                                    "TRANSACTIONS_SYNC_MUTATION_DURING_PAGINATION for connection %s — "
+                                    "resetting cursor and retrying from scratch.",
                                     connection_id,
-                                    retry_exc,
                                 )
-                                continue
+                                with db_txn(db_conn):
+                                    db_conn.execute(
+                                        "DELETE FROM sync_cursors WHERE connection_id = ?",
+                                        (connection_id,),
+                                    )
+                                cursor = None
+                                continue  # Retry with reset cursor
+                            # Transient error — retry with exponential backoff
+                            if attempt < max_retries - 1:
+                                backoff = 2**attempt  # 1s, 2s, 4s
+                                _logger.warning(
+                                    "Sync attempt %d/%d failed for %s: %s — retrying in %ds",
+                                    attempt + 1,
+                                    max_retries,
+                                    institution_name,
+                                    e,
+                                    backoff,
+                                )
+                                _sync_time.sleep(backoff)
+                            else:
+                                _logger.error(
+                                    "Sync failed after %d attempts for %s: %s",
+                                    max_retries,
+                                    institution_name,
+                                    e,
+                                )
+
+                    # If all retries failed, continue to next connection
+                    if result is None:
+                        if last_error and _is_reauth_error(last_error):
+                            pass  # Already handled above
                         else:
-                            raise
+                            _logger.error(
+                                "Skipping connection %s after exhausting retries", institution_name
+                            )
+                        continue
+
+                    # Small delay between connections to avoid rate limiting
+                    _sync_time.sleep(0.5)
 
                     added_txns = result.get("added", []) if isinstance(result, dict) else []
                     modified_txns = result.get("modified", []) if isinstance(result, dict) else []
