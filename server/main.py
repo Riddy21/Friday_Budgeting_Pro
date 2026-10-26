@@ -3772,6 +3772,7 @@ def route(transaction_id: str, allocations: List) -> dict:
                         entry_type    = 'skip',
                         source        = 'manual',
                         reviewed      = 1,
+                        uncertain     = 0,
                         corrected_at  = ?
                     WHERE transaction_id = ?
                     """,
@@ -3845,6 +3846,7 @@ def route(transaction_id: str, allocations: List) -> dict:
                     entry_type                 = ?,
                     source                     = 'manual',
                     reviewed                   = 1,
+                    uncertain                  = 0,
                     corrected_from_line_item_id = ?,
                     corrected_at               = ?
                 WHERE transaction_id = ?
@@ -5955,6 +5957,7 @@ def correct_transaction(
                 SET line_item_id = ?,
                     source = 'manual',
                     reviewed = 1,
+                    uncertain = 0,
                     corrected_from_line_item_id = ?,
                     corrected_at = ?
                 WHERE transaction_id = ?
