@@ -187,7 +187,6 @@ async def _background_classify_loop(interval_seconds: float) -> None:
             loop = asyncio.get_running_loop()
             # Local imports avoid circular dependencies at module level
             import server.paths
-
             from server.main import classify_pending_transactions
             from ui.auth import get_active_user_id
 
