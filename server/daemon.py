@@ -162,6 +162,55 @@ async def _background_sync_loop(interval_seconds: float) -> None:
             log.warning("Background sync failed (will retry next interval): %s", exc)
 
 
+async def _background_classify_loop(interval_seconds: float) -> None:
+    """Periodically classify pending transactions in a background asyncio task.
+
+    Runs classification for any transactions that were synced but not yet
+    assigned to ledgers.  This makes Friday Budgeting Pro self-contained —
+    it no longer requires an external OpenClaw cron job to trigger classification.
+
+    The first run is delayed by 60 seconds (not the full interval) so that
+    transactions pulled by a fresh sync are classified promptly.
+
+    Parameters
+    ----------
+    interval_seconds:
+        How long to sleep between classification runs.  Default is 1800 s
+        (30 minutes).  Minimum enforced is 300 s (5 minutes) to avoid
+        excessive LLM API calls.
+    """
+    # Short initial delay so freshly-synced transactions get classified quickly
+    await asyncio.sleep(60)
+
+    while True:
+        try:
+            loop = asyncio.get_running_loop()
+            # Local imports avoid circular dependencies at module level
+            import server.paths
+            from server.main import classify_pending_transactions
+            from ui.auth import get_active_user_id
+
+            user_id = get_active_user_id(server.paths.DB_PATH)
+            if user_id:
+                result = await loop.run_in_executor(
+                    None, classify_pending_transactions, user_id, None, None
+                )
+                classified = result.get("classified", 0)
+                remaining = result.get("pending_remaining", 0)
+                if classified > 0 or remaining > 0:
+                    log.info(
+                        "Background classify completed: %d classified, %d remaining",
+                        classified,
+                        remaining,
+                    )
+            else:
+                log.debug("Background classify skipped: no active user.")
+        except Exception as exc:  # noqa: BLE001
+            log.warning("Background classify failed (will retry next interval): %s", exc)
+
+        await asyncio.sleep(interval_seconds)
+
+
 async def _run() -> None:
     """Async main — starts uvicorn server and background sync task."""
     port = _get_port()
@@ -218,6 +267,34 @@ async def _run() -> None:
     log.info("Background sync scheduled every %.1f hours.", _sync_interval_hours)
     # -----------------------------------------------------------------------
 
+    # --- Background classify task -----------------------------------------
+    # Self-contained classification: no external cron job required.
+    # FRIDAY_BP_CLASSIFY_INTERVAL_MINUTES controls the interval (default 30,
+    # minimum 5).  Set to 0 to disable internal classification entirely
+    # (e.g. if using an external scheduler).
+    _classify_interval_minutes_raw = os.environ.get("FRIDAY_BP_CLASSIFY_INTERVAL_MINUTES", "30")
+    try:
+        _classify_interval_minutes = float(_classify_interval_minutes_raw)
+    except ValueError:
+        log.warning(
+            "FRIDAY_BP_CLASSIFY_INTERVAL_MINUTES=%r is not a valid float; "
+            "using default 30 minutes.",
+            _classify_interval_minutes_raw,
+        )
+        _classify_interval_minutes = 30.0
+
+    if _classify_interval_minutes > 0:
+        _classify_interval_minutes = max(_classify_interval_minutes, 5.0)  # enforce minimum
+        _classify_interval_seconds = _classify_interval_minutes * 60.0
+        asyncio.create_task(_background_classify_loop(_classify_interval_seconds))
+        log.info(
+            "Background classify scheduled every %.0f minutes.",
+            _classify_interval_minutes,
+        )
+    else:
+        log.info("Background classify disabled (FRIDAY_BP_CLASSIFY_INTERVAL_MINUTES=0).")
+    # -----------------------------------------------------------------------
+
     log.info(
         "Friday Budgeting Pro daemon starting on http://%s:%d",
         _DEFAULT_HOST,
@@ -242,6 +319,12 @@ def main() -> None:
         How often the background sync task fires, in hours (default: 6,
         minimum: 0.5).  The first run is delayed by one full interval so
         that Plaid rate limits are not triggered on daemon cold starts.
+    FRIDAY_BP_CLASSIFY_INTERVAL_MINUTES
+        How often the background classification task fires, in minutes
+        (default: 30, minimum: 5).  Set to 0 to disable internal
+        classification entirely (e.g. if using an external scheduler).
+        The first run is delayed by only 60 seconds so freshly-synced
+        transactions are classified promptly.
     """
     # 0. Load .env from project root (no-op if file doesn't exist).
     #    Imported inline so that test patches on dotenv.load_dotenv are
