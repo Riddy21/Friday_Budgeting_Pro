@@ -702,6 +702,136 @@ def get_connections_needing_attention() -> dict:
 
 
 @mcp.tool
+def check_simplefin_connections() -> dict:
+    """Check status of all SimpleFIN connections and report any needing attention.
+
+    Queries the SimpleFIN API to get the status of all linked financial
+    institutions. Returns connections that need re-authorization or have
+    errors, along with suggested actions.
+
+    This checks the SimpleFIN Bridge directly, so it can detect auth issues
+    even for connections not yet imported into Friday.
+
+    Returns
+    -------
+    dict
+        {
+            "ok": bool,
+            "total_connections": int,
+            "healthy": int,
+            "needs_attention": int,
+            "connections": [
+                {
+                    "name": str,
+                    "status": "ok" | "auth_required" | "error",
+                    "error_message": str | None,
+                    "account_count": int,
+                    "suggested_message": str | None,
+                },
+                ...
+            ],
+        }
+    """
+    from server.providers.simplefin import SimpleFINProvider
+
+    uid = get_active_user_id(server.paths.DB_PATH)
+    if uid is None:
+        return {
+            "ok": False,
+            "error": "No active user",
+            "total_connections": 0,
+            "healthy": 0,
+            "needs_attention": 0,
+            "connections": [],
+        }
+
+    conn = get_db(server.paths.DB_PATH)
+    try:
+        # Find any SimpleFIN connection to get the access URL
+        row = conn.execute(
+            """
+            SELECT plaid_access_token_encrypted
+            FROM bank_connections
+            WHERE user_id = ? AND connection_type = 'simplefin'
+            LIMIT 1
+            """,
+            (uid,),
+        ).fetchone()
+    finally:
+        conn.close()
+
+    if row is None:
+        return {
+            "ok": True,
+            "total_connections": 0,
+            "healthy": 0,
+            "needs_attention": 0,
+            "connections": [],
+            "message": "No SimpleFIN connections configured",
+        }
+
+    try:
+        access_url = server.crypto.decrypt(row["plaid_access_token_encrypted"])
+    except Exception as exc:
+        return {
+            "ok": False,
+            "error": f"Could not decrypt SimpleFIN access URL: {exc}",
+            "total_connections": 0,
+            "healthy": 0,
+            "needs_attention": 0,
+            "connections": [],
+        }
+
+    provider = SimpleFINProvider()
+    statuses = provider.get_all_connections_status(access_url)
+
+    result_connections = []
+    healthy = 0
+    needs_attention = 0
+
+    for conn_status in statuses:
+        name = conn_status.get("name", "Unknown")
+        status = conn_status.get("status", "error")
+        error_msg = conn_status.get("error_message")
+        account_count = conn_status.get("account_count", 0)
+
+        if status == "ok":
+            healthy += 1
+            suggested_message = None
+        elif status == "auth_required":
+            needs_attention += 1
+            suggested_message = (
+                f"Your {name} connection in SimpleFIN needs re-authorization. "
+                f"Go to https://bridge.simplefin.org/simplefin/accounts and click "
+                f"'Adjust' next to {name} to re-authenticate."
+            )
+        else:
+            needs_attention += 1
+            suggested_message = (
+                f"Your {name} connection in SimpleFIN has an error: {error_msg}. "
+                f"Go to https://bridge.simplefin.org/simplefin/accounts to check it."
+            )
+
+        result_connections.append(
+            {
+                "name": name,
+                "status": status,
+                "error_message": error_msg,
+                "account_count": account_count,
+                "suggested_message": suggested_message,
+            }
+        )
+
+    return {
+        "ok": needs_attention == 0,
+        "total_connections": len(statuses),
+        "healthy": healthy,
+        "needs_attention": needs_attention,
+        "connections": result_connections,
+    }
+
+
+@mcp.tool
 def refresh_connection(id: str) -> dict:
     """Trigger an Update Mode Plaid Link for an existing connection.
 

@@ -134,6 +134,7 @@ Invoke for any personal finance request:
 - `complete_simplefin_link(setup_token, institution_name?)` — create a SimpleFIN bank connection from a user-supplied Setup Token (SimpleFIN Bridge alternative to Plaid)
 - `list_connections` — list connected banks and their status (`active | needs_reauth`)
 - `get_connections_needing_attention` — list connections that need user action (reauth or expiring soon)
+- `check_simplefin_connections` — check status of all SimpleFIN connections and report any needing re-auth (queries SimpleFIN API directly)
 - `refresh_connection(id)` — re-authenticate a broken connection (Update Mode)
 - `disconnect(id)` — remove a bank connection and its data (also revokes the Plaid Item)
 - `retry_pending_revocations()` — retry Plaid /item/remove for any connections not yet revoked (run after credential changes)

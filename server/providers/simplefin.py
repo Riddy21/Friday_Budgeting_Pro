@@ -507,6 +507,94 @@ class SimpleFINProvider(BankProvider):
                 "item_id": None,
             }
 
+    def get_all_connections_status(self, access_url: str) -> list[dict]:
+        """Check status of all SimpleFIN connections and return per-connection info.
+
+        SimpleFIN returns a list of "connections" (institutions) in the /accounts
+        response. Each connection can independently need re-auth. This method
+        fetches the accounts and checks each connection for issues.
+
+        Returns
+        -------
+        list[dict]
+            List of connection status dicts:
+            [
+                {
+                    "name": "Royal Bank of Canada",
+                    "id": "connection-uuid",
+                    "status": "ok" | "auth_required" | "error",
+                    "error_message": str | None,
+                    "account_count": int,
+                },
+                ...
+            ]
+        """
+        try:
+            data = self._fetch_accounts(access_url)
+        except SimpleFINAuthError:
+            # Entire access URL is invalid — all connections need re-auth
+            return [
+                {
+                    "name": "SimpleFIN",
+                    "id": None,
+                    "status": "auth_required",
+                    "error_message": "SimpleFIN access token expired or invalid",
+                    "account_count": 0,
+                }
+            ]
+        except SimpleFINError as exc:
+            return [
+                {
+                    "name": "SimpleFIN",
+                    "id": None,
+                    "status": "error",
+                    "error_message": str(exc),
+                    "account_count": 0,
+                }
+            ]
+
+        connections = data.get("connections") or []
+        result = []
+
+        for conn in connections:
+            conn_name = conn.get("name") or conn.get("org", {}).get("name") or "Unknown"
+            conn_id = conn.get("id")
+            accounts = conn.get("accounts") or []
+
+            # Check for error indicators in the connection
+            # SimpleFIN may include error info when a connection has issues
+            conn_error = conn.get("error")
+            if conn_error:
+                error_code = conn_error.get("code", "")
+                error_msg = conn_error.get("message", str(conn_error))
+                # Common SimpleFIN error codes for auth issues
+                if error_code in ("auth_required", "login_required", "credentials_invalid"):
+                    status = "auth_required"
+                else:
+                    status = "error"
+                result.append(
+                    {
+                        "name": conn_name,
+                        "id": conn_id,
+                        "status": status,
+                        "error_message": error_msg,
+                        "account_count": len(accounts),
+                    }
+                )
+            else:
+                # No error — connection is healthy
+                result.append(
+                    {
+                        "name": conn_name,
+                        "id": conn_id,
+                        "status": "ok",
+                        "error_message": None,
+                        "account_count": len(accounts),
+                    }
+                )
+
+        return result
+
     def remove_item(self, access_url: str) -> dict:
         """SimpleFIN does not support programmatic revocation.
 
