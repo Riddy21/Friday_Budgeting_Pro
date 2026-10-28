@@ -21,7 +21,7 @@ from pathlib import Path
 def get_mismatched_entries(conn: sqlite3.Connection) -> list[dict]:
     """Find entries where the sign doesn't match the raw transaction."""
     cursor = conn.execute("""
-        SELECT 
+        SELECT
             te.id AS entry_id,
             te.amount AS entry_amount,
             te.amount_home AS entry_amount_home,
@@ -45,7 +45,7 @@ def get_mismatched_entries(conn: sqlite3.Connection) -> list[dict]:
 def fix_entry_signs(conn: sqlite3.Connection, dry_run: bool = False) -> int:
     """
     Fix mismatched entry signs by setting te.amount = t.amount.
-    
+
     Also fixes amount_home to match the sign of the new amount.
     """
     mismatched = get_mismatched_entries(conn)
@@ -87,8 +87,8 @@ def fix_entry_signs(conn: sqlite3.Connection, dry_run: bool = False) -> int:
     conn.execute("""
         UPDATE transaction_entries
         SET amount = (
-            SELECT t.amount 
-            FROM transactions t 
+            SELECT t.amount
+            FROM transactions t
             WHERE t.id = transaction_entries.transaction_id
         )
         WHERE id IN (
