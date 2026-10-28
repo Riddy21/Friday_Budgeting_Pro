@@ -36,7 +36,7 @@ def get_mismatched_entries(conn: sqlite3.Connection) -> list[dict]:
         WHERE (t.amount < 0 AND te.amount > 0)
            OR (t.amount > 0 AND te.amount < 0)
     """)
-    
+
     rows = cursor.fetchall()
     columns = [desc[0] for desc in cursor.description]
     return [dict(zip(columns, row)) for row in rows]
@@ -49,24 +49,24 @@ def fix_entry_signs(conn: sqlite3.Connection, dry_run: bool = False) -> int:
     Also fixes amount_home to match the sign of the new amount.
     """
     mismatched = get_mismatched_entries(conn)
-    
+
     if not mismatched:
         print("✅ No mismatched entries found. Database is consistent.")
         return 0
-    
+
     print(f"Found {len(mismatched)} entries with mismatched signs:\n")
-    
+
     # Group by entry_type for summary
     by_type: dict[str, int] = {}
     for entry in mismatched:
         t = entry["entry_type"] or "unknown"
         by_type[t] = by_type.get(t, 0) + 1
-    
+
     print("By entry_type:")
     for entry_type, count in sorted(by_type.items()):
         print(f"  {entry_type}: {count}")
     print()
-    
+
     # Show sample entries
     print("Sample entries to fix:")
     for entry in mismatched[:5]:
@@ -75,14 +75,14 @@ def fix_entry_signs(conn: sqlite3.Connection, dry_run: bool = False) -> int:
     if len(mismatched) > 5:
         print(f"  ... and {len(mismatched) - 5} more")
     print()
-    
+
     if dry_run:
         print("🔍 DRY RUN — no changes made.")
         return len(mismatched)
-    
+
     # Apply fixes
     print("Applying fixes...")
-    
+
     # Update amount to match raw transaction
     conn.execute("""
         UPDATE transaction_entries
@@ -99,7 +99,7 @@ def fix_entry_signs(conn: sqlite3.Connection, dry_run: bool = False) -> int:
                OR (t.amount > 0 AND te.amount < 0)
         )
     """)
-    
+
     # Also fix amount_home to have consistent sign
     conn.execute("""
         UPDATE transaction_entries
@@ -112,16 +112,16 @@ def fix_entry_signs(conn: sqlite3.Connection, dry_run: bool = False) -> int:
           AND ((amount > 0 AND amount_home < 0)
             OR (amount < 0 AND amount_home > 0))
     """)
-    
+
     conn.commit()
-    
+
     # Verify
     remaining = get_mismatched_entries(conn)
     if remaining:
         print(f"⚠️  Warning: {len(remaining)} entries still mismatched after fix")
     else:
         print(f"✅ Fixed {len(mismatched)} entries. Database is now consistent.")
-    
+
     return len(mismatched)
 
 
@@ -131,14 +131,14 @@ def main():
     parser.add_argument("--db", type=Path, default=Path.home() / ".friday-bp" / "data.db",
                         help="Database path")
     args = parser.parse_args()
-    
+
     if not args.db.exists():
         print(f"❌ Database not found: {args.db}")
         return 1
-    
+
     conn = sqlite3.connect(args.db)
     conn.row_factory = sqlite3.Row
-    
+
     try:
         fixed = fix_entry_signs(conn, dry_run=args.dry_run)
         return 0 if fixed >= 0 else 1
