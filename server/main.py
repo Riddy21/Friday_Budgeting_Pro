@@ -1246,7 +1246,9 @@ def _build_ledger_drilldown(
         item_total = 0.0
         for tx in txn_rows:
             amt = tx["amount_home"] if tx["amount_home"] is not None else tx["amount"]
-            item_total += amt
+            # Use absolute value for totals per SIGN_CONVENTION.md:
+            # negative = income, positive = expense, but totals should be magnitudes
+            item_total += abs(amt)
             transactions_out.append(
                 {
                     "id": tx["id"],
@@ -4472,7 +4474,7 @@ def summary(period: str) -> dict:
             li.name        AS line_item_name,
             l.name         AS ledger_name,
             li.item_type   AS item_type,
-            SUM(COALESCE(te.amount_home, te.amount)) AS total
+            SUM(ABS(COALESCE(te.amount_home, te.amount))) AS total
         FROM transaction_entries te
         JOIN transactions   t  ON t.id  = te.transaction_id
         JOIN line_items     li ON li.id = te.line_item_id
@@ -4491,7 +4493,7 @@ def summary(period: str) -> dict:
         # Compute YTD savings rate (separate query, only needed when period != ytd/year)
         ytd_start = f"{year_str}-01-01"
         ytd_sql = """
-            SELECT li.item_type, SUM(COALESCE(te.amount_home, te.amount)) AS total
+            SELECT li.item_type, SUM(ABS(COALESCE(te.amount_home, te.amount))) AS total
             FROM transaction_entries te
             JOIN transactions   t  ON t.id  = te.transaction_id
             JOIN line_items     li ON li.id = te.line_item_id
@@ -4645,7 +4647,7 @@ def savings_trend(months: int = 12) -> dict:
         SELECT
             substr(t.date, 1, 7)   AS month,
             li.item_type            AS item_type,
-            SUM(COALESCE(te.amount_home, te.amount)) AS total
+            SUM(ABS(COALESCE(te.amount_home, te.amount))) AS total
         FROM transaction_entries te
         JOIN transactions   t  ON t.id  = te.transaction_id
         JOIN line_items     li ON li.id = te.line_item_id
