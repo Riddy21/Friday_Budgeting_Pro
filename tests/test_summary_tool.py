@@ -11,11 +11,14 @@ Seed
     - "Salary"     (income)
     - "Groceries"  (expense)
 - Three transactions in different months / years with classified entries:
-    1. 2025-12-15  Salary     +3 000.00  (income)   — prior year
-    2. 2026-04-10  Groceries   -200.00   (expense)  — current April 2026
-    3. 2026-05-07  Salary     +4 000.00  (income)   — May 2026
-    4. 2026-05-20  Groceries   -345.67   (expense)  — May 2026
-    5. 2026-05-25  Salary     +1 000.00  (income)   — May 2026 (second entry)
+    1. 2025-12-15  Salary     -3 000.00  (income)   — prior year
+    2. 2026-04-10  Groceries   +200.00   (expense)  — current April 2026
+    3. 2026-05-07  Salary     -4 000.00  (income)   — May 2026
+    4. 2026-05-20  Groceries   +345.67   (expense)  — May 2026
+    5. 2026-05-25  Salary     -1 000.00  (income)   — May 2026 (second entry)
+
+Note: Signs follow SIGN_CONVENTION.md — negative = income, positive = expense.
+Totals use ABS() so both income and expenses are reported as positive magnitudes.
 
 Tests are written against fixed dates so they are deterministic regardless of
 when they run; "month"/"year"/"ytd" tests use monkeypatched datetime.
@@ -78,16 +81,16 @@ def seed_db(db_path: Path) -> dict:
             (_uid(), txn_id, ledger_id, line_item_id, amount, "rule", 1),
         )
 
-    # Prior year (2025)
-    add_txn("2025-12-15", "Employer", 3000.00, li_salary)
+    # Prior year (2025) — income is negative per SIGN_CONVENTION.md
+    add_txn("2025-12-15", "Employer", -3000.00, li_salary)
 
-    # 2026-04 (different month, same year)
-    add_txn("2026-04-10", "Superstore", -200.00, li_groceries)
+    # 2026-04 (different month, same year) — expense is positive
+    add_txn("2026-04-10", "Superstore", 200.00, li_groceries)
 
     # 2026-05 (two income + one expense entries)
-    add_txn("2026-05-07", "Employer", 4000.00, li_salary)
-    add_txn("2026-05-20", "Superstore", -345.67, li_groceries)
-    add_txn("2026-05-25", "Bonus", 1000.00, li_salary)
+    add_txn("2026-05-07", "Employer", -4000.00, li_salary)  # income = negative
+    add_txn("2026-05-20", "Superstore", 345.67, li_groceries)  # expense = positive
+    add_txn("2026-05-25", "Bonus", -1000.00, li_salary)  # income = negative
 
     conn.commit()
     conn.close()
@@ -132,16 +135,17 @@ def test_specific_month(seeded_db):
     result = main_module.summary("2026-05")
 
     assert result["period"] == "2026-05"
-    assert result["income"] == pytest.approx(5000.00)  # 4000 + 1000
-    assert result["expenses"] == pytest.approx(-345.67)
-    assert result["net"] == pytest.approx(5000.00 - (-345.67))
+    # Totals use ABS() per SIGN_CONVENTION.md — both are positive magnitudes
+    assert result["income"] == pytest.approx(5000.00)  # abs(-4000) + abs(-1000)
+    assert result["expenses"] == pytest.approx(345.67)  # abs(345.67)
+    assert result["net"] == pytest.approx(5000.00 - 345.67)
 
 
 def test_specific_month_excludes_other_months(seeded_db):
     """April transactions must NOT appear in the May summary."""
     result = main_module.summary("2026-05")
-    # April had -200.00 groceries; expenses should only reflect May
-    assert result["expenses"] == pytest.approx(-345.67)
+    # April had 200.00 groceries; expenses should only reflect May (345.67)
+    assert result["expenses"] == pytest.approx(345.67)
 
 
 # ---------------------------------------------------------------------------
@@ -154,11 +158,11 @@ def test_specific_year(seeded_db):
     result = main_module.summary("2026")
 
     assert result["period"] == "2026"
-    # income: 4000 + 1000 = 5000 (2025 salary excluded)
+    # income: abs(-4000) + abs(-1000) = 5000 (2025 salary excluded)
     assert result["income"] == pytest.approx(5000.00)
-    # expenses: -200 (Apr) + -345.67 (May) = -545.67
-    assert result["expenses"] == pytest.approx(-545.67)
-    assert result["net"] == pytest.approx(5000.00 - (-545.67))
+    # expenses: abs(200) + abs(345.67) = 545.67 (positive magnitudes)
+    assert result["expenses"] == pytest.approx(545.67)
+    assert result["net"] == pytest.approx(5000.00 - 545.67)
 
 
 def test_specific_year_excludes_prior_year(seeded_db):
@@ -179,7 +183,7 @@ def test_month_returns_current_month(seeded_db):
         result = main_module.summary("month")
 
     assert result["income"] == pytest.approx(5000.00)
-    assert result["expenses"] == pytest.approx(-345.67)
+    assert result["expenses"] == pytest.approx(345.67)  # positive magnitude
 
 
 # ---------------------------------------------------------------------------
@@ -194,7 +198,7 @@ def test_year_returns_current_year(seeded_db):
         result = main_module.summary("year")
 
     assert result["income"] == pytest.approx(5000.00)
-    assert result["expenses"] == pytest.approx(-545.67)
+    assert result["expenses"] == pytest.approx(545.67)  # positive magnitude
 
 
 # ---------------------------------------------------------------------------
@@ -210,7 +214,7 @@ def test_ytd_returns_year_to_date(seeded_db):
 
     # Same as full year 2026 since all 2026 dates are <= 2026-05-26
     assert result["income"] == pytest.approx(5000.00)
-    assert result["expenses"] == pytest.approx(-545.67)
+    assert result["expenses"] == pytest.approx(545.67)  # positive magnitude
 
 
 def test_ytd_excludes_prior_year(seeded_db):
@@ -272,7 +276,7 @@ def test_by_line_item_values_for_may(seeded_db):
 
     assert "Groceries" in by_name
     assert by_name["Groceries"]["type"] == "expense"
-    assert by_name["Groceries"]["total"] == pytest.approx(-345.67)
+    assert by_name["Groceries"]["total"] == pytest.approx(345.67)  # positive magnitude
 
 
 # ---------------------------------------------------------------------------
