@@ -3405,6 +3405,53 @@ def sync(
                             )
                             conn_removed += 1
 
+                        # --- SimpleFIN reconciliation: remove stale transactions ---
+                        # SimpleFIN doesn't report removed transactions like Plaid does.
+                        # Instead, we reconcile by comparing what's in the DB against
+                        # what SimpleFIN returned. Any transaction in the DB that wasn't
+                        # in the response (and is within the sync window) is stale and
+                        # should be deleted — it was likely a pending hold that got cancelled.
+                        if conn_type == "simplefin" and added_txns:
+                            # Collect all plaid_transaction_ids that SimpleFIN returned
+                            live_txn_ids = {_get(txn, "transaction_id") for txn in added_txns}
+                            live_txn_ids.discard(None)
+
+                            if live_txn_ids:
+                                # Find transactions in DB for this connection's accounts
+                                # that are within the sync window but NOT in SimpleFIN's response
+                                stale_rows = db_conn.execute(
+                                    """
+                                    SELECT t.id, t.plaid_transaction_id, t.merchant, t.amount, t.date
+                                    FROM transactions t
+                                    JOIN bank_accounts ba ON ba.id = t.bank_account_id
+                                    WHERE ba.connection_id = ?
+                                      AND t.plaid_transaction_id IS NOT NULL
+                                      AND t.plaid_transaction_id NOT IN ({placeholders})
+                                      AND (? IS NULL OR t.date >= ?)
+                                    """.format(placeholders=",".join("?" * len(live_txn_ids))),
+                                    (connection_id, *live_txn_ids, _window_cutoff, _window_cutoff),
+                                ).fetchall()
+
+                                for stale in stale_rows:
+                                    _logger.info(
+                                        "SimpleFIN reconciliation: removing stale transaction %s "
+                                        "(%s, %s, %s) — no longer in SimpleFIN feed",
+                                        stale["plaid_transaction_id"],
+                                        stale["merchant"],
+                                        stale["amount"],
+                                        stale["date"],
+                                    )
+                                    # Delete entry first (FK constraint)
+                                    db_conn.execute(
+                                        "DELETE FROM transaction_entries WHERE transaction_id = ?",
+                                        (stale["id"],),
+                                    )
+                                    db_conn.execute(
+                                        "DELETE FROM transactions WHERE id = ?",
+                                        (stale["id"],),
+                                    )
+                                    conn_removed += 1
+
                         # Upsert cursor — advances ONLY on full success of this batch
                         db_conn.execute(
                             "INSERT INTO sync_cursors (connection_id, cursor, last_synced_at) "
